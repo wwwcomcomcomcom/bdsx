@@ -13,6 +13,8 @@ import { Config } from "./config";
 import { SymbolTable, SymbolTableError } from "./symboltable";
 
 const tablePath = path.join(Config.BDS_PATH, "symbols.json");
+/** object layouts read from live instances by the offline tooling: class -> member -> byte offset */
+let rawLayouts: Record<string, Record<string, number>> = {};
 
 function load(): SymbolTable {
     let content: string;
@@ -31,6 +33,7 @@ function load(): SymbolTable {
         throw new SymbolTableError(`${tablePath}: invalid JSON (${(err as Error).message})`);
     }
 
+    rawLayouts = (parsed as { layouts?: Record<string, Record<string, number>> }).layouts ?? {};
     const table = SymbolTable.parse(parsed, tablePath);
 
     // Only bdsx-core can tell us which binary is actually mapped. Outside BDS
@@ -59,6 +62,8 @@ export namespace pdbcache {
         return table.unresolvedReason(key);
     }
 
+    /** class -> member -> offset, from symbols.json `layouts`; empty when the table has none */
+    export const layouts: Record<string, Record<string, number>> = rawLayouts;
     export const bdsVersion = table.bdsVersion;
     export const exeMd5 = table.exeMd5;
     export const size = table.size;

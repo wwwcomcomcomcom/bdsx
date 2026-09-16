@@ -28,6 +28,7 @@ import { AbstractClass, NativeClass, nativeClass, nativeField } from "./nativecl
 import { bool_t, CxxString, int32_t, int64_as_float_t, int8_t, NativeType, void_t } from "./nativetype";
 import { loadAllPlugins } from "./plugins";
 import { CxxStringWrapper } from "./pointer";
+import { pdbcache } from "./pdbcache";
 import { procHacker } from "./prochacker";
 import { remapError } from "./source-map-support";
 import { ThisGetter } from "./thisgetter";
@@ -238,22 +239,39 @@ function _launch(asyncResolve: () => void): void {
     }, void_t);
     asmcode.gameThreadFinish = makefunc.np(() => {
         closed = true;
-        decay(bedrockServer.serverInstance);
-        decay(bedrockServer.networkSystem);
-        decay(bedrockServer.minecraft);
-        decay(bedrockServer.dedicatedServer);
-        decay(bedrockServer.level);
-        decay(bedrockServer.serverNetworkHandler);
-        decay(bedrockServer.minecraftCommands);
-        decay(bedrockServer.commandRegistry);
-        decay(bedrockServer.gameRules);
-        decay(bedrockServer.connector);
-        decay(bedrockServer.rakPeer);
-        decay(bedrockServer.commandOutputSender);
-        bedrockServer.nonOwnerPointerServerNetworkHandler.dispose();
-        decay(bedrockServer.nonOwnerPointerServerNetworkHandler);
-        nonOwnerPointerStructureManager!.dispose();
-        decay(bedrockServer.structureManager);
+        // Fields that serverOpen could not fill still hold the "BDS is not
+        // loaded yet" object, whose every access throws; a throw here, inside
+        // a native callback at shutdown, is reported as a native crash.
+        const decayIfReal = (key: keyof typeof bedrockServer): void => {
+            const desc = Object.getOwnPropertyDescriptor(bedrockServer, key);
+            if (desc === undefined || desc.value === bedrockServer._abstractobject) return;
+            decay(desc.value);
+        };
+        for (const key of [
+            "serverInstance",
+            "networkSystem",
+            "minecraft",
+            "dedicatedServer",
+            "level",
+            "serverNetworkHandler",
+            "minecraftCommands",
+            "commandRegistry",
+            "gameRules",
+            "connector",
+            "rakPeer",
+            "commandOutputSender",
+        ] as (keyof typeof bedrockServer)[]) {
+            decayIfReal(key);
+        }
+        const nonOwner = Object.getOwnPropertyDescriptor(bedrockServer, "nonOwnerPointerServerNetworkHandler");
+        if (nonOwner !== undefined && nonOwner.value !== bedrockServer._abstractobject) {
+            bedrockServer.nonOwnerPointerServerNetworkHandler.dispose();
+            decay(bedrockServer.nonOwnerPointerServerNetworkHandler);
+        }
+        if (nonOwnerPointerStructureManager != null) {
+            nonOwnerPointerStructureManager.dispose();
+            decayIfReal("structureManager");
+        }
     }, void_t);
     asmcode.free = dll.ucrtbase.free.pointer;
 
@@ -322,6 +340,8 @@ function _launch(asyncResolve: () => void): void {
         serverNetworkSystem: ServerNetworkSystem;
         dedicatedServer: bd_server.DedicatedServer;
         minecraft: bd_server.Minecraft;
+        commandRegistryFromRegister: CommandRegistry | null;
+        serverNetworkHandlerFromAnnounce: nimodule.ServerNetworkHandler | null;
     };
     const thisGetter = new ThisGetter(instances);
     thisGetter.register(
@@ -335,6 +355,16 @@ function _launch(asyncResolve: () => void): void {
         "serverNetworkSystem",
     );
     thisGetter.register(bd_server.DedicatedServer, "??0DedicatedServer@@QEAA@XZ", "dedicatedServer");
+    // Two instances that need no constructor: CommandRegistry::registerCommand
+    // hands over the registry as `this` dozens of times during startup, and
+    // updateServerAnnouncement the ServerNetworkHandler. Both symbols are
+    // execution-confirmed on 1.26.40.8; the last capture wins.
+    thisGetter.register(
+        CommandRegistry,
+        "?registerCommand@CommandRegistry@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@PEBDW4CommandPermissionLevel@@UCommandFlag@@3@Z",
+        "commandRegistryFromRegister",
+    );
+    thisGetter.register(nimodule.ServerNetworkHandler, "?updateServerAnnouncement@ServerNetworkHandler@@QEAAXXZ", "serverNetworkHandlerFromAnnounce");
     thisGetter.register(
         bd_server.Minecraft,
         "??0Minecraft@@QEAA@AEAVIMinecraftApp@@AEAVGameCallbacks@@AEAVAllowList@@PEAVPermissionsFile@@AEBV?$not_null@V?$NonOwnerPointer@VFilePathManager@Core@@@Bedrock@@@gsl@@V?$duration@_JU?$ratio@$00$00@std@@@chrono@std@@AEAVIMinecraftEventing@@VClientOrServerNetworkSystemRef@@AEAVPacketSender@@W4SubClientId@@AEAVTimer@@AEAVTimer@@AEBV?$not_null@V?$NonOwnerPointer@$$CBVIContentTierManager@@@Bedrock@@@6@PEAVServerMetrics@@@Z",
@@ -447,17 +477,33 @@ function _launch(asyncResolve: () => void): void {
 
             // All pointer is found from ServerInstance::startServerThread with debug breaking.
             thisGetter.finish();
-            const { serverInstance, dedicatedServer, serverNetworkSystem, minecraft } = instances;
+            const { serverInstance, dedicatedServer, serverNetworkSystem, minecraft, commandRegistryFromRegister, serverNetworkHandlerFromAnnounce } = instances;
+            const layouts = pdbcache.layouts;
             const networkSystem = serverNetworkSystem != null ? attempt("networkSystem", () => serverNetworkSystem.networkSystem) : null;
 
             const level = levelFromTick ?? (minecraft != null ? attempt("level", () => Minecraft$getLevel(minecraft)) : null);
             const nonOwnerPointerServerNetworkHandler = minecraft != null ? attempt("serverNetworkHandler", () => minecraft.getNonOwnerPointerServerNetworkHandler()) : null;
-            const minecraftCommands = minecraft != null ? attempt("minecraftCommands", () => Minecraft$getCommands(minecraft)) : null;
+            let minecraftCommands: MinecraftCommands | null = null;
+            if (minecraft != null) {
+                if ("?getCommands@Minecraft@@QEAAAEAVMinecraftCommands@@XZ" in proc) {
+                    minecraftCommands = attempt("minecraftCommands", () => Minecraft$getCommands(minecraft));
+                } else if (layouts.Minecraft?.commands != null) {
+                    // the getter is a load from this offset; the offset was read from the live object
+                    minecraftCommands = (minecraft as any as StaticPointer).getPointerAs(MinecraftCommands, layouts.Minecraft.commands);
+                } else {
+                    console.error(colors.yellow("[bdsx] minecraftCommands: no getter symbol and no Minecraft layout for this build"));
+                }
+            }
             if (minecraftCommands != null && "??_7MinecraftCommands@@6B@" in proc) {
                 bdsxEqualsAssert(minecraftCommands.vftable, proc["??_7MinecraftCommands@@6B@"], "Invalid minecraftCommands instance");
             }
 
-            const commandRegistry = minecraftCommands != null ? attempt("commandRegistry", () => MinecraftCommands$getRegistry(minecraftCommands)) : null;
+            let commandRegistry: CommandRegistry | null = null;
+            if (minecraftCommands != null && "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ" in proc) {
+                commandRegistry = attempt("commandRegistry", () => MinecraftCommands$getRegistry(minecraftCommands!));
+            } else if (commandRegistryFromRegister != null) {
+                commandRegistry = commandRegistryFromRegister;
+            }
             const gameRules = level != null ? attempt("gameRules", () => Level$getGameRules(level)) : null;
 
             let connector: RakNetConnector | null = null;
@@ -483,7 +529,9 @@ function _launch(asyncResolve: () => void): void {
             }
             const commandOutputSender = minecraftCommands != null ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8) : null;
             const serverNetworkHandler =
-                nonOwnerPointerServerNetworkHandler != null
+                nonOwnerPointerServerNetworkHandler == null && serverNetworkHandlerFromAnnounce != null
+                    ? serverNetworkHandlerFromAnnounce
+                    : nonOwnerPointerServerNetworkHandler != null
                     ? attempt("serverNetworkHandler", () => {
                           const handler = nonOwnerPointerServerNetworkHandler.get()!.subAs(nimodule.ServerNetworkHandler, 0x10); // XXX: unknown state. cut corners.
                           if ("??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@" in proc) {
@@ -654,6 +702,8 @@ export namespace bedrockServer {
     export let sessionId: string;
 
     const abstractobject = createAbstractObject("BDS is not loaded yet");
+    /** @internal the placeholder every unfilled field holds, for the shutdown guard */
+    export const _abstractobject = abstractobject;
     // eslint-disable-next-line prefer-const
     export let serverInstance: bd_server.ServerInstance = abstractobject;
     // eslint-disable-next-line prefer-const
