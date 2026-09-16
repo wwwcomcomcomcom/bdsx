@@ -433,6 +433,17 @@ export namespace makefunc {
         PARAMS extends ParamType[],
     >(functionPointer: PTR, returnType: RETURN, opts?: OPTS, ...params: PARAMS): FunctionFromTypes_js<PTR, OPTS, PARAMS, RETURN> {
         const options: MakeFuncOptions<any> = opts! || {};
+        if (functionPointer instanceof VoidPointer && functionPointer.isNull()) {
+            // proc[...] hands back a null pointer for a symbol the static table
+            // lacks (bds/symbols.ts); the function exists in JavaScript and
+            // throws when called, so the module that defines it still loads.
+            const name = options.name ?? "unresolved symbol";
+            const errfn = (): never => {
+                throw Error(`${name}: the symbol is not in the table for this build`);
+            };
+            (errfn as any).pointer = functionPointer;
+            return errfn as any;
+        }
 
         const returnTypeResolved = remapType(returnType);
         const paramsTypeResolved = params.map(remapType);

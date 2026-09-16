@@ -6,7 +6,7 @@ import { Level } from "../bds/level";
 import { CANCEL } from "../common";
 import { decay } from "../decay";
 import { events } from "../event";
-import { bedrockServer } from "../launcher";
+import { _firstTickHook, bedrockServer } from "../launcher";
 import { makefunc } from "../makefunc";
 import { bool_t, float32_t, int32_t, void_t } from "../nativetype";
 import { procHacker } from "../prochacker";
@@ -101,12 +101,13 @@ events.levelSave.setInstaller(() => {
     const _onLevelSave = procHacker.hooking("?save@Level@@UEAAXXZ", void_t, null, Level)(onLevelSave);
 });
 
-function onLevelTick(): void {
+function onLevelTick(level: Level): void {
+    _firstTickHook(level); // serverOpen fallback when the startup symbol is missing (launcher.ts)
     const event = new LevelTickEvent(bedrockServer.level);
     events.levelTick.fire(event);
     _tickCallback();
 }
-procHacker.hookingRawWithCallOriginal("?tick@Level@@UEAAXXZ", makefunc.np(onLevelTick, void_t), [Register.rcx], []);
+procHacker.hookingRawWithCallOriginal("?tick@Level@@UEAAXXZ", makefunc.np(onLevelTick, void_t, null, Level), [Register.rcx], []);
 
 events.levelWeatherChange.setInstaller(() => {
     function onLevelWeatherChange(level: Level, rainLevel: float32_t, rainTime: int32_t, lightningLevel: float32_t, lightningTime: int32_t): void {

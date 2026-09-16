@@ -153,6 +153,7 @@ class SavedCode {
     constructor(private buffer: Uint8Array, private readonly ptr: StaticPointer) {}
 
     restore(): void {
+        if (this.buffer.length === 0) return; // a skipped saveAndWrite on a missing symbol
         const unlock = new MemoryUnlocker(this.ptr, this.buffer.length);
         const oribuf = this.ptr.getBuffer(this.buffer.length);
         this.ptr.setBuffer(this.buffer);
@@ -198,7 +199,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
     private _get(subject: string, key: Extract<keyof T, string>, offset: number): NativePointer | null {
         try {
             const ptr = this.map[key];
-            if (ptr == null) throw CANCEL;
+            if (ptr == null || ptr.isNull()) throw CANCEL;
             return ptr.add(offset);
         } catch (err) {
             console.error(colors.red(`${subject}: skip, symbol "${key}" not found`));
@@ -273,6 +274,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
         let origin: StaticPointer;
         try {
             origin = this.map[key];
+            if (origin == null || origin.isNull()) return notFoundNp(key, opts?.stackIndex);
         } catch (err) {
             return notFoundNp(key, opts?.stackIndex);
         }
@@ -300,8 +302,8 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
      * @param to call address
      */
     hookingRawWithoutOriginal(key: Extract<keyof T, string>, to: VoidPointer, opts?: disasm.Options | null): void {
-        const origin = this.map[key];
-        if (origin == null) throw Error(`Symbol ${String(key)} not found`);
+        const origin = this._get("hookingRawWithoutOriginal", key, 0);
+        if (origin === null) return;
 
         const REQUIRE_SIZE = 12;
         const codes = disasm.process(origin, REQUIRE_SIZE, opts);
@@ -348,8 +350,11 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
         keepFloatRegister: FloatRegister[],
         opts: disasm.Options = {},
     ): void {
-        const origin = this.map[key];
-        if (origin == null) throw Error(`Symbol ${String(key)} not found`);
+        // The static symbol table is incomplete by design (docs/status.md): a
+        // missing symbol is a skipped hook with a red line, as patching() and
+        // write() already do, not a failed boot.
+        const origin = this._get("hookingRawWithCallOriginal", key, 0);
+        if (origin === null) return;
 
         const REQUIRE_SIZE = 12;
         const codes = disasm.process(origin, REQUIRE_SIZE, opts);
@@ -377,6 +382,14 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
     ): (callback: FunctionFromTypes_np<OPTS, PARAMS, RETURN>) => FunctionFromTypes_js<VoidPointer, OPTS, PARAMS, RETURN> {
         opts = addStackIndex(opts, 1);
         return callback => {
+            // a missing symbol: the hook is not installed and the returned
+            // "original" throws when called, as js() does
+            try {
+                const ptr = this.map[key];
+                if (ptr == null || ptr.isNull()) return makeNotFoundFunc(key);
+            } catch (err) {
+                return makeNotFoundFunc(key);
+            }
             if (opts == null) {
                 opts = { name: `hook of ${key}` } as OPTS;
             } else if (opts.name == null) {
@@ -488,7 +501,9 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
 
     saveAndWrite(key: Extract<keyof T, string>, offset: number, asm: X64Assembler | Uint8Array): SavedCode {
         const buffer = asm instanceof Uint8Array ? asm : asm.buffer();
-        const ptr = this.map[key].add(offset);
+        const base = this._get("saveAndWrite", key, offset);
+        if (base === null) return new SavedCode(new Uint8Array(0), new NativePointer());
+        const ptr = base;
         const code = new SavedCode(buffer, ptr);
         code.restore();
         return code;
@@ -512,6 +527,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
         let ptr: NativePointer;
         try {
             ptr = this.map[key];
+            if (ptr == null || ptr.isNull()) return makeNotFoundFunc(key);
         } catch (err) {
             return makeNotFoundFunc(key);
         }

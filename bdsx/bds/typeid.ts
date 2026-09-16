@@ -72,9 +72,11 @@ export namespace type_id {
             base[counterWrapper] = addr.as(IdCounter);
 
             for (const [type, addr] of symbols.iterateTypeIdFns(basetype)) {
+                if (addr.isNull()) continue; // the symbol is not in the table for this build
                 map.set(type, addr);
             }
             for (const [type, addr] of symbols.iterateTypeIdPtrs(basetype)) {
+                if (addr.isNull()) continue;
                 map.set(type, addr.as(typeid_t));
             }
         }
@@ -83,7 +85,10 @@ export namespace type_id {
         const map = base[typeidmap];
         let typeid = map.get(oriType);
         if (typeid == null) {
-            throw Error(`type_id ${oriType.name} not found`);
+            // Not fatal: the type id is absent from the table for this build,
+            // so the derived type simply has none either.
+            console.error(`[bdsx] type_id ${oriType.name} not found; ${newType.name} gets no type id`);
+            return;
         }
         if (!(typeid instanceof typeid_t)) {
             typeid = makefunc.js(typeid, typeid_t, { structureReturn: true })();

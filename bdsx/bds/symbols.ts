@@ -1,3 +1,4 @@
+import * as colors from "colors";
 import * as fs from "fs";
 import * as path from "path";
 import { Config } from "../config";
@@ -17,6 +18,18 @@ type PROC_T = { readonly vftable: { readonly [key: string]: [number, number?] } 
 export const proc = {
     vftable: {},
 } as PROC_T & { readonly [key: string]: NativePointer };
+const missingReported = new Set<string>();
+
+/**
+ * Read a constant through a symbol that the static table may lack. The
+ * default is used, with one warning, when it does; the caller decides what
+ * a wrong default costs.
+ */
+export function procConst<T>(key: string, read: (ptr: NativePointer) => T, fallback: T): T {
+    if (key in proc) return read(proc[key]);
+    console.error(colors.yellow(`[bdsx] ${key.slice(0, 60)}: not in the symbol table, using ${String(fallback)}`));
+    return fallback;
+}
 
 (proc as any).__proto__ = new Proxy(
     {},
@@ -26,7 +39,17 @@ export const proc = {
                 return target[key];
             } else {
                 const rva = pdbcache.search(key);
-                if (rva === -1) destackThrow(Error(`Symbol not found: ${key}`), 1);
+                if (rva === -1) {
+                    // The static table is incomplete by design (docs/status.md).
+                    // A null pointer lets the module load; ProcHacker and
+                    // makefunc treat it as "skip", and a direct use fails at
+                    // the use, not at require time.
+                    if (!missingReported.has(key)) {
+                        missingReported.add(key);
+                        console.error(colors.red(`Symbol not found: ${key}`));
+                    }
+                    return new NativePointer();
+                }
                 PdbCacheL2.addRva(key, rva);
                 const value = dllraw.current.add(rva);
                 Object.defineProperty(proc, key, { value });
@@ -54,6 +77,11 @@ function getVftableOffset(key: string): readonly [number] | null {
     const [from, target] = key.split("\\", 2);
     const vftableSearch = proc[from].add();
     const targetptr = proc[target];
+    // Either side missing (a null pointer, see the Proxy above) means no
+    // slot to find; scanning on would read past the table into unmapped
+    // memory, and an access violation on the node thread is not an
+    // exception but a hang in bdsx-core's crash handler.
+    if (vftableSearch.isNull() || targetptr.isNull()) return null;
 
     const base = dllraw.current.getAddressBin();
     let offset = 0;

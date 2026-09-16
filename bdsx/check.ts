@@ -53,7 +53,7 @@ function checkAndReport(name: string, oversion: string, nversion: string): void 
 checkAndReport("BDSX Core", cgate.bdsxCoreVersion, bdsxVersionJson);
 
 // check BDS version
-import { proc } from "./bds/symbols";
+import { proc, procConst } from "./bds/symbols";
 import { BdsxExitCode } from "./shellprepare/exitcode";
 
 // SharedConstants::{Major,Minor,Patch,Revision}Version are plain `const int`s.
@@ -74,10 +74,10 @@ const versionSymbols = [
 ];
 const bdsVersion = versionSymbols.every(name => name in proc)
     ? [
-          proc["?MajorVersion@SharedConstants@@3HB"].getInt32(),
-          proc["?MinorVersion@SharedConstants@@3HB"].getInt32(),
-          proc["?PatchVersion@SharedConstants@@3HB"].getInt32(),
-          (proc["?RevisionVersion@SharedConstants@@3HB"].getInt32() + 100).toString().substr(1),
+          procConst("?MajorVersion@SharedConstants@@3HB", p => p.getInt32(), 0),
+          procConst("?MinorVersion@SharedConstants@@3HB", p => p.getInt32(), 0),
+          procConst("?PatchVersion@SharedConstants@@3HB", p => p.getInt32(), 0),
+          (procConst("?RevisionVersion@SharedConstants@@3HB", p => p.getInt32(), 0) + 100).toString().substr(1),
       ].join(".")
     : // Not readable from this build. The symbol table already pinned the
       // binary by MD5, so report the version it was built for.

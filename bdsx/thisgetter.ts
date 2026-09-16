@@ -16,6 +16,7 @@ export class ThisGetter<DEST> {
 
     register<T extends NativeClass>(type: new () => T, symbol: string, key: keyof DEST): void {
         const buffer = new AllocatedPointer(8);
+        buffer.setPointer(null); // stays null when the constructor symbol is missing and the hook is skipped
         this.items.push({ type: type as NativeClassType<T>, key, buffer });
         const code = asm().stack_c(0x28).mov_r_c(Register.r10, buffer).mov_rp_r(Register.r10, 1, 0, Register.rcx).alloc();
         procHacker.hookingRawWithCallOriginal(symbol, code, [], []);
@@ -25,7 +26,8 @@ export class ThisGetter<DEST> {
         const items = this.items;
         this.items = [];
         for (const item of items) {
-            this.dest[item.key] = item.buffer.getPointerAs(item.type);
+            const ptr = item.buffer.getPointer();
+            this.dest[item.key] = (ptr === null || ptr.isNull() ? null : item.buffer.getPointerAs(item.type)) as any;
         }
     }
 }

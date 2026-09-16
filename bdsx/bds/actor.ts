@@ -36,10 +36,10 @@ import { CompoundTag, NBT } from "./nbt";
 import type { NetworkIdentifier } from "./networkidentifier";
 import { Packet } from "./packet";
 import type { Player, ServerPlayer, SimulatedPlayer } from "./player";
-import { proc } from "./symbols";
+import { proc, procConst } from "./symbols";
 
 export const ActorUniqueID = bin64_t.extends({
-    INVALID_ID: proc["?INVALID_ID@ActorUniqueID@@2U1@B"].getBin64(),
+    INVALID_ID: procConst("?INVALID_ID@ActorUniqueID@@2U1@B", p => p.getBin64(), bin.make64(0xffffffff, 0xffffffff)), // -1
 });
 export type ActorUniqueID = bin64_t;
 

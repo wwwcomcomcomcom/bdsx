@@ -206,7 +206,7 @@ import { WeakPtr } from "./sharedptr";
 import { SerializedSkin } from "./skin";
 import { BinaryStream } from "./stream";
 import { StructureManager, StructureSettings, StructureTemplate, StructureTemplateData } from "./structure";
-import { proc } from "./symbols";
+import { proc, procConst } from "./symbols";
 import { WeakRefT } from "./weakreft";
 
 // avoiding circular dependency
@@ -2328,11 +2328,11 @@ ServerInstance.prototype.updateCommandList = function (): void {
     }
     pk.dispose();
 };
-const networkProtocolVersion = proc["?NetworkProtocolVersion@SharedConstants@@3HB"].getInt32();
+const networkProtocolVersion = procConst("?NetworkProtocolVersion@SharedConstants@@3HB", p => p.getInt32(), 0);
 ServerInstance.prototype.getNetworkProtocolVersion = function (): number {
     return networkProtocolVersion;
 };
-const currentGameSemVersion = proc["?CurrentGameSemVersion@SharedConstants@@3VSemVersion@@B"].as(SemVersion);
+const currentGameSemVersion = procConst("?CurrentGameSemVersion@SharedConstants@@3VSemVersion@@B", p => p.as(SemVersion), null as any as SemVersion);
 ServerInstance.prototype.getGameVersion = function (): SemVersion {
     return currentGameSemVersion;
 };

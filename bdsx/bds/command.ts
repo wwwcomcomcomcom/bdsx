@@ -46,7 +46,7 @@ import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
 import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
-import { proc } from "./symbols";
+import { proc, procConst } from "./symbols";
 import { HasTypeId, type_id, typeid_t } from "./typeid";
 import commandParser = commandparser.commandParser;
 
@@ -652,7 +652,8 @@ export class CommandContext extends NativeClass {
 }
 
 export namespace CommandVersion {
-    export const CurrentVersion = proc["?CurrentVersion@CommandVersion@@2HB"].getInt32();
+    // 1.21.3.01 had 42; the table for a newer build may lack the constant
+    export const CurrentVersion = procConst("?CurrentVersion@CommandVersion@@2HB", p => p.getInt32(), 42);
 }
 
 const CommandOriginWrapper = Wrapper.make(CommandOrigin.ref());
@@ -1064,7 +1065,7 @@ export class CommandVFTable extends NativeStruct {
     execute: VoidPointer | null;
 }
 
-{
+if ("??_7HelpCommand@@6B@" in proc) {
     // check command vftable
     const HelpCommand$vftable = proc["??_7HelpCommand@@6B@"];
     bdsxEqualsAssert(HelpCommand$vftable.getPointer(0x00), proc["??_GHelpCommand@@UEAAPEAXI@Z"], "unexpected Command::vftable structure");

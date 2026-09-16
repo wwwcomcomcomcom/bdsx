@@ -225,6 +225,12 @@ bedrockServer.withLoading().then(() => {
     // hook after
     asmcode.onPacketAfter = makefunc.np(onPacketAfter, void_t, null, Packet, NetworkConnection, int32_t);
     asmcode.handlePacket = proc[packetHandleSymbol];
+    // the load-config directory gives this exactly (tools/loadconfig.mjs); if it
+    // is ever missing, packet events are skipped rather than read through null
+    if (!("__guard_dispatch_icall_fptr" in proc)) {
+        console.error("[bdsx] __guard_dispatch_icall_fptr is not in the symbol table; packet events are unavailable");
+        return;
+    }
     asmcode.__guard_dispatch_icall_fptr = proc["__guard_dispatch_icall_fptr"].getPointer();
 
     procHacker.patching(

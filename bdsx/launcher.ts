@@ -66,6 +66,14 @@ let launched = false;
 let closed = false;
 let nonOwnerPointerStructureManager: Bedrock.NonOwnerPointer<StructureManager> | null = null;
 const loadingIsFired = DeferPromise.make<void>();
+let pendingOpenFromTick: ((level: Level) => void) | null = null;
+/** @internal called by event_impl/levelevent.ts from its Level::tick hook */
+export function _firstTickHook(level: Level): void {
+    if (pendingOpenFromTick === null) return;
+    const open = pendingOpenFromTick;
+    pendingOpenFromTick = null;
+    open(level);
+}
 const openIsFired = DeferPromise.make<void>();
 
 const bedrockLogLiner = new Liner();
@@ -354,8 +362,13 @@ function _launch(asyncResolve: () => void): void {
     // and bdsx will hijack the game thread and run it on the node thread.
     const threadHandle = dll.kernel32.CreateThread(null, 0, asmcode.wrapped_main, null, 0, asmcode.addressof_bdsMainThreadId);
 
-    require("./bds/implements");
-    require("./event_impl");
+    // Upstream order: the modules load (and install their hooks) after the
+    // BDS thread starts. Loading them first was tried and the node thread
+    // then hung before BDS printed a line, so the order stays.
+    // BDSX_SKIP=implements,events bisects a boot failure to one of the two.
+    const skip = (process.env.BDSX_SKIP ?? "").split(",");
+    if (!skip.includes("implements")) require("./bds/implements");
+    if (!skip.includes("events")) require("./event_impl");
 
     loadingIsFired.resolve();
     events.serverLoading.promiseFire();
@@ -394,126 +407,183 @@ function _launch(asyncResolve: () => void): void {
         ],
     );
 
-    // hook on script starting
-    procHacker.hookingRawWithCallOriginal(
-        "?sendServerThreadStarted@ServerInstanceEventCoordinator@@QEAAXAEAVServerInstance@@@Z",
-        makefunc.np(
-            () => {
-                try {
-                    _tickCallback();
-                    cgate.nodeLoopOnce();
+    // The open block. Every acquisition is attempted on its own: with the
+    // static symbol table incomplete (docs/status.md), a missing getter must
+    // cost one field, not the whole of serverOpen. Fields that could not be
+    // filled keep the "BDS is not loaded yet" abstract object.
+    const attempt = <T>(what: string, fn: () => T): T | null => {
+        try {
+            return fn();
+        } catch (err) {
+            console.error(colors.yellow(`[bdsx] ${what}: unavailable (${(err as Error).message})`));
+            return null;
+        }
+    };
+    const onServerOpen = (levelFromTick: Level | null): void => {
+        try {
+            _tickCallback();
+            cgate.nodeLoopOnce();
 
-                    const Minecraft$getLevel = procHacker.js("?getLevel@Minecraft@@QEBAPEAVLevel@@XZ", Level, null, bd_server.Minecraft);
-                    const Minecraft$getCommands = procHacker.js(
-                        "?getCommands@Minecraft@@QEAAAEAVMinecraftCommands@@XZ",
-                        MinecraftCommands,
-                        null,
-                        bd_server.Minecraft,
-                    );
-                    const MinecraftCommands$getRegistry = procHacker.js(
-                        "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ",
-                        CommandRegistry,
-                        null,
-                        MinecraftCommands,
-                    );
-                    const Level$getGameRules = procHacker.js("?getGameRules@Level@@UEAAAEAVGameRules@@XZ", GameRules, null, Level);
-                    const RakNetConnector$getPeer = procHacker.js(
-                        "?getPeer@RakNetConnector@@UEAAPEAVRakPeerInterface@RakNet@@XZ",
-                        RakNet.RakPeer,
-                        null,
-                        RakNetConnector,
-                    );
+            const Minecraft$getLevel = procHacker.js("?getLevel@Minecraft@@QEBAPEAVLevel@@XZ", Level, null, bd_server.Minecraft);
+            const Minecraft$getCommands = procHacker.js(
+                "?getCommands@Minecraft@@QEAAAEAVMinecraftCommands@@XZ",
+                MinecraftCommands,
+                null,
+                bd_server.Minecraft,
+            );
+            const MinecraftCommands$getRegistry = procHacker.js(
+                "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ",
+                CommandRegistry,
+                null,
+                MinecraftCommands,
+            );
+            const Level$getGameRules = procHacker.js("?getGameRules@Level@@UEAAAEAVGameRules@@XZ", GameRules, null, Level);
+            const RakNetConnector$getPeer = procHacker.js(
+                "?getPeer@RakNetConnector@@UEAAPEAVRakPeerInterface@RakNet@@XZ",
+                RakNet.RakPeer,
+                null,
+                RakNetConnector,
+            );
 
-                    // All pointer is found from ServerInstance::startServerThread with debug breaking.
-                    thisGetter.finish();
-                    const { serverInstance, dedicatedServer, serverNetworkSystem, minecraft } = instances;
-                    const networkSystem = serverNetworkSystem.networkSystem;
+            // All pointer is found from ServerInstance::startServerThread with debug breaking.
+            thisGetter.finish();
+            const { serverInstance, dedicatedServer, serverNetworkSystem, minecraft } = instances;
+            const networkSystem = serverNetworkSystem != null ? attempt("networkSystem", () => serverNetworkSystem.networkSystem) : null;
 
-                    // TODO: delete after check
+            const level = levelFromTick ?? (minecraft != null ? attempt("level", () => Minecraft$getLevel(minecraft)) : null);
+            const nonOwnerPointerServerNetworkHandler = minecraft != null ? attempt("serverNetworkHandler", () => minecraft.getNonOwnerPointerServerNetworkHandler()) : null;
+            const minecraftCommands = minecraft != null ? attempt("minecraftCommands", () => Minecraft$getCommands(minecraft)) : null;
+            if (minecraftCommands != null && "??_7MinecraftCommands@@6B@" in proc) {
+                bdsxEqualsAssert(minecraftCommands.vftable, proc["??_7MinecraftCommands@@6B@"], "Invalid minecraftCommands instance");
+            }
 
-                    const level = Minecraft$getLevel(minecraft);
-                    const nonOwnerPointerServerNetworkHandler = minecraft.getNonOwnerPointerServerNetworkHandler();
-                    const minecraftCommands = Minecraft$getCommands(minecraft);
-                    bdsxEqualsAssert(minecraftCommands.vftable, proc["??_7MinecraftCommands@@6B@"], "Invalid minecraftCommands instance");
+            const commandRegistry = minecraftCommands != null ? attempt("commandRegistry", () => MinecraftCommands$getRegistry(minecraftCommands)) : null;
+            const gameRules = level != null ? attempt("gameRules", () => Level$getGameRules(level)) : null;
 
-                    const commandRegistry = MinecraftCommands$getRegistry(minecraftCommands);
-                    const gameRules = Level$getGameRules(level);
-
+            let connector: RakNetConnector | null = null;
+            let rakPeer: RakNet.RakPeer | null = null;
+            if (networkSystem != null) {
+                attempt("connector", () => {
                     const NetworkSystem$getConnector = procHacker.js(
                         "?getRemoteConnector@NetworkSystem@@QEAA?AV?$not_null@V?$NonOwnerPointer@VRemoteConnector@@@Bedrock@@@gsl@@XZ",
                         Bedrock.NonOwnerPointer.make(RakNetConnector),
                         { structureReturn: true, this: nimodule.NetworkSystem },
                     );
                     const nonOwnerPointerConnector: Bedrock.NonOwnerPointer<RakNetConnector> = NetworkSystem$getConnector.call(networkSystem);
-                    const connector = nonOwnerPointerConnector.get()!.subAs(RakNetConnector, 48); // adjust
-
-                    bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
-                    const rakPeer = RakNetConnector$getPeer(connector);
+                    connector = nonOwnerPointerConnector.get()!.subAs(RakNetConnector, 48); // adjust
+                    if ("??_7RakNetConnector@@6BConnector@@@" in proc) {
+                        bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
+                    }
+                    rakPeer = RakNetConnector$getPeer(connector);
                     nonOwnerPointerConnector.dispose();
-
-                    bdsxEqualsAssert(rakPeer.vftable, proc["??_7RakPeer@RakNet@@6BRakPeerInterface@1@@"], "Invalid rakPeer");
-                    const commandOutputSender = (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8);
-                    const serverNetworkHandler = nonOwnerPointerServerNetworkHandler.get()!.subAs(nimodule.ServerNetworkHandler, 0x10); // XXX: unknown state. cut corners.
-                    bdsxEqualsAssert(
-                        serverNetworkHandler.vftable,
-                        proc["??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@"],
-                        "Invalid serverNetworkHandler",
-                    );
+                    if ("??_7RakPeer@RakNet@@6BRakPeerInterface@1@@" in proc) {
+                        bdsxEqualsAssert(rakPeer.vftable, proc["??_7RakPeer@RakNet@@6BRakPeerInterface@1@@"], "Invalid rakPeer");
+                    }
+                });
+            }
+            const commandOutputSender = minecraftCommands != null ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8) : null;
+            const serverNetworkHandler =
+                nonOwnerPointerServerNetworkHandler != null
+                    ? attempt("serverNetworkHandler", () => {
+                          const handler = nonOwnerPointerServerNetworkHandler.get()!.subAs(nimodule.ServerNetworkHandler, 0x10); // XXX: unknown state. cut corners.
+                          if ("??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@" in proc) {
+                              bdsxEqualsAssert(
+                                  handler.vftable,
+                                  proc["??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@"],
+                                  "Invalid serverNetworkHandler",
+                              );
+                          }
+                          return handler;
+                      })
+                    : null;
+            let structureManager: StructureManager | null = null;
+            if (level != null) {
+                attempt("structureManager", () => {
                     const Level$getStructureManager = procHacker.js(
                         "?getStructureManager@Level@@UEAA?AV?$not_null@V?$NonOwnerPointer@VStructureManager@@@Bedrock@@@gsl@@XZ",
                         Bedrock.NonOwnerPointer.make(StructureManager),
                         { this: Level, structureReturn: true },
                     );
                     nonOwnerPointerStructureManager = Level$getStructureManager.call(level);
-                    const structureManager = nonOwnerPointerStructureManager!.get()!;
-                    bdsxEqualsAssert(structureManager.vftable, proc["??_7StructureManager@@6B@"], "level.getStructureManager()");
+                    structureManager = nonOwnerPointerStructureManager!.get()!;
+                    if ("??_7StructureManager@@6B@" in proc) {
+                        bdsxEqualsAssert(structureManager.vftable, proc["??_7StructureManager@@6B@"], "level.getStructureManager()");
+                    }
+                });
+            }
 
-                    Object.defineProperties(bedrockServer, {
-                        serverInstance: { value: serverInstance },
-                        networkHandler: { value: networkSystem },
-                        networkSystem: { value: networkSystem },
-                        minecraft: { value: minecraft },
-                        dedicatedServer: { value: dedicatedServer },
-                        level: { value: level },
-                        serverNetworkHandler: { value: serverNetworkHandler },
-                        nonOwnerPointerServerNetworkHandler: {
-                            value: nonOwnerPointerServerNetworkHandler,
-                        },
-                        minecraftCommands: { value: minecraftCommands },
-                        commandRegistry: { value: commandRegistry },
-                        gameRules: { value: gameRules },
-                        raknetInstance: { value: connector },
-                        connector: { value: connector },
-                        rakPeer: { value: rakPeer },
-                        commandOutputSender: { value: commandOutputSender },
-                        structureManager: { value: structureManager },
-                    });
-
-                    Object.defineProperty(bd_server, "serverInstance", {
-                        value: serverInstance,
-                    });
-                    Object.defineProperty(nimodule, "networkSystem", {
-                        value: networkSystem,
-                    });
-
-                    openIsFired.resolve();
-                    events.serverOpen.fire();
-                    events.serverOpen.clear(); // it will never fire again, clear it
-                    asyncResolve();
-
-                    _tickCallback();
-                    cgate.nodeLoopOnce();
-                } catch (err) {
-                    events.errorFire(err);
+            const fields: Record<string, unknown> = {
+                serverInstance,
+                networkHandler: networkSystem,
+                networkSystem,
+                minecraft,
+                dedicatedServer,
+                level,
+                serverNetworkHandler,
+                nonOwnerPointerServerNetworkHandler,
+                minecraftCommands,
+                commandRegistry,
+                gameRules,
+                raknetInstance: connector,
+                connector,
+                rakPeer,
+                commandOutputSender,
+                structureManager,
+            };
+            const missing: string[] = [];
+            for (const [key, value] of Object.entries(fields)) {
+                if (value == null) {
+                    missing.push(key);
+                    continue;
                 }
-            },
-            void_t,
-            { name: "hook of ScriptEngine::startScriptLoading", onlyOnce: true },
-            VoidPointer,
-        ),
-        [Register.rcx, Register.rdx],
-        [],
-    );
+                Object.defineProperty(bedrockServer, key, { value });
+            }
+            if (missing.length !== 0) {
+                console.error(colors.yellow(`[bdsx] serverOpen with ${missing.length} field(s) unavailable on this build: ${missing.join(", ")}`));
+            }
+
+            if (serverInstance != null) {
+                Object.defineProperty(bd_server, "serverInstance", {
+                    value: serverInstance,
+                });
+            }
+            if (networkSystem != null) {
+                Object.defineProperty(nimodule, "networkSystem", {
+                    value: networkSystem,
+                });
+            }
+
+            openIsFired.resolve();
+            events.serverOpen.fire();
+            events.serverOpen.clear(); // it will never fire again, clear it
+            asyncResolve();
+
+            _tickCallback();
+            cgate.nodeLoopOnce();
+        } catch (err) {
+            events.errorFire(err);
+        }
+    };
+
+    // hook on script starting
+    const SERVER_THREAD_STARTED = "?sendServerThreadStarted@ServerInstanceEventCoordinator@@QEAAXAEAVServerInstance@@@Z";
+    if (SERVER_THREAD_STARTED in proc) {
+        procHacker.hookingRawWithCallOriginal(
+            SERVER_THREAD_STARTED,
+            makefunc.np(() => onServerOpen(null), void_t, { name: "hook of ScriptEngine::startScriptLoading", onlyOnce: true }, VoidPointer),
+            [Register.rcx, Register.rdx],
+            [],
+        );
+    } else {
+        // Without the symbol that marks the server thread start, the first
+        // Level::tick is the moment: the level exists, the game loop is on
+        // the node thread, and `this` is the Level itself. event_impl/
+        // levelevent.ts already hooks Level::tick and hands `this` to
+        // _firstTickHook; a second hook on the same function is what took
+        // the server down on 1.26.40.8.
+        console.error(colors.yellow("[bdsx] sendServerThreadStarted is not in the symbol table; serverOpen fires on the first Level::tick instead"));
+        pendingOpenFromTick = onServerOpen;
+    }
 
     procHacker.hookingRawWithCallOriginal(
         "?startLeaveGame@Minecraft@@QEAAX_N@Z",
@@ -556,7 +626,17 @@ function _launch(asyncResolve: () => void): void {
      * send stdin to bedrockServer.executeCommandOnConsole
      * without this, you need to control stdin manually
      */
-    bedrockServer.DefaultStdInHandler.install();
+    // bdsx's stdin handler replaces BDS's ConsoleInputReader, which the three
+    // patches above neuter. Without those symbols BDS keeps its own reader,
+    // and a second reader on the same stdin takes the server down at start;
+    // so BDS keeps the console and bdsx does not intercept typed commands.
+    if (skip.includes("stdin")) {
+        // bisection switch
+    } else if ("??0ConsoleInputReader@@QEAA@XZ" in proc) {
+        bedrockServer.DefaultStdInHandler.install();
+    } else {
+        console.error(colors.yellow("[bdsx] ConsoleInputReader is not in the symbol table; BDS keeps its own console reader"));
+    }
 }
 
 const stopfunc = procHacker.js("?stop@DedicatedServer@@UEAA_NXZ", void_t, null, VoidPointer);
