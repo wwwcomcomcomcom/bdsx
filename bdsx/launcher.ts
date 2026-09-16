@@ -247,27 +247,67 @@ function _launch(asyncResolve: () => void): void {
         nonOwnerPointerStructureManager!.dispose();
         decay(bedrockServer.structureManager);
     }, void_t);
-    asmcode.gameThreadInner = proc["<lambda_261fc769b4b17f58193d57d5f3ee7db9>::operator()"]; // caller of ServerInstance::_update
     asmcode.free = dll.ucrtbase.free.pointer;
 
     // hook game thread
     asmcode._Cnd_do_broadcast_at_thread_exit = dll.msvcp140._Cnd_do_broadcast_at_thread_exit;
 
-    procHacker.patching(
-        "hook-game-thread",
-        "std::thread::_Invoke<std::tuple<<lambda_261fc769b4b17f58193d57d5f3ee7db9> >,0>", // caller of ServerInstance::_update
-        6,
-        asmcode.gameThreadHook, // original depended
-        Register.rax,
-        true,
-        // prettier-ignore
-        [
-            0x48, 0x8B, 0xD9, // mov rbx,rcx
-            0xE8, null, null, null, null, // call <bedrock_server.<lambda_261fc769b4b17f58193d57d5f3ee7db9>::operator()>
-            0xE8, null, null, null, null, // call <bedrock_server._Cnd_do_broadcast_at_thread_exit>
-        ],
-        // [4, 8, 9, 13], // [4, 8), [9, 13)
-    );
+    // Both of these are callers of ServerInstance::_update. Neither carries a
+    // string literal, so they are found structurally instead: _Invoke is the
+    // .text function that calls the MSVCP140 import
+    // _Cnd_do_broadcast_at_thread_exit and whose call closure reaches the
+    // server tick markers. See tools/find-gamethread.mjs.
+    const GAME_THREAD_INVOKE = "std::thread::_Invoke<std::tuple<<lambda_261fc769b4b17f58193d57d5f3ee7db9> >,0>";
+    const GAME_THREAD_LAMBDA = "<lambda_261fc769b4b17f58193d57d5f3ee7db9>::operator()";
+
+    if (GAME_THREAD_LAMBDA in proc) {
+        // The lambda is its own function and _Invoke calls it, so the call is
+        // what gets replaced and _Invoke's own prologue and tail are untouched.
+        asmcode.gameThreadInner = proc[GAME_THREAD_LAMBDA];
+        procHacker.patching(
+            "hook-game-thread",
+            GAME_THREAD_INVOKE,
+            6,
+            asmcode.gameThreadHook, // original depended
+            Register.rax,
+            true,
+            // prettier-ignore
+            [
+                0x48, 0x8B, 0xD9, // mov rbx,rcx
+                0xE8, null, null, null, null, // call <bedrock_server.<lambda_261fc769b4b17f58193d57d5f3ee7db9>::operator()>
+                0xE8, null, null, null, null, // call <bedrock_server._Cnd_do_broadcast_at_thread_exit>
+            ],
+            // [4, 8, 9, 13], // [4, 8), [9, 13)
+        );
+    } else {
+        // 1.26.40.8 inlined the lambda into _Invoke: _Invoke is 6046 bytes
+        // against 45 in 1.21.3.01, and nothing in the binary has the lambda's
+        // address to take. So _Invoke itself becomes the inner function --
+        // prologue-relocated by hookingRaw, which its eight leading pushes
+        // suit -- and the hook replaces _Invoke rather than a call inside it.
+        //
+        // gameThreadHook was written to be patched *into* _Invoke, after
+        // _Invoke had already pushed rbx, so it clobbers rbx and leaves the
+        // stack to its caller. Standing in for a whole function it has to
+        // preserve rbx and reserve its own shadow space.
+        const replacement = asm()
+            .push_r(Register.rbx)
+            .sub_r_c(Register.rsp, 0x20)
+            .call64(asmcode.gameThreadHook, Register.rax)
+            .add_r_c(Register.rsp, 0x20)
+            .pop_r(Register.rbx)
+            .ret()
+            .alloc("game thread _Invoke replacement");
+        procHacker.hookingRaw(GAME_THREAD_INVOKE, original => {
+            asmcode.gameThreadInner = original;
+            return replacement;
+        });
+        // NOTE, unverified: the inlined body still ends with its own
+        // _Cnd_do_broadcast_at_thread_exit, which now runs on the node loop
+        // thread, and gameThreadHook tail-jumps to it again on the BDS thread.
+        // The original design called it once, on the BDS thread. Check this at
+        // shutdown before trusting it.
+    }
 
     const instances = {} as {
         serverInstance: bd_server.ServerInstance;
