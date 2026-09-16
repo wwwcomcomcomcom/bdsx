@@ -7,7 +7,10 @@ import * as BDS_VERSION_DEFAULT from "../version-bds.json";
 import * as BDSX_CORE_VERSION_DEFAULT from "../version-bdsx.json";
 import { BDSInstaller, InstallItem } from "./installercls";
 
-const BDS_LINK_DEFAULT = "https://minecraft.azureedge.net/bin-win/bedrock-server-%BDS_VERSION%.zip";
+// minecraft.azureedge.net was retired with Azure CDN Edgio and no longer resolves.
+// Mojang serves the same archives from www.minecraft.net; the current version is
+// listed at https://net-secondary.web.minecraft-services.net/api/v1.0/download/links
+const BDS_LINK_DEFAULT = "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-%BDS_VERSION%.zip";
 const BDSX_CORE_LINK_DEFAULT = "https://github.com/bdsx/bdsx-core/releases/download/%BDSX_CORE_VERSION%/bdsx-core-%BDSX_CORE_VERSION%.zip";
 const PDBCACHE_LINK_DEFAULT = "https://github.com/bdsx/pdbcache/releases/download/%BDS_VERSION%/pdbcache.zip";
 

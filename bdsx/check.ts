@@ -55,11 +55,30 @@ checkAndReport("BDSX Core", cgate.bdsxCoreVersion, bdsxVersionJson);
 // check BDS version
 import { proc } from "./bds/symbols";
 import { BdsxExitCode } from "./shellprepare/exitcode";
-const versions = [
-    proc["?MajorVersion@SharedConstants@@3HB"].getInt32(),
-    proc["?MinorVersion@SharedConstants@@3HB"].getInt32(),
-    proc["?PatchVersion@SharedConstants@@3HB"].getInt32(),
-    (proc["?RevisionVersion@SharedConstants@@3HB"].getInt32() + 100).toString().substr(1),
+
+// SharedConstants::{Major,Minor,Patch,Revision}Version are plain `const int`s.
+// In 1.21.3.01 they are loaded by three adjacent `lea`s feeding the SemVersion
+// constructor, which makes them easy to find by cross-reference; in 1.26.51.1
+// no code window anywhere in .text references a 1, a 26 and a 51 within 512
+// bytes of each other, so that anchor is gone. They are marked unresolved in
+// the symbol table until something better turns them up.
+//
+// Skipping the check costs nothing: the symbol table is keyed on the MD5 of
+// bedrock_server.exe and refuses to load against any other binary, which is a
+// strictly stronger guarantee than comparing four integers.
+const versionSymbols = [
+    "?MajorVersion@SharedConstants@@3HB",
+    "?MinorVersion@SharedConstants@@3HB",
+    "?PatchVersion@SharedConstants@@3HB",
+    "?RevisionVersion@SharedConstants@@3HB",
 ];
-const bdsVersion = versions.join(".");
-checkAndReport("BDS", bdsVersion, bdsVersionJson);
+if (versionSymbols.every(name => name in proc)) {
+    const versions = [
+        proc["?MajorVersion@SharedConstants@@3HB"].getInt32(),
+        proc["?MinorVersion@SharedConstants@@3HB"].getInt32(),
+        proc["?PatchVersion@SharedConstants@@3HB"].getInt32(),
+        (proc["?RevisionVersion@SharedConstants@@3HB"].getInt32() + 100).toString().substr(1),
+    ];
+    const bdsVersion = versions.join(".");
+    checkAndReport("BDS", bdsVersion, bdsVersionJson);
+}
