@@ -1,117 +1,65 @@
+/**
+ * Binding between the static symbol table and the running bedrock_server.exe.
+ *
+ * Historically this read pdbcache.bin, a name -> RVA hashmap that pdbcachegen
+ * produced from bedrock_server.pdb. Mojang stopped shipping that PDB, so the
+ * table is now generated offline and shipped as symbols.json. The module name
+ * and the { search, readKeys } surface are kept so existing callers --
+ * bds/symbols.ts, pdblegacy.ts, analyzer.ts, bds/symbollist.ts -- are unchanged.
+ */
 import * as fs from "fs";
 import * as path from "path";
 import { Config } from "./config";
-import { hashString } from "./util";
+import { SymbolTable, SymbolTableError } from "./symboltable";
 
-const cachePath = path.join(Config.BDS_PATH, "pdbcache.bin");
+const tablePath = path.join(Config.BDS_PATH, "symbols.json");
 
-const fd = fs.openSync(cachePath, "r");
-// no error. BDSX cannot be launched without pdbcache.bin
-
-const HASHMAP_CAP_OFFSET = 4 + 16 + 4; // version + md5 + main rva
-const TABLE_OFFSET = HASHMAP_CAP_OFFSET + 4; // version + md5 + main rva + hashmap capacity
-const ENTRY_SIZE = 4 + 4 + 4; // hash + name offset + rva
-const ENTRY_INT_COUNT = ENTRY_SIZE >> 2;
-
-const READ_AT_ONCE = 85;
-const buffer = new Uint32Array(READ_AT_ONCE * ENTRY_INT_COUNT);
-
-fs.readSync(fd, buffer, 0, 4, HASHMAP_CAP_OFFSET);
-const hashmapCapacity = buffer[0];
-const namesOffset = TABLE_OFFSET + ENTRY_SIZE * hashmapCapacity;
-
-interface Entry {
-    hash: number;
-    nameOffset: number;
-    rva: number;
-}
-
-function nameEquals(nameOffset: number, keyUtf8: Buffer): boolean {
-    const readkey = Buffer.allocUnsafe(keyUtf8.length);
-    const readSize = fs.readSync(fd, readkey, 0, readkey.length, nameOffset);
-    if (readSize !== readkey.length) return false;
-    if (!keyUtf8.equals(readkey)) return false;
-    return true;
-}
-function* readFrom(startIndex: number): IterableIterator<Entry> {
-    let readCount: number;
-    let index = startIndex;
-    let readTo = hashmapCapacity;
-
-    for (;;) {
-        const readFrom = index;
-        const countToEnd = readTo - index;
-        if (READ_AT_ONCE < countToEnd) {
-            readCount = READ_AT_ONCE;
-            index += readCount;
-        } else {
-            readCount = countToEnd;
-            index = 0;
-            readTo = startIndex;
-        }
-        fs.readSync(fd, buffer, 0, readCount * ENTRY_SIZE, readFrom * ENTRY_SIZE + TABLE_OFFSET);
-
-        const intCount = readCount * 3;
-        for (let offset = 0; offset < intCount; ) {
-            const hash = buffer[offset++];
-            const nameOffset = buffer[offset++];
-            const rva = buffer[offset++];
-
-            if (nameOffset === 0) return;
-            yield { hash, nameOffset, rva };
-        }
-        if (index === startIndex) break;
+function load(): SymbolTable {
+    let content: string;
+    try {
+        content = fs.readFileSync(tablePath, "utf8");
+    } catch (err) {
+        throw new SymbolTableError(
+            `symbol table not found: ${tablePath}\n` + `Generate it with the offline resolver for this BDS build.`,
+        );
     }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(content);
+    } catch (err) {
+        throw new SymbolTableError(`${tablePath}: invalid JSON (${(err as Error).message})`);
+    }
+
+    const table = SymbolTable.parse(parsed, tablePath);
+
+    // Only bdsx-core can tell us which binary is actually mapped. Outside BDS
+    // -- tooling, tests -- there is nothing to compare against, so the table
+    // loads unverified rather than refusing to be inspected.
+    if (Config.BDSX) {
+        table.verifyAgainst(require("./core").bedrock_server_exe.md5);
+    }
+    return table;
 }
+
+const table = load();
 
 export namespace pdbcache {
-    export function* readKeys(): IterableIterator<string> {
-        let offset = namesOffset;
-        let buffer = Buffer.allocUnsafe(8192);
-
-        let filled = 0;
-        for (;;) {
-            const readSize = fs.readSync(fd, buffer, filled, buffer.length - filled, offset);
-            if (readSize === 0) break;
-            filled += readSize;
-            offset += readSize;
-
-            let index = 0;
-            for (;;) {
-                const nullterm = buffer.indexOf(0, index);
-                if (nullterm !== -1 && nullterm < filled) {
-                    const key = buffer.subarray(index, nullterm).toString("utf8");
-                    yield key;
-                    index = nullterm + 1;
-                } else {
-                    const remainedData = filled - index;
-                    if (remainedData * 2 > buffer.length) {
-                        // need to expand
-                        const nbuffer = Buffer.allocUnsafe(buffer.length * 2);
-                        buffer.copy(nbuffer, 0, index, filled);
-                        buffer = nbuffer;
-                    } else {
-                        // need to truncate
-                        buffer.copy(buffer, 0, index, filled);
-                    }
-                    filled -= index;
-                    break;
-                }
-            }
-        }
-    }
-
-    /**
-     * @return -1 if not found
-     */
+    /** @return RVA, or -1 when not found. */
     export function search(key: string): number {
-        const hash = hashString(key);
-        const keyUtf8 = Buffer.from(key + "\0", "utf8");
-        for (const entry of readFrom(hash % hashmapCapacity)) {
-            if (entry.hash === hash && nameEquals(entry.nameOffset, keyUtf8)) {
-                return entry.rva;
-            }
-        }
-        return -1;
+        return table.search(key);
     }
+
+    export function readKeys(): IterableIterator<string> {
+        return table.keys();
+    }
+
+    /** Why a symbol is known to be unavailable on this build, else null. */
+    export function unresolvedReason(key: string): string | null {
+        return table.unresolvedReason(key);
+    }
+
+    export const bdsVersion = table.bdsVersion;
+    export const exeMd5 = table.exeMd5;
+    export const size = table.size;
 }
