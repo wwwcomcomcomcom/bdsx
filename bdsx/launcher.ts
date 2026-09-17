@@ -244,7 +244,8 @@ function _launch(asyncResolve: () => void): void {
         // a native callback at shutdown, is reported as a native crash.
         const decayIfReal = (key: keyof typeof bedrockServer): void => {
             const desc = Object.getOwnPropertyDescriptor(bedrockServer, key);
-            if (desc === undefined || desc.value === bedrockServer._abstractobject) return;
+            // no descriptor: never filled; accessor: a lazy field (rakPeer) with nothing to decay
+            if (desc === undefined || desc.get !== undefined || desc.value == null || desc.value === bedrockServer._abstractobject) return;
             decay(desc.value);
         };
         for (const key of [
@@ -508,7 +509,36 @@ function _launch(asyncResolve: () => void): void {
 
             let connector: RakNetConnector | null = null;
             let rakPeer: RakNet.RakPeer | null = null;
-            if (networkSystem != null) {
+            let rakPeerLazy: (() => RakNet.RakPeer | null) | null = null;
+            if (serverNetworkSystem != null && !("?getRemoteConnector@NetworkSystem@@QEAA?AV?$not_null@V?$NonOwnerPointer@VRemoteConnector@@@Bedrock@@@gsl@@XZ" in proc) && layouts.ServerNetworkSystem?.connector != null) {
+                // no getter symbol: the connector and the peer are members whose
+                // offsets were read from the live objects (symbols.json layouts).
+                // The peer is created after the first tick, so it is read lazily.
+                const sns = serverNetworkSystem as any as StaticPointer;
+                attempt("connector", () => {
+                    const c = sns.getPointer(layouts.ServerNetworkSystem.connector);
+                    if (c === null || c.isNull()) throw Error("connector member is null");
+                    connector = c.as(RakNetConnector);
+                    if ("??_7RakNetConnector@@6BConnector@@@" in proc) {
+                        bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
+                    }
+                });
+                if (layouts.ServerNetworkSystem.rakPeerHolder != null && layouts.RakPeerHolder?.rakPeer != null) {
+                    const holderOff = layouts.ServerNetworkSystem.rakPeerHolder, peerOff = layouts.RakPeerHolder.rakPeer;
+                    rakPeerLazy = () => {
+                        const holder = sns.getPointer(holderOff);
+                        if (holder === null || holder.isNull()) return null;
+                        const peer = holder.getPointer(peerOff);
+                        if (peer === null || peer.isNull()) return null;
+                        const rp = peer.as(RakNet.RakPeer);
+                        if ("??_7RakPeer@RakNet@@6BRakPeerInterface@1@@" in proc) {
+                            bdsxEqualsAssert(rp.vftable, proc["??_7RakPeer@RakNet@@6BRakPeerInterface@1@@"], "Invalid rakPeer");
+                        }
+                        return rp;
+                    };
+                    rakPeer = attempt("rakPeer", rakPeerLazy);
+                }
+            } else if (networkSystem != null) {
                 attempt("connector", () => {
                     const NetworkSystem$getConnector = procHacker.js(
                         "?getRemoteConnector@NetworkSystem@@QEAA?AV?$not_null@V?$NonOwnerPointer@VRemoteConnector@@@Bedrock@@@gsl@@XZ",
@@ -581,6 +611,20 @@ function _launch(asyncResolve: () => void): void {
             const missing: string[] = [];
             for (const [key, value] of Object.entries(fields)) {
                 if (value == null) {
+                    if (key === "rakPeer" && rakPeerLazy !== null) {
+                        // not created yet at the first tick: resolve on first access
+                        const lazy = rakPeerLazy;
+                        let cached: RakNet.RakPeer | null = null;
+                        Object.defineProperty(bedrockServer, key, {
+                            get: () => {
+                                if (cached === null) cached = lazy();
+                                if (cached === null) throw Error("rakPeer is not created yet");
+                                return cached;
+                            },
+                            configurable: true,
+                        });
+                        continue;
+                    }
                     missing.push(key);
                     continue;
                 }
