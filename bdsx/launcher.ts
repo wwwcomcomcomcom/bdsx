@@ -68,6 +68,7 @@ let closed = false;
 let nonOwnerPointerStructureManager: Bedrock.NonOwnerPointer<StructureManager> | null = null;
 const loadingIsFired = DeferPromise.make<void>();
 let pendingOpenFromTick: ((level: Level) => void) | null = null;
+let serverStopHooked = true;
 /** @internal called by event_impl/levelevent.ts from its Level::tick hook */
 export function _firstTickHook(level: Level): void {
     if (pendingOpenFromTick === null) return;
@@ -239,6 +240,16 @@ function _launch(asyncResolve: () => void): void {
     }, void_t);
     asmcode.gameThreadFinish = makefunc.np(() => {
         closed = true;
+        if (!serverStopHooked) {
+            // the fallback for a missing sendEvent symbol (see below): plugins
+            // get their serverStop before the native objects are decayed
+            try {
+                events.serverStop.fire();
+                _tickCallback();
+            } catch (err) {
+                events.errorFire(err);
+            }
+        }
         // Fields that serverOpen could not fill still hold the "BDS is not
         // loaded yet" object, whose every access throws; a throw here, inside
         // a native callback at shutdown, is reported as a native crash.
@@ -691,8 +702,16 @@ function _launch(asyncResolve: () => void): void {
         [Register.rcx, Register.rdx],
         [],
     );
+    const SEND_EVENT = "?sendEvent@ServerInstanceEventCoordinator@@QEAAXAEBV?$EventRef@U?$ServerInstanceGameplayEvent@X@@@@@Z";
+    serverStopHooked = SEND_EVENT in proc;
+    if (!serverStopHooked) {
+        // events.serverStop is what the example plugins (and any plugin) use to
+        // clear their timers; without this symbol it fires when the game loop
+        // returns instead, in gameThreadFinish.
+        console.error(colors.yellow("[bdsx] sendEvent is not in the symbol table; events.serverStop fires when the game loop returns instead"));
+    }
     const sendEvent = procHacker.hooking(
-        "?sendEvent@ServerInstanceEventCoordinator@@QEAAXAEBV?$EventRef@U?$ServerInstanceGameplayEvent@X@@@@@Z",
+        SEND_EVENT,
         void_t,
         { name: "hook of shutdown" },
         VoidPointer,
