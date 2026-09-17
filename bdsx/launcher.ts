@@ -534,7 +534,24 @@ function _launch(asyncResolve: () => void): void {
                         bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
                     }
                 });
-                if (layouts.ServerNetworkSystem.rakPeerHolder != null && layouts.RakPeerHolder?.rakPeer != null) {
+                // The listening peer is the connector's own: RakNetConnector::getPeer
+                // (an Endstone slot, checked by execution on 1.26.40.8) returns a
+                // RakPeer whose bound addresses carry the server port. The RakPeer in
+                // the holder at ServerNetworkSystem+0xf8 has the same vftable and no
+                // port anywhere in its first 16 KB: another peer, so the holder is
+                // only a fallback for a table without getPeer.
+                if ("?getPeer@RakNetConnector@@UEAAPEAVRakPeerInterface@RakNet@@XZ" in proc) {
+                    rakPeerLazy = () => {
+                        if (connector === null) return null;
+                        const rp: RakNet.RakPeer | null = RakNetConnector$getPeer(connector);
+                        if (rp === null || rp.isNull()) return null;
+                        if ("??_7RakPeer@RakNet@@6BRakPeerInterface@1@@" in proc) {
+                            bdsxEqualsAssert(rp.vftable, proc["??_7RakPeer@RakNet@@6BRakPeerInterface@1@@"], "Invalid rakPeer");
+                        }
+                        return rp;
+                    };
+                    rakPeer = attempt("rakPeer", rakPeerLazy);
+                } else if (layouts.ServerNetworkSystem.rakPeerHolder != null && layouts.RakPeerHolder?.rakPeer != null) {
                     const holderOff = layouts.ServerNetworkSystem.rakPeerHolder, peerOff = layouts.RakPeerHolder.rakPeer;
                     rakPeerLazy = () => {
                         const holder = sns.getPointer(holderOff);
