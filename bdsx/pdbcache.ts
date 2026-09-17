@@ -15,6 +15,26 @@ import { SymbolTable, SymbolTableError } from "./symboltable";
 const tablePath = path.join(Config.BDS_PATH, "symbols.json");
 /** object layouts read from live instances by the offline tooling: class -> member -> byte offset */
 let rawLayouts: Record<string, Record<string, number>> = {};
+/**
+ * A member accessor that exists in the source but not as a findable function
+ * in this build: `mov rax,[rcx+X]; ret` and its kin have no unwind entry, a
+ * body that differs from hundreds of others by the offset alone, and are
+ * inlined at every caller. The offline tooling ships the field instead
+ * (docs/findings-layouts.md) and bds/symbols.ts emits the body at load time.
+ */
+export interface FieldAccessor {
+    /** get: load [this+off]; lea: address of this+off; set: store the second argument; get-hidden: copy into the hidden return buffer */
+    kind: "get" | "lea" | "set" | "get-hidden";
+    /** bytes: 1, 2, 4 or 8 */
+    width: number;
+    off: number;
+    /** xmm0 / xmm1 instead of rax / rdx */
+    float?: boolean;
+    /** sign- or zero-extend a narrow load into eax/rax */
+    sx?: boolean;
+    zx?: boolean;
+}
+let rawAccessors: Record<string, FieldAccessor> = {};
 
 function load(): SymbolTable {
     let content: string;
@@ -34,6 +54,7 @@ function load(): SymbolTable {
     }
 
     rawLayouts = (parsed as { layouts?: Record<string, Record<string, number>> }).layouts ?? {};
+    rawAccessors = (parsed as { accessors?: Record<string, FieldAccessor> }).accessors ?? {};
     const table = SymbolTable.parse(parsed, tablePath);
 
     // Only bdsx-core can tell us which binary is actually mapped. Outside BDS
@@ -64,6 +85,11 @@ export namespace pdbcache {
 
     /** class -> member -> offset, from symbols.json `layouts`; empty when the table has none */
     export const layouts: Record<string, Record<string, number>> = rawLayouts;
+    /** name -> field accessor definition, from symbols.json `accessors`; consulted when the name has no address */
+    export function accessor(key: string): FieldAccessor | undefined {
+        return rawAccessors[key];
+    }
+    export const accessorCount = Object.keys(rawAccessors).length;
     export const bdsVersion = table.bdsVersion;
     export const exeMd5 = table.exeMd5;
     export const size = table.size;
