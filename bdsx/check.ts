@@ -2,11 +2,11 @@ import "./common";
 import "./checkmodules";
 import "./asm/checkasm";
 import { cgate } from "./core";
-import * as bdsVersionJson from "./version-bds.json";
 import * as bdsxVersionJson from "./version-bdsx.json";
 import * as colors from "colors";
 import { InstallInfo } from "./installer/installinfo";
 import { Config } from "./config";
+import { pdbcache } from "./pdbcache";
 
 function checkInstallInfoAndExit(): never {
     function check(versionKey: keyof InstallInfo, oversion: string): void {
@@ -41,6 +41,12 @@ function checkInstallInfoAndExit(): never {
         process.exit(BdsxExitCode.InstallNpm);
     }
 }
+/** 1.26.40.8 and 1.26.40.08 are the same build; the fourth field is written both ways */
+function normalizeBdsVersion(version: string): string {
+    const parts = version.split(".");
+    if (parts.length === 4) parts[3] = String(Number(parts[3]));
+    return parts.join(".");
+}
 function checkAndReport(name: string, oversion: string, nversion: string): void {
     if (oversion === nversion) return;
     console.error(colors.red(`[BDSX] ${name} outdated`));
@@ -58,14 +64,18 @@ import { BdsxExitCode } from "./shellprepare/exitcode";
 
 // SharedConstants::{Major,Minor,Patch,Revision}Version are plain `const int`s.
 // In 1.21.3.01 they are loaded by three adjacent `lea`s feeding the SemVersion
-// constructor, which makes them easy to find by cross-reference; in 1.26.51.1
-// no code window anywhere in .text references a 1, a 26 and a 51 within 512
-// bytes of each other, so that anchor is gone. They are marked unresolved in
-// the symbol table until something better turns them up.
+// constructor, which makes them easy to find by cross-reference; in 1.26 no
+// code window anywhere in .text references a 1, a 26 and a 40 within 512 bytes
+// of each other, so that anchor is gone. The table ships them as values
+// instead -- they are the build number it is keyed to
+// (docs/findings-utils.md) -- and reading them back is a check that the table
+// describes the binary that is running.
 //
-// Skipping the check costs nothing: the symbol table is keyed on the MD5 of
-// bedrock_server.exe and refuses to load against any other binary, which is a
-// strictly stronger guarantee than comparing four integers.
+// What they are NOT is a reason to stop: the version bdsx was released against
+// (version-bds.json, 1.21.3.01) is not the version the table was built for, and
+// demanding the former is how this check used to kill a perfectly good server.
+// The comparison is against the table, and the MD5 the table is keyed on is
+// the guarantee underneath it.
 const versionSymbols = [
     "?MajorVersion@SharedConstants@@3HB",
     "?MinorVersion@SharedConstants@@3HB",
@@ -81,5 +91,5 @@ const bdsVersion = versionSymbols.every(name => name in proc)
       ].join(".")
     : // Not readable from this build. The symbol table already pinned the
       // binary by MD5, so report the version it was built for.
-      (bdsVersionJson as unknown as string);
-checkAndReport("BDS", bdsVersion, bdsVersionJson);
+      pdbcache.bdsVersion;
+checkAndReport("BDS", normalizeBdsVersion(bdsVersion), normalizeBdsVersion(pdbcache.bdsVersion));

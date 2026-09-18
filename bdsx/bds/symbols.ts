@@ -80,6 +80,30 @@ function emitAccessor(key: string, a: FieldAccessor): NativePointer {
 }
 
 /**
+ * A name with no address in this build whose behaviour is fixed by the type
+ * rather than by the binary: `BlockPos::relative` steps one block along a
+ * facing, `HashedString::computeHash` is FNV-1 over the bytes, `Vec3`'s
+ * rotation helpers are trigonometry. bdsx carries those itself -- the way
+ * Endstone carries Vec3's operators in its own header -- so a missing address
+ * costs nothing. The binary still wins when it has one: `fromBinary` is only
+ * called when the table can resolve the name, which also means a build that
+ * gains the symbol silently goes back to the real function.
+ *
+ * Every implementation is written from the semantics of the type and checked
+ * against the 2024 build's behaviour (docs/findings-utils.md), never lifted
+ * from it.
+ */
+const derivedReported = new Set<string>();
+export function derived<T>(key: string, own: T, fromBinary: () => T): T {
+    if (key in proc) return fromBinary();
+    if (!derivedReported.has(key)) {
+        derivedReported.add(key);
+        console.error(colors.cyan(`[bdsx] ${key.slice(0, 60)}: no address in this build, using bdsx's own implementation`));
+    }
+    return own;
+}
+
+/**
  * Materialise a static const data member the table ships as a value
  * (symbols.json `constants`, see pdbcache.ts). `Vec3::ONE` is storage the
  * compiler stopped keeping, so there is no address in bedrock_server.exe to

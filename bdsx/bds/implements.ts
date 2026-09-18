@@ -206,7 +206,7 @@ import { WeakPtr } from "./sharedptr";
 import { SerializedSkin } from "./skin";
 import { BinaryStream } from "./stream";
 import { StructureManager, StructureSettings, StructureTemplate, StructureTemplateData } from "./structure";
-import { proc, procConst } from "./symbols";
+import { derived, proc, procConst } from "./symbols";
 import { WeakRefT } from "./weakreft";
 
 // avoiding circular dependency
@@ -3400,7 +3400,17 @@ IdentityDefinition.prototype.getFakePlayerName = procHacker.js(
 );
 IdentityDefinition.prototype.getIdentityType = procHacker.js("?getIdentityType@IdentityDefinition@@QEBA?AW4Type@1@XZ", uint8_t, { this: IdentityDefinition });
 
-ScoreboardId.prototype.isValid = procHacker.js("?isValid@ScoreboardId@@QEBA_NXZ", bool_t, { this: ScoreboardId });
+// The 2024 body is one comparison: `this->id != ScoreboardId::INVALID.id`, and
+// that object's first eight bytes are 0xffffffffffffffff (it ships in
+// symbols.json as a constant, docs/findings-layouts.md). Two statements of the
+// same fact, so the comparison is written against the constant itself.
+ScoreboardId.prototype.isValid = derived(
+    "?isValid@ScoreboardId@@QEBA_NXZ",
+    function isValid(this: ScoreboardId): boolean {
+        return this.id !== ScoreboardId.INVALID.id;
+    },
+    () => procHacker.js("?isValid@ScoreboardId@@QEBA_NXZ", bool_t, { this: ScoreboardId }),
+);
 
 (ScoreboardIdentityRef.prototype as any)._modifyScoreInObjective = procHacker.js(
     "?modifyScoreInObjective@ScoreboardIdentityRef@@QEAA_NAEAHAEAVObjective@@HW4PlayerScoreSetFunction@@@Z",

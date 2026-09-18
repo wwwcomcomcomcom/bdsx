@@ -46,7 +46,7 @@ import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
 import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
-import { proc, procConst } from "./symbols";
+import { derived, proc, procConst } from "./symbols";
 import { HasTypeId, type_id, typeid_t } from "./typeid";
 import commandParser = commandparser.commandParser;
 
@@ -490,7 +490,21 @@ export class CommandIntegerRange extends NativeClass {
 // BDS does not change it to false actively, because it assumed default is false
 // Calling ??0CommandIntegerRange@@QEAA@XZ sets all values to default
 CommandIntegerRange.prototype[NativeType.ctor] = procHacker.js("??0CommandIntegerRange@@QEAA@XZ", CommandIntegerRange, { this: CommandIntegerRange });
-CommandIntegerRange.prototype.isWithinRange = procHacker.js("?isWithinRange@CommandIntegerRange@@QEBA_NH@Z", bool_t, { this: CommandIntegerRange }, int32_t);
+// The 2024 body compares against min and max and then flips the answer when
+// `inverted` is set; the byte after `inverted` chooses inclusive bounds (set)
+// or exclusive ones (clear). bdsx's class stops at `inverted`, so that byte is
+// read directly -- the struct is 12 bytes in both builds and the range parser
+// writes it beside the flag it does model.
+const RANGE_INCLUSIVE_OFFSET = 9;
+CommandIntegerRange.prototype.isWithinRange = derived(
+    "?isWithinRange@CommandIntegerRange@@QEBA_NH@Z",
+    function isWithinRange(this: CommandIntegerRange, value: number): boolean {
+        const inclusive = this.getUint8(RANGE_INCLUSIVE_OFFSET) !== 0;
+        const within = inclusive ? this.min <= value && this.max >= value : this.min < value && this.max > value;
+        return within !== this.inverted;
+    },
+    () => procHacker.js("?isWithinRange@CommandIntegerRange@@QEBA_NH@Z", bool_t, { this: CommandIntegerRange }, int32_t),
+);
 
 @nativeClass()
 export class CommandItem extends NativeStruct {

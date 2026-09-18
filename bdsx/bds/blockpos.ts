@@ -3,7 +3,7 @@ import { abstract, VectorXY, VectorXYZ, VectorXZ } from "../common";
 import { nativeClass, nativeField, NativeStruct } from "../nativeclass";
 import { bin64_t, bool_t, float32_t, int32_t, NativeType, uint16_t, uint8_t } from "../nativetype";
 import { procHacker } from "../prochacker";
-import { proc } from "./symbols";
+import { derived, proc } from "./symbols";
 
 export enum Facing {
     Down,
@@ -17,11 +17,14 @@ export enum Facing {
 }
 
 export namespace Facing {
-    export const convertYRotationToFacingDirection: (yRotation: number) => number = procHacker.js(
+    /** the quadrant a yaw falls in, in the order BDS lays them out: 0 deg is south, and yaw grows westwards */
+    const byQuadrant = [Facing.South, Facing.West, Facing.North, Facing.East];
+    /** float32 of 1/90, the constant the 2024 build multiplies by before rounding */
+    const perQuadrant = 0.011111111380159855;
+    export const convertYRotationToFacingDirection: (yRotation: number) => number = derived(
         "?convertYRotationToFacingDirection@Facing@@SAEM@Z",
-        uint8_t,
-        null,
-        float32_t,
+        (yRotation: number): number => byQuadrant[Math.floor(Math.fround(Math.fround(yRotation * perQuadrant) + 0.5)) & 3],
+        () => procHacker.js("?convertYRotationToFacingDirection@Facing@@SAEM@Z", uint8_t, null, float32_t),
     );
 }
 
@@ -139,7 +142,19 @@ export class BlockPos extends NativeStruct {
     }
 }
 
-BlockPos.prototype.relative = procHacker.js("?relative@BlockPos@@QEBA?AV1@EH@Z", BlockPos, { this: BlockPos, structureReturn: true }, uint8_t, int32_t);
+// relative() is getSide() by another name: the 2024 body adds or subtracts
+// `steps` on one axis chosen by the facing, in the same order as the Facing
+// enum, and returns a new BlockPos (an unknown facing returns an unchanged
+// copy). bdsx's own getSide already spells that out, so the two agree on all
+// six directions.
+BlockPos.prototype.relative = derived(
+    "?relative@BlockPos@@QEBA?AV1@EH@Z",
+    function relative(this: BlockPos, facing: Facing, steps: number): BlockPos {
+        const moved = this.getSide(facing, steps);
+        return moved === this ? BlockPos.create(this.x, this.y, this.z) : moved;
+    },
+    () => procHacker.js("?relative@BlockPos@@QEBA?AV1@EH@Z", BlockPos, { this: BlockPos, structureReturn: true }, uint8_t, int32_t),
+);
 
 @nativeClass()
 export class ChunkPos extends NativeStruct {
@@ -393,8 +408,43 @@ export class Vec3 extends NativeStruct {
     }
 }
 
-Vec3.directionFromRotation = procHacker.js("?directionFromRotation@Vec3@@SA?AV1@AEBVVec2@@@Z", Vec3, { structureReturn: true }, Vec2);
-Vec3.rotationFromDirection = procHacker.js("?rotationFromDirection@Vec3@@SA?AVVec2@@AEBV1@@Z", Vec2, { structureReturn: true }, Vec3);
+// Rotations, both ways. The 2024 build takes every sine from a 65,536-entry
+// table indexed by `degrees * -182.04443359375`, so the angle is quantised to
+// 360/65536 of a degree before the sine is taken; reproducing that
+// quantisation is what keeps the answers the engine's own -- it is why
+// directionFromRotation(0, 0) is exactly (0, 0, 1) and not (0, 0, 0.99999994).
+// The table itself is built at startup and is sin(i * 2pi / 65536).
+const rotationToIndex = -182.04443359375; // -65536 / 360
+const quarterTurn = 16384; // 90 degrees, in index units
+const halfTurn = 32768; // 180 degrees
+const degPerRadian = 57.2957763671875; // the float32 the build multiplies atan2 by
+const sinByIndex = (index: number): number => Math.fround(Math.sin(((index & 0xffff) * Math.PI * 2) / 65536));
+
+Vec3.directionFromRotation = derived(
+    "?directionFromRotation@Vec3@@SA?AV1@AEBVVec2@@@Z",
+    (rotation: Vec2): Vec3 => {
+        const pitch = Math.fround(rotation.x * rotationToIndex);
+        const yaw = Math.fround(Math.fround(rotation.y * rotationToIndex) - halfTurn);
+        const negCosPitch = -sinByIndex(Math.trunc(Math.fround(pitch + quarterTurn)));
+        return Vec3.create(
+            negCosPitch * sinByIndex(Math.trunc(yaw)),
+            sinByIndex(Math.trunc(pitch)),
+            negCosPitch * sinByIndex(Math.trunc(Math.fround(yaw + quarterTurn))),
+        );
+    },
+    () => procHacker.js("?directionFromRotation@Vec3@@SA?AV1@AEBVVec2@@@Z", Vec3, { structureReturn: true }, Vec2),
+);
+Vec3.rotationFromDirection = derived(
+    "?rotationFromDirection@Vec3@@SA?AVVec2@@AEBV1@@Z",
+    (direction: Vec3): Vec2 => {
+        const horizontal = Math.fround(Math.sqrt(Math.fround(Math.fround(direction.x * direction.x) + Math.fround(direction.z * direction.z))));
+        return Vec2.create(
+            Math.fround(Math.atan2(direction.y, horizontal) * -degPerRadian),
+            Math.fround(Math.fround(Math.atan2(direction.z, direction.x) * degPerRadian) - 90),
+        );
+    },
+    () => procHacker.js("?rotationFromDirection@Vec3@@SA?AVVec2@@AEBV1@@Z", Vec2, { structureReturn: true }, Vec3),
+);
 
 @nativeClass()
 export class RelativeFloat extends NativeStruct {
