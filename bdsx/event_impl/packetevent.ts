@@ -7,6 +7,7 @@ import { MinecraftPacketIds } from "../bds/packetids";
 import { PacketIdToType } from "../bds/packets";
 import { proc } from "../bds/symbols";
 import { CANCEL, abstract } from "../common";
+import { PACKET_ID_COUNT } from "../const";
 import { StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
@@ -132,6 +133,9 @@ function onPacketAfter(packet: Packet, conn: NetworkConnection, packetId: Minecr
     }
 }
 function onPacketSend(packetId: MinecraftPacketIds, ni: NetworkIdentifier, packet: Packet): number {
+    // the flag table the hook consults is PACKET_ID_COUNT bytes (2024's id
+    // range); an id past it read a stray byte and landed here with no listener
+    if (packetId >>> 0 >= PACKET_ID_COUNT) return 0;
     try {
         const target = events.packetSend(packetId);
         if (target === null || target.isEmpty()) throw Error("no listener but onPacketSend fired.");
@@ -158,6 +162,7 @@ function onPacketSend(packetId: MinecraftPacketIds, ni: NetworkIdentifier, packe
 function onPacketSendInternal(handler: NetworkSystem, ni: NetworkIdentifier, packet: Packet, data: CxxStringWrapper): number {
     try {
         const packetId = packet.getId();
+        if (packetId >>> 0 >= PACKET_ID_COUNT) return 0;
         const target = events.packetSendRaw(packetId);
         if (target === null || target.isEmpty()) throw Error("no listener but onPacketSend fired.");
         const dataptr = data.valueptr;

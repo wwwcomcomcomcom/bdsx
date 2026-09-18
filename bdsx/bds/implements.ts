@@ -1995,16 +1995,33 @@ NetworkIdentifier.prototype.getAddress = function (): string {
     const rakpeer = bedrockServer.rakPeer;
     return rakpeer.GetSystemAddressFromIndex(idx).toString();
 };
-const NetworkIdentifier$equalsTypeData = procHacker.js("?equalsTypeData@NetworkIdentifier@@AEBA_NAEBV1@@Z", bool_t, null, NetworkIdentifier, NetworkIdentifier);
+// Both comparisons are spelled out from the type when the build has no
+// address for them (docs/findings-instances.md, "The full launcher and a
+// client"): the 1.26 builds inline them, and the first packet sent to a
+// joining client is what asks.
+const NetworkIdentifier$equalsTypeData = derived<(a: NetworkIdentifier, b: NetworkIdentifier) => boolean>(
+    "?equalsTypeData@NetworkIdentifier@@AEBA_NAEBV1@@Z",
+    (a, b) => a.equalsTypeDataByLayout(b),
+    () => procHacker.js("?equalsTypeData@NetworkIdentifier@@AEBA_NAEBV1@@Z", bool_t, null, NetworkIdentifier, NetworkIdentifier),
+);
 NetworkIdentifier.prototype.equals = function (other): boolean {
-    if (other.type !== other.type) return false;
+    if (this.type !== other.type) return false;
     return NetworkIdentifier$equalsTypeData(this, other);
 };
 
-const NetworkIdentifier_getHash = procHacker.js("?getHash@NetworkIdentifier@@QEBA_KXZ", bin64_t, null, NetworkIdentifier);
+const NetworkIdentifier_getHash = derived<(ni: NetworkIdentifier) => number>(
+    "?getHash@NetworkIdentifier@@QEBA_KXZ",
+    ni => ni.hashByLayout(),
+    () => {
+        const native = procHacker.js("?getHash@NetworkIdentifier@@QEBA_KXZ", bin64_t, null, NetworkIdentifier);
+        return ni => {
+            const hash = native(ni);
+            return bin.int32(hash) ^ bin.int32_high(hash);
+        };
+    },
+);
 NetworkIdentifier.prototype.hash = function () {
-    const hash = NetworkIdentifier_getHash(this);
-    return bin.int32(hash) ^ bin.int32_high(hash);
+    return NetworkIdentifier_getHash(this);
 };
 
 NetworkConnection.abstract({

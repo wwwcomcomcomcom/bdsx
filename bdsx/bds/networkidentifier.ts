@@ -15,6 +15,7 @@ import type { Packet } from "./packet";
 import type { ServerPlayer } from "./player";
 import { RakNet } from "./raknet";
 import { RakNetConnector } from "./raknetinstance";
+import { pdbcache } from "../pdbcache";
 
 // TODO: fill
 enum SubClientId {}
@@ -114,14 +115,43 @@ export namespace ServerNetworkHandler {
 
 const identifiers = new HashSet<NetworkIdentifier>();
 
-@nativeClass()
+/**
+ * Where the identifier keeps its parts. The 2024 layout is the default; a
+ * build whose symbols.json ships `layouts.NetworkIdentifier` (read from live
+ * objects and Endstone's header, docs/findings-instances.md) overrides it:
+ * on 1.26 the NetherNet id grew to 24 bytes, which pushed the RakNet GUID
+ * to +24, the socket address to +40 and the type to +168, for 176 bytes.
+ */
+export const networkIdentifierLayout = (() => {
+    const l = pdbcache.layouts.NetworkIdentifier;
+    return {
+        size: l?.size ?? 0xa0,
+        netherNetId: l?.netherNetId ?? 0,
+        guid: l?.guid ?? 8,
+        sock: l?.sock ?? 0x18,
+        type: l?.type ?? 0x98,
+    };
+})();
+
+export enum NetworkIdentifierType {
+    RakNet = 0,
+    Address = 1,
+    Address6 = 2,
+    NetherNet = 3,
+    Invalid = 4,
+}
+
+@nativeClass(0xb0)
 export class NetworkIdentifier extends NativeStruct implements Hashable {
     @nativeField(bin64_t)
     unknown: bin64_t;
+    /** the 2024 position; on 1.26 the GUID is at networkIdentifierLayout.guid */
     @nativeField(RakNet.AddressOrGUID)
     address: RakNet.AddressOrGUID;
-    @nativeField(int32_t, { ghost: true, offset: 0x98 })
-    type: int32_t;
+
+    get type(): NetworkIdentifierType {
+        return this.getInt32(networkIdentifierLayout.type);
+    }
 
     assignTo(target: VoidPointer): void {
         dll.vcruntime140.memcpy(target, this, networkIdentifierSize);
@@ -133,6 +163,57 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
 
     hash(): number {
         abstract();
+    }
+
+    /**
+     * The comparison the binary makes, spelled out from the type (Endstone's
+     * header does the same): only the part the type says is live counts.
+     * Used when ?equalsTypeData@NetworkIdentifier@@ has no address.
+     */
+    equalsTypeDataByLayout(other: NetworkIdentifier): boolean {
+        const L = networkIdentifierLayout;
+        switch (this.type) {
+            case NetworkIdentifierType.RakNet:
+                return this.getBin64(L.guid) === other.getBin64(L.guid);
+            case NetworkIdentifierType.Address:
+                return this.getUint16(L.sock + 2) === other.getUint16(L.sock + 2) && this.getUint32(L.sock + 4) === other.getUint32(L.sock + 4);
+            case NetworkIdentifierType.Address6:
+                if (this.getUint16(L.sock + 2) !== other.getUint16(L.sock + 2)) return false;
+                for (let i = 0; i < 16; i += 4) if (this.getUint32(L.sock + 8 + i) !== other.getUint32(L.sock + 8 + i)) return false;
+                return true;
+            case NetworkIdentifierType.NetherNet:
+                for (let i = 0; i < 24; i += 4) if (this.getUint32(L.netherNetId + i) !== other.getUint32(L.netherNetId + i)) return false;
+                return true;
+            case NetworkIdentifierType.Invalid:
+                return other.type === NetworkIdentifierType.Invalid;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * A hash consistent with equalsTypeDataByLayout: whatever that compares
+     * is what is folded. Used when ?getHash@NetworkIdentifier@@ has no
+     * address; only bdsx's own identifier set consumes it.
+     */
+    hashByLayout(): number {
+        const L = networkIdentifierLayout;
+        let h = this.type | 0;
+        switch (this.type) {
+            case NetworkIdentifierType.RakNet:
+                return h ^ this.getInt32(L.guid) ^ this.getInt32(L.guid + 4);
+            case NetworkIdentifierType.Address:
+                return h ^ this.getUint16(L.sock + 2) ^ this.getInt32(L.sock + 4);
+            case NetworkIdentifierType.Address6:
+                h ^= this.getUint16(L.sock + 2);
+                for (let i = 0; i < 16; i += 4) h ^= this.getInt32(L.sock + 8 + i);
+                return h;
+            case NetworkIdentifierType.NetherNet:
+                for (let i = 0; i < 24; i += 4) h ^= this.getInt32(L.netherNetId + i);
+                return h;
+            default:
+                return h;
+        }
     }
 
     getActor(): ServerPlayer | null {
@@ -154,15 +235,31 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
         return identifiers.values();
     }
 }
-const networkIdentifierSize = NetworkIdentifier[NativeClass.contentSize];
+const networkIdentifierSize = networkIdentifierLayout.size;
+let resolverFailed = false;
 NetworkIdentifier.setResolver(ptr => {
     if (ptr === null) return null;
-    let ni = identifiers.get(ptr.as(NetworkIdentifier));
-    if (ni != null) return ni;
-    ni = new NetworkIdentifier(true);
-    (ni as any).copyFrom(ptr, NetworkIdentifier[NativeType.size]);
-    identifiers.add(ni);
-    return ni;
+    // This runs while a native call is marshalling its parameters: an
+    // exception here has no JavaScript frame to land in and takes the
+    // process down (it did, at the first packet sent to a joining client, when
+    // hash() needed a symbol this build does not have). So it cannot throw.
+    try {
+        let ni = identifiers.get(ptr.as(NetworkIdentifier));
+        if (ni != null) return ni;
+        ni = new NetworkIdentifier(true);
+        (ni as any).copyFrom(ptr, networkIdentifierSize);
+        identifiers.add(ni);
+        return ni;
+    } catch (err) {
+        if (!resolverFailed) {
+            resolverFailed = true;
+            remapAndPrintError(err);
+            console.error("[bdsx] NetworkIdentifier could not be hashed; identifiers are not shared between events on this build");
+        }
+        const copy = new NetworkIdentifier(true);
+        (copy as any).copyFrom(ptr, networkIdentifierSize);
+        return copy;
+    }
 });
 /** @deprecated use bedrockServer.networkSystem */
 export let networkSystem: NetworkSystem;
