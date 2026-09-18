@@ -6,6 +6,7 @@ import { AbstractClass, nativeClass, NativeClass, nativeField, NativeStruct } fr
 import { bin128_t, bin64_t, float32_t, NativeType, uint16_t, uint32_t, uint64_as_float_t, uint8_t, void_t } from "./nativetype";
 import { Wrapper } from "./pointer";
 import { procHacker } from "./prochacker";
+import { derived } from "./bds/symbols";
 
 export namespace mce {
     export const UUID = bin128_t.extends(
@@ -136,4 +137,27 @@ export namespace mce {
 
 mce.Blob.prototype[NativeType.ctor] = procHacker.js("??0Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob });
 mce.Blob.prototype[NativeType.dtor] = procHacker.js("??1Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob });
-const generateUUID = procHacker.js("?generateUUID@Random@Crypto@@YA?AVUUID@mce@@XZ", mce.UUIDWrapper, { structureReturn: true });
+// Crypto::Random::generateUUID has no address in the 1.26 builds (the
+// generation is inlined into every CommandOrigin constructor), and a UUID's
+// only contract is to be 128 random bits with the version-4 marks, so bdsx
+// draws one itself (docs/findings-utils.md). The binary wins when a build
+// resolves the name.
+const generateUUID = derived<() => { value: mce.UUID }>(
+    "?generateUUID@Random@Crypto@@YA?AVUUID@mce@@XZ",
+    function generateUUID(): { value: mce.UUID } {
+        const bytes = new Uint8Array(16);
+        try {
+            require("crypto").randomFillSync(bytes);
+        } catch (err) {
+            for (let i = 0; i < 16; i++) bytes[i] = (Math.random() * 256) | 0;
+        }
+        bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+        // packed by hand: bin.fromBuffer shifts the high byte past the 16-bit
+        // word and keeps only every other byte
+        const words: number[] = [];
+        for (let i = 0; i < 16; i += 2) words.push(bytes[i] | (bytes[i + 1] << 8));
+        return { value: String.fromCharCode(...words) };
+    },
+    () => procHacker.js("?generateUUID@Random@Crypto@@YA?AVUUID@mce@@XZ", mce.UUIDWrapper, { structureReturn: true }),
+);

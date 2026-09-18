@@ -5,14 +5,14 @@ import { abstract } from "../common";
 import { VoidPointer } from "../core";
 import { mce } from "../mce";
 import { AbstractClass, nativeClass, nativeField, vectorDeletingDestructor } from "../nativeclass";
-import { CxxString, NativeType, int32_t, uint8_t, void_t } from "../nativetype";
+import { bin64_t, CxxString, NativeType, int32_t, uint8_t, void_t } from "../nativetype";
 import { procHacker } from "../prochacker";
 import { Actor, DimensionId } from "./actor";
 import type { CommandPermissionLevel, CommandPositionFloat } from "./command";
 import { Dimension } from "./dimension";
 import { Level, ServerLevel } from "./level";
 import { CompoundTag } from "./nbt";
-import { proc } from "./symbols";
+import { derived, proc } from "./symbols";
 
 export enum CommandOriginType {
     Player,
@@ -132,6 +132,12 @@ export class PlayerCommandOrigin extends CommandOrigin {
 @nativeClass(0x28)
 export class ActorCommandOrigin extends CommandOrigin {
     // Actor*(*getEntity)(CommandOrigin* origin);
+    /** ActorUniqueID mEntityId: what the constructor stores from Actor::getOrCreateUniqueID */
+    @nativeField(bin64_t, 0x18)
+    entityId: bin64_t;
+    /** Level* mLevel: what the constructor stores from Actor::getLevel */
+    @nativeField(Level.ref(), 0x20)
+    actorLevel: Level;
 
     static constructWith(actor: Actor): ActorCommandOrigin {
         const origin = new ActorCommandOrigin(true);
@@ -145,7 +151,22 @@ export class ActorCommandOrigin extends CommandOrigin {
     }
 }
 
-const ActorCommandOrigin$ActorCommandOrigin = procHacker.js("??0ActorCommandOrigin@@QEAA@AEAVActor@@@Z", void_t, null, ActorCommandOrigin, Actor);
+// The 1.26 builds inline this constructor into its three callers, so there
+// is no address to call. Its body is four stores into a layout bdsx declares
+// (docs/findings-instances.md, "Constructors from held tables"): the table,
+// a fresh request UUID, the actor's unique id and the actor's level. The
+// binary wins when a build resolves the name.
+const ActorCommandOrigin$ActorCommandOrigin = derived<(origin: ActorCommandOrigin, actor: Actor) => void>(
+    "??0ActorCommandOrigin@@QEAA@AEAVActor@@@Z",
+    function ActorCommandOrigin$ActorCommandOrigin(origin: ActorCommandOrigin, actor: Actor): void {
+        origin.vftable = ActorCommandOrigin_vftable;
+        origin.uuid = mce.UUID.generate();
+        origin.entityId = actor.getUniqueIdBin();
+        origin.actorLevel = actor.getLevel();
+    },
+    () => procHacker.js("??0ActorCommandOrigin@@QEAA@AEAVActor@@@Z", void_t, null, ActorCommandOrigin, Actor),
+);
+const ActorCommandOrigin_vftable = proc["??_7ActorCommandOrigin@@6B@"];
 
 @nativeClass(0x50)
 export class VirtualCommandOrigin extends CommandOrigin {
