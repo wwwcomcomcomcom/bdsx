@@ -35,15 +35,28 @@ export interface FieldAccessor {
     zx?: boolean;
 }
 let rawAccessors: Record<string, FieldAccessor> = {};
+/**
+ * A static const data member whose storage this build does not keep. The
+ * compiler is free to fold `Vec3::ONE` into an immediate at every use, and in
+ * 1.26 it does: the .rdata block that held the twelve Vec3 constants in
+ * 1.21.3.01 is gone, so there is no address to resolve. bdsx only reads
+ * through these pointers, so the table ships the value instead
+ * (docs/findings-layouts.md) and bds/symbols.ts allocates it at load time.
+ * The bytes are build-independent by construction: anything holding an
+ * address is rejected offline by tools/extract-constants.mjs.
+ */
+export interface SymbolConstant {
+    /** the value, hex, exactly as many bytes as bdsx reads through the pointer */
+    bytes: string;
+}
+let rawConstants: Record<string, SymbolConstant> = {};
 
 function load(): SymbolTable {
     let content: string;
     try {
         content = fs.readFileSync(tablePath, "utf8");
     } catch (err) {
-        throw new SymbolTableError(
-            `symbol table not found: ${tablePath}\n` + `Generate it with the offline resolver for this BDS build.`,
-        );
+        throw new SymbolTableError(`symbol table not found: ${tablePath}\n` + `Generate it with the offline resolver for this BDS build.`);
     }
 
     let parsed: unknown;
@@ -55,6 +68,7 @@ function load(): SymbolTable {
 
     rawLayouts = (parsed as { layouts?: Record<string, Record<string, number>> }).layouts ?? {};
     rawAccessors = (parsed as { accessors?: Record<string, FieldAccessor> }).accessors ?? {};
+    rawConstants = (parsed as { constants?: Record<string, SymbolConstant> }).constants ?? {};
     const table = SymbolTable.parse(parsed, tablePath);
 
     // Only bdsx-core can tell us which binary is actually mapped. Outside BDS
@@ -90,6 +104,11 @@ export namespace pdbcache {
         return rawAccessors[key];
     }
     export const accessorCount = Object.keys(rawAccessors).length;
+    /** name -> constant value, from symbols.json `constants`; consulted when the name has no address */
+    export function constant(key: string): SymbolConstant | undefined {
+        return rawConstants[key];
+    }
+    export const constantCount = Object.keys(rawConstants).length;
     export const bdsVersion = table.bdsVersion;
     export const exeMd5 = table.exeMd5;
     export const size = table.size;

@@ -2,11 +2,11 @@ import * as colors from "colors";
 import * as fs from "fs";
 import * as path from "path";
 import { Config } from "../config";
-import { bedrock_server_exe, NativePointer, VoidPointer } from "../core";
+import { AllocatedPointer, bedrock_server_exe, NativePointer, VoidPointer } from "../core";
 import { dllraw } from "../dllraw";
 import { fsutil } from "../fsutil";
 import { asm, FloatRegister, OperationSize, Register } from "../assembler";
-import { FieldAccessor, pdbcache } from "../pdbcache";
+import { FieldAccessor, pdbcache, SymbolConstant } from "../pdbcache";
 import { destackThrow } from "../source-map-support";
 import { TextParser } from "../textparser";
 import { timeout } from "../util";
@@ -72,9 +72,34 @@ function emitAccessor(key: string, a: FieldAccessor): NativePointer {
     const ptr = code.ret().alloc("accessor " + key.slice(0, 48)) as NativePointer;
     if (!accessorReported.has(key)) {
         accessorReported.add(key);
-        console.error(colors.cyan(`[bdsx] ${key.slice(0, 60)}: field accessor (${a.kind} ${a.width}B${a.float ? " float" : ""} at +0x${a.off.toString(16)}), body emitted`));
+        console.error(
+            colors.cyan(`[bdsx] ${key.slice(0, 60)}: field accessor (${a.kind} ${a.width}B${a.float ? " float" : ""} at +0x${a.off.toString(16)}), body emitted`),
+        );
     }
     return ptr;
+}
+
+/**
+ * Materialise a static const data member the table ships as a value
+ * (symbols.json `constants`, see pdbcache.ts). `Vec3::ONE` is storage the
+ * compiler stopped keeping, so there is no address in bedrock_server.exe to
+ * return; bdsx only ever reads through these pointers, so a pointer to our
+ * own copy of the bytes is correct for every use. The allocation is kept
+ * alive by the property the Proxy defines on `proc`, which is also what
+ * makes the address stable for the life of the process. It is bdsx's memory,
+ * not the binary's: merge-symbols.mjs refuses to ship a name bdsx hooks or
+ * patches as a constant.
+ */
+const constantReported = new Set<string>();
+function allocConstant(key: string, c: SymbolConstant): NativePointer {
+    const bytes = Buffer.from(c.bytes, "hex");
+    const ptr = new AllocatedPointer(bytes.length);
+    ptr.setBuffer(bytes);
+    if (!constantReported.has(key)) {
+        constantReported.add(key);
+        console.error(colors.cyan(`[bdsx] ${key.slice(0, 60)}: constant (${bytes.length}B), allocated from the table`));
+    }
+    return ptr as unknown as NativePointer;
 }
 
 (proc as any).__proto__ = new Proxy(
@@ -89,6 +114,12 @@ function emitAccessor(key: string, a: FieldAccessor): NativePointer {
                     const acc = pdbcache.accessor(key);
                     if (acc !== undefined) {
                         const value = emitAccessor(key, acc);
+                        Object.defineProperty(proc, key, { value });
+                        return value;
+                    }
+                    const con = pdbcache.constant(key);
+                    if (con !== undefined) {
+                        const value = allocConstant(key, con);
                         Object.defineProperty(proc, key, { value });
                         return value;
                     }
@@ -118,7 +149,7 @@ function emitAccessor(key: string, a: FieldAccessor): NativePointer {
                 const value = dllraw.current.add(rva);
                 Object.defineProperty(proc, key, { value });
                 return true;
-            } else if (pdbcache.accessor(key) !== undefined) {
+            } else if (pdbcache.accessor(key) !== undefined || pdbcache.constant(key) !== undefined) {
                 return true;
             } else {
                 return false;
