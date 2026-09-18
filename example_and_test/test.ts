@@ -860,7 +860,7 @@ Tester.concurrency(
             ]);
             for (const id in PacketIdToType) {
                 try {
-                    const Packet = PacketIdToType[+id as keyof PacketIdToType];
+                    const Packet = PacketIdToType[+id as keyof typeof PacketIdToType];
                     let packet: Packet;
                     try {
                         packet = Packet.allocate();
@@ -893,7 +893,7 @@ Tester.concurrency(
 
             for (const id in MinecraftPacketIds) {
                 if (!/^\d+$/.test(id)) continue;
-                const Packet = PacketIdToType[+id as keyof PacketIdToType];
+                const Packet = PacketIdToType[+id as keyof typeof PacketIdToType];
                 this.assert(!!Packet, `MinecraftPacketIds.${MinecraftPacketIds[id]}: class not found`);
             }
         },

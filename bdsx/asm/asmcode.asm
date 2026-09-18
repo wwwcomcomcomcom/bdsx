@@ -507,6 +507,9 @@ endp
 
 export def onPacketRaw:qword
 export def createPacketRaw:qword
+; sized by const.ts PACKET_ID_COUNT; 1.26.40 has packet ids to 350, so the
+; table grew from 0x140 to 0x160 (2026-09-18) and this file was touched to
+; make asm/checkasm.ts regenerate asmcode.js inside BDS
 export def enabledPacket:byte[PACKET_ID_COUNT]
 export def lastSenderNetId:qword
 

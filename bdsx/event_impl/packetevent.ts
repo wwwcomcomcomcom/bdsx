@@ -89,7 +89,7 @@ function onPacketBefore(rbp: OnPacketRBP, returnAddressInStack: StaticPointer, p
         if (target === null || target.isEmpty()) throw Error("no listener but onPacketBefore fired.");
 
         const ni = nethook.lastSender || asmcode.lastSenderNetId.as(NetworkConnection).networkIdentifier;
-        const TypedPacket = PacketIdToType[packetId] || Packet;
+        const TypedPacket = (PacketIdToType as { [id: number]: typeof Packet | undefined })[packetId] || Packet;
         const packet = rbp.packet.p!;
         const typedPacket = packet.as(TypedPacket);
         try {
@@ -113,7 +113,7 @@ function onPacketAfter(packet: Packet, conn: NetworkConnection, packetId: Minecr
     try {
         const target = events.packetAfter(packetId);
         if (target === null || target.isEmpty()) throw Error("no listener but onPacketAfter fired.");
-        const TypedPacket = PacketIdToType[packetId] || Packet;
+        const TypedPacket = (PacketIdToType as { [id: number]: typeof Packet | undefined })[packetId] || Packet;
         const typedPacket = packet.as(TypedPacket);
         try {
             for (const listener of target.allListeners()) {
@@ -139,7 +139,7 @@ function onPacketSend(packetId: MinecraftPacketIds, ni: NetworkIdentifier, packe
     try {
         const target = events.packetSend(packetId);
         if (target === null || target.isEmpty()) throw Error("no listener but onPacketSend fired.");
-        const TypedPacket = PacketIdToType[packetId] || Packet;
+        const TypedPacket = (PacketIdToType as { [id: number]: typeof Packet | undefined })[packetId] || Packet;
         const typedPacket = packet.as(TypedPacket);
         try {
             for (const listener of target.allListeners()) {

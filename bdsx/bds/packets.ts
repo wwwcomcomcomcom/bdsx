@@ -35,6 +35,7 @@ import { Difficulty } from "./level";
 import { MolangVariableMap } from "./molangvariablemap";
 import { CompoundTag } from "./nbt";
 import { Packet } from "./packet";
+import { MinecraftPacketIds } from "./packetids";
 import type { GameType, Player } from "./player";
 import { DisplaySlot, ObjectiveSortOrder, ScoreboardId } from "./scoreboard";
 import { SerializedSkin } from "./skin";
@@ -2668,8 +2669,9 @@ export const PacketIdToType = {
     0x134: SetHudPacket,
     0x135: AwardAchievementPacket,
 };
+// an id with no class here (the 1.26 ids from packetids.ts) is a plain Packet
 export type PacketIdToType = {
-    [key in keyof typeof PacketIdToType]: InstanceType<(typeof PacketIdToType)[key]>;
+    [key in MinecraftPacketIds]: key extends keyof typeof PacketIdToType ? InstanceType<(typeof PacketIdToType)[key]> : Packet;
 };
 
 for (const [packetId, type] of Object.entries(PacketIdToType)) {

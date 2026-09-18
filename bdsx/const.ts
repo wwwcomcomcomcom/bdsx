@@ -1,1 +1,1 @@
-export const PACKET_ID_COUNT = 0x140; // MinecraftPacketIds.EndId = 0x136
+export const PACKET_ID_COUNT = 0x160; // MinecraftPacketIds.EndId = 0x15f on 1.26.40 (2024: 0x136). The asm flag table is sized by this and rebuilt by asm/checkasm.ts when asmcode.asm is newer than asmcode.js
