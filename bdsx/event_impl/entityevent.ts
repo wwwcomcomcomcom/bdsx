@@ -3,14 +3,16 @@ import { BlockPos, Vec3 } from "../bds/blockpos";
 import { HitResult, ProjectileComponent, SplashPotionEffectSubcomponent } from "../bds/components";
 import { ComplexInventoryTransaction, ContainerId, HandSlot, InventorySource, InventorySourceType, ItemStack, ItemStackBase } from "../bds/inventory";
 import { BedSleepingResult } from "../bds/level";
-import { ServerNetworkHandler } from "../bds/networkidentifier";
+import { NetworkIdentifier, ServerNetworkHandler } from "../bds/networkidentifier";
+import { proc } from "../bds/symbols";
 import { MinecraftPacketIds } from "../bds/packetids";
-import { CompletedUsingItemPacket, PlayerAuthInputPacket } from "../bds/packets";
+import { CompletedUsingItemPacket, PlayerAuthInputPacket, SetLocalPlayerAsInitializedPacket } from "../bds/packets";
 import { Player, ServerPlayer, SimulatedPlayer } from "../bds/player";
 import { CANCEL } from "../common";
 import { NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
+import { bedrockServer } from "../launcher";
 import { makefunc } from "../makefunc";
 import { bool_t, float32_t, int32_t, uint8_t, void_t } from "../nativetype";
 import { Wrapper } from "../pointer";
@@ -512,12 +514,29 @@ events.packetBefore(MinecraftPacketIds.SetLocalPlayerAsInitialized).on((pk, ni) 
 });
 
 events.playerJoin.setInstaller(() => {
-    const setLocalPlayerAsInitialized = procHacker.hooking(
-        "?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ",
-        void_t,
-        null,
-        ServerPlayer,
-    )(player => {
+    const LEAF = "?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ";
+    const HANDLER = "?handle@ServerNetworkHandler@@UEAAXAEBVNetworkIdentifier@@AEBVSetLocalPlayerAsInitializedPacket@@@Z";
+    if (!(LEAF in proc) && HANDLER in proc) {
+        // The 1.26 builds inline setLocalPlayerAsInitialized (a byte store) into
+        // the packet handler, so the handler is the seam -- the one Endstone
+        // hooks for its join event. `this` is the NetEventCallback subobject;
+        // the player comes from the handler's own lookup, which bdsx already
+        // binds as ServerNetworkHandler::_getServerPlayer.
+        const handle = procHacker.hooking(HANDLER, void_t, null, VoidPointer, NetworkIdentifier, SetLocalPlayerAsInitializedPacket)((callback, ni, packet) => {
+            try {
+                const player = bedrockServer.serverNetworkHandler._getServerPlayer(ni, packet.senderSubId);
+                if (player !== null) {
+                    const event = new PlayerJoinEvent(player, player instanceof SimulatedPlayer);
+                    events.playerJoin.fire(event);
+                }
+            } catch (err) {
+                events.errorFire(err);
+            }
+            return handle(callback, ni, packet);
+        });
+        return;
+    }
+    const setLocalPlayerAsInitialized = procHacker.hooking(LEAF, void_t, null, ServerPlayer)(player => {
         const event = new PlayerJoinEvent(player, player instanceof SimulatedPlayer);
         events.playerJoin.fire(event);
         return setLocalPlayerAsInitialized(player);

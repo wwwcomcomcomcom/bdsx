@@ -34,6 +34,14 @@ export class Packet extends AbstractMantleClass {
     static ID: number;
     [sharedptr_of_packet]?: CxxSharedPtr<any> | null;
 
+    /**
+     * SubClientId of the sender, the byte at +0x10 in 2024 and in 1.26
+     * (Endstone's packet.h: sender_sub_id_ // +16); what the packet
+     * handlers hand to ServerNetworkHandler::_getServerPlayer
+     */
+    get senderSubId(): number {
+        return this.getUint8(0x10);
+    }
     getId(): MinecraftPacketIds {
         abstract();
     }
