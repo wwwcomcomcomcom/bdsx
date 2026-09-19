@@ -13,6 +13,7 @@ import type { ItemComponent } from "./item_component";
 import type { BlockPalette } from "./level";
 import { CompoundTag, NBT } from "./nbt";
 import type { ServerPlayer } from "./player";
+import { pdbcache } from "../pdbcache";
 import { proc } from "./symbols";
 
 const CxxVectorString = CxxVector.make(CxxString);
@@ -657,9 +658,16 @@ export enum PlayerUISlot {
     SmithingTableMaterial = 52,
 }
 
+// PlayerInventory::inventory_ sits after `ItemStack infinite_item_`, so it moved with
+// sizeof(ItemStack): 160 bytes in 2024 put it at +0xc0, 152 in 1.26 puts it at +0xb8. 1.26's
+// Player::getSelectedItem inlines the read (`movq 184(%rax), %rcx`), Endstone's
+// player_inventory.h agrees, and the literal below is the 2024 offset, used only when the
+// table ships no layouts for the class. docs/findings-containers.md
+const PlayerInventory$container = pdbcache.layouts.PlayerInventory?.container ?? 0xc0;
+
 @nativeClass(null)
 export class PlayerInventory extends AbstractClass {
-    @nativeField(Inventory.ref(), 0xc0) // accessed on PlayerInventory::add, first line
+    @nativeField(Inventory.ref(), PlayerInventory$container) // accessed on PlayerInventory::add, first line
     container: Inventory;
 
     getContainer(): Inventory {

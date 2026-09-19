@@ -821,7 +821,17 @@ Actor.prototype.getActorIdentifier = procHacker.js("?getActorIdentifier@Actor@@Q
 Actor.prototype.getCommandPermissionLevel = procHacker.js("?getCommandPermissionLevel@Actor@@UEBA?AW4CommandPermissionLevel@@XZ", int32_t, { this: Actor });
 Actor.prototype.getCarriedItem = procHacker.js("?getCarriedItem@Actor@@UEBAAEBVItemStack@@XZ", ItemStack, { this: Actor });
 Actor.prototype.setCarriedItem = procHacker.jsv("??_7Actor@@6B@", "?setCarriedItem@Actor@@UEAAXAEBVItemStack@@@Z", void_t, { this: Actor }, ItemStack); // Actor::setCarriedItem Agent::setCarriedItem Player::setCarriedItem
-Actor.prototype.getOffhandSlot = procHacker.js("?getOffhandSlot@Actor@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Actor });
+// 1.26 keeps no out-of-line getOffhandSlot. The 2024 body (0x19b4260) is the whole definition:
+// `addq $8, %rcx` (Actor::ctxbase), call ActorEquipment::getHandContainer, `movl $1, %edx`, then
+// tail-jump [vftable + 56] -- slot 7, Container::getItem, which is slot 7 on 2024, 1.26.40.8 and
+// 1.26.51.1 alike. docs/findings-containers.md
+Actor.prototype.getOffhandSlot = derived(
+    "?getOffhandSlot@Actor@@QEBAAEBVItemStack@@XZ",
+    function getOffhandSlot(this: Actor): ItemStack {
+        return this.getHandContainer().getItem(1);
+    },
+    () => procHacker.js("?getOffhandSlot@Actor@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Actor }),
+);
 Actor.prototype.setOffhandSlot = procHacker.js("?setOffhandSlot@Actor@@UEAAXAEBVItemStack@@@Z", void_t, { this: Actor }, ItemStack);
 
 @nativeClass()
