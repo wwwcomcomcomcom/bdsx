@@ -253,6 +253,16 @@ function getVftableOffset(key: string): readonly [number] | null {
 export const proc2 = proc;
 
 const cachePath = path.join(Config.BDS_PATH, "pdbcache.l2");
+/**
+ * The first line of pdbcache.l2: what the cached addresses were resolved from.
+ * Upstream keyed it on the exe alone, which was enough while names came from
+ * that exe's PDB. They now come from symbols.json, which is corrected between
+ * runs against the same exe; keyed on the exe alone, a name looked up once
+ * kept its old address for ever and the corrected table never took effect
+ * (Level::getGameRules, docs/findings-slots.md).
+ */
+const l2Identity = (): string => `${bedrock_server_exe.md5}:${pdbcache.digest()}`;
+
 class PdbCacheL2 {
     private saving = false;
     private saveRequestedAgain = false;
@@ -261,7 +271,7 @@ class PdbCacheL2 {
 
     private constructor(private appendMode: boolean) {
         if (!this.appendMode) {
-            this.contents = `${bedrock_server_exe.md5}\n`;
+            this.contents = `${l2Identity()}\n`;
         }
     }
 
@@ -276,8 +286,8 @@ class PdbCacheL2 {
         }
         const reader = new TextParser(content);
         const line = reader.readLine();
-        if (line !== bedrock_server_exe.md5) {
-            // md5 mismatch
+        if (line !== l2Identity()) {
+            // another exe, or another symbols.json for the same exe
             PdbCacheL2.instance = new PdbCacheL2(false);
             return;
         }

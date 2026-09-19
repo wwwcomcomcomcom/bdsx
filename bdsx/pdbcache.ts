@@ -7,6 +7,7 @@
  * and the { search, readKeys } surface are kept so existing callers --
  * bds/symbols.ts, pdblegacy.ts, analyzer.ts, bds/symbollist.ts -- are unchanged.
  */
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { Config } from "./config";
@@ -51,6 +52,9 @@ export interface SymbolConstant {
 }
 let rawConstants: Record<string, SymbolConstant> = {};
 
+/** identity of the table that was loaded: anything cached from it is only good for this exact file */
+let tableDigest = "";
+
 function load(): SymbolTable {
     let content: string;
     try {
@@ -58,6 +62,7 @@ function load(): SymbolTable {
     } catch (err) {
         throw new SymbolTableError(`symbol table not found: ${tablePath}\n` + `Generate it with the offline resolver for this BDS build.`);
     }
+    tableDigest = crypto.createHash("md5").update(content).digest("hex");
 
     let parsed: unknown;
     try {
@@ -83,6 +88,15 @@ function load(): SymbolTable {
 const table = load();
 
 export namespace pdbcache {
+    /**
+     * MD5 of symbols.json as loaded. The table is corrected between runs
+     * against the same bedrock_server.exe -- a name moves to another address --
+     * so whatever is cached from it (bds/symbols.ts, pdbcache.l2) has to be
+     * keyed on this as well as on the exe.
+     */
+    export function digest(): string {
+        return tableDigest;
+    }
     /** @return RVA, or -1 when not found. */
     export function search(key: string): number {
         return table.search(key);
