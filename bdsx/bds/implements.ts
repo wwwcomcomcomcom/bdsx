@@ -2302,21 +2302,61 @@ namespace ExtendedCertificate {
 }
 
 // attribute.ts
-AttributeInstance.abstract({
-    vftable: VoidPointer,
-    u1: VoidPointer,
-    u2: VoidPointer,
-    currentValue: [float32_t, 0x84],
-    minValue: [float32_t, 0x7c],
-    maxValue: [float32_t, 0x80],
-    defaultValue: [float32_t, 0x78],
-});
+// The four floats moved in 1.26 (down by eight), so they come from symbols.json
+// `layouts.AttributeInstance` when the table has them; the literals are the 2024 offsets.
+{
+    const l = pdbcache.layouts.AttributeInstance ?? {};
+    AttributeInstance.abstract({
+        vftable: VoidPointer,
+        u1: VoidPointer,
+        u2: VoidPointer,
+        currentValue: [float32_t, l.currentValue ?? 0x84],
+        minValue: [float32_t, l.minValue ?? 0x7c],
+        maxValue: [float32_t, l.maxValue ?? 0x80],
+        defaultValue: [float32_t, l.defaultValue ?? 0x78],
+    });
+}
 
-BaseAttributeMap.prototype.getMutableInstance = procHacker.js(
+// 1.26 has no BaseAttributeMap::getMutableInstance in any form. 2024's took the attribute id and probed
+// an open-addressed FNV-1a-64 table; 1.26's map is a sorted std::vector<unsigned int> of ids at +0..+8
+// with the AttributeInstance array at +24, and the only out-of-line lookups left take an
+// `Attribute const&` or a `HashedString const&`. So the lookup is written here against symbols.json
+// `layouts.BaseAttributeMap`, as the lower_bound the binary runs, returning null rather than the static
+// invalid instance when the id is not there.
+// (docs/findings-components.md, "The health pair, and the code `.pdata` does not describe")
+const baseAttributeMapLayout = (): { ids: number; instances: number; instanceSize: number } => {
+    const l = pdbcache.layouts.BaseAttributeMap;
+    if (l?.ids == null || l.instances == null || l.instanceSize == null) {
+        throw Error("BaseAttributeMap::getMutableInstance: no address and no layouts.BaseAttributeMap in this build's symbols.json");
+    }
+    return l as { ids: number; instances: number; instanceSize: number };
+};
+BaseAttributeMap.prototype.getMutableInstance = derived(
     "?getMutableInstance@BaseAttributeMap@@QEAAPEAVAttributeInstance@@I@Z",
-    AttributeInstance,
-    { this: BaseAttributeMap },
-    int32_t,
+    function getMutableInstance(this: BaseAttributeMap, type: AttributeId): AttributeInstance | null {
+        const l = baseAttributeMapLayout(),
+            self = this as any as StaticPointer;
+        const begin = self.getPointer(l.ids),
+            end = self.getPointer(l.ids + 8);
+        const d = end.subBin(begin.getAddressBin());
+        const count = Math.floor((d.getAddressHigh() * 0x100000000 + d.getAddressLow()) / 4);
+        let lo = 0,
+            hi = count;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (begin.getUint32(mid * 4) < type) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo >= count || begin.getUint32(lo * 4) !== type) return null;
+        return self.getPointer(l.instances).addAs(AttributeInstance, lo * l.instanceSize);
+    },
+    () =>
+        procHacker.js(
+            "?getMutableInstance@BaseAttributeMap@@QEAAPEAVAttributeInstance@@I@Z",
+            AttributeInstance,
+            { this: BaseAttributeMap },
+            int32_t,
+        ),
 );
 
 // server.ts
