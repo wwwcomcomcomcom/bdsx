@@ -1058,7 +1058,16 @@ Actor.prototype.getSpeedInMetersPerSecond = procHacker.js("?getSpeedInMetersPerS
 );
 Actor.prototype.isCreative = procHacker.js("?isCreative@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isAdventure = procHacker.js("?isAdventure@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isSurvival = procHacker.js("?isSurvival@Actor@@QEBA_NXZ", bool_t, { this: Actor });
+// 1.26 keeps no isSurvival of its own (every caller tests the game type inline). The 2024 build's
+// isAttackableGamemode is "survival or adventure" through the same two helpers isSurvival and isAdventure
+// use, the default game type resolved the same way in each, so survival is what is attackable and not adventure.
+Actor.prototype.isSurvival = derived(
+    "?isSurvival@Actor@@QEBA_NXZ",
+    function isSurvival(this: Actor): boolean {
+        return this.isAttackableGamemode() && !this.isAdventure();
+    },
+    () => procHacker.js("?isSurvival@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 Actor.prototype.isSpectator = procHacker.js("?isSpectator@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.remove = procHacker.jsv("??_7Actor@@6B@", "?remove@Actor@@UEAAXXZ", void_t, { this: Actor });
 Actor.prototype.isAngry = procHacker.js("?isAngry@Actor@@QEBA_NXZ", bool_t, {
