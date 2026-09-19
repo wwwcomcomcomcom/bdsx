@@ -9,7 +9,7 @@ import { MinecraftPacketIds } from "../bds/packetids";
 import { CompletedUsingItemPacket, PlayerAuthInputPacket, SetLocalPlayerAsInitializedPacket } from "../bds/packets";
 import { Player, ServerPlayer, SimulatedPlayer } from "../bds/player";
 import { CANCEL } from "../common";
-import { NativePointer, StaticPointer, VoidPointer } from "../core";
+import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
 import { bedrockServer } from "../launcher";
@@ -170,8 +170,15 @@ export class EntityKnockbackEvent {
         public power: number,
         public height: number,
         public heightCap: number,
+        /**
+         * 1.26 and later: the caller's KnockbackParameters (28 bytes, read-only), from which
+         * power, height and heightCap above were taken. null on builds with the 2024 signature.
+         */
+        public parameters: StaticPointer | null = null,
     ) {}
 }
+const KNOCKBACK_PARAMETERS_SIZE = 28;
+const HURT_PARAMETERS_SIZE = 24;
 
 events.playerJump.setInstaller(() => {
     function onMobJump(player: Player): void {
@@ -269,6 +276,48 @@ events.entityHurt.setInstaller(() => {
             return false;
         }
         return _onEntityHurt(event.entity, event.damageSource, event.damage, event.knock, event.ignite);
+    }
+    // 1.26: _hurt(ActorDamageSource const&, float, P const&) returning an ActorHurtResult through a
+    // hidden pointer. Neither change is in any header: the prototype was read from the body and
+    // confirmed by execution (docs/findings-slots.md, "Changed signatures"); hooked with the 2024
+    // prototype the first hit kills the server. P is 24 bytes, knock at +0 and ignite at +1; a
+    // listener that changes either gets a copy, the rest of it passes through untouched. The table
+    // ships the function under bdsx's own key, since P has no name we can know.
+    // A cancelled hurt is written as "not hurt, no knockback": value 0, variant index 0, flag 0.
+    if ("bdsx:Mob::_hurt" in proc) {
+        const original = procHacker.hooking("bdsx:Mob::_hurt", StaticPointer, null, Mob, StaticPointer, ActorDamageSource, float32_t, StaticPointer)(
+            (entity, result, actorDamageSource, damage, params) => {
+                const knock = params.getBoolean(0),
+                    ignite = params.getBoolean(1);
+                const event = new EntityHurtEvent(entity, damage, actorDamageSource, knock, ignite);
+                let canceled = false;
+                // the caller reads the struct this returns a pointer to: a listener that throws must not
+                // leave the hook without one, so the error is reported and the hurt goes ahead unchanged
+                try {
+                    canceled = events.entityHurt.fire(event) === CANCEL;
+                } catch (err) {
+                    events.errorFire(err);
+                    return original(entity, result, actorDamageSource, damage, params);
+                }
+                if (canceled) {
+                    decay(actorDamageSource);
+                    result.fill(0, 12);
+                    return result;
+                }
+                let out = params;
+                if (event.knock !== knock || event.ignite !== ignite) {
+                    const copy = new AllocatedPointer(HURT_PARAMETERS_SIZE);
+                    copy.copyFrom(params, HURT_PARAMETERS_SIZE);
+                    copy.setBoolean(event.knock, 0);
+                    copy.setBoolean(event.ignite, 1);
+                    out = copy;
+                }
+                const res = original(event.entity as Mob, result, event.damageSource, event.damage, out);
+                decay(actorDamageSource);
+                return res;
+            },
+        );
+        return;
     }
     const _onEntityHurt = procHacker.hooking(
         "?_hurt@Mob@@MEAA_NAEBVActorDamageSource@@M_N1@Z",
@@ -630,6 +679,26 @@ events.playerSleepInBed.setInstaller(() => {
         }
         return _onPlayerSleepInBed(event.player, event.pos);
     }
+    // 1.26: startSleepInBed(BlockPos const&, bool, float) -- two arguments more than in 2024
+    // (Endstone's player.h); the table ships it under its present name and they pass through.
+    if ("?startSleepInBed@Player@@UEAA?AW4BedSleepingResult@@AEBVBlockPos@@_NM@Z" in proc) {
+        const original = procHacker.hooking(
+            "?startSleepInBed@Player@@UEAA?AW4BedSleepingResult@@AEBVBlockPos@@_NM@Z",
+            uint8_t,
+            null,
+            Player,
+            BlockPos,
+            bool_t,
+            float32_t,
+        )((player, pos, a2, a3) => {
+            const event = new PlayerSleepInBedEvent(player, pos);
+            const canceled = events.playerSleepInBed.fire(event) === CANCEL;
+            decay(pos);
+            if (canceled) return BedSleepingResult.OTHER_PROBLEM;
+            return original(event.player, event.pos, a2, a3);
+        });
+        return;
+    }
     const _onPlayerSleepInBed = procHacker.hooking(
         "?startSleepInBed@Player@@UEAA?AW4BedSleepingResult@@AEBVBlockPos@@@Z",
         uint8_t,
@@ -656,6 +725,49 @@ events.playerDimensionChange.setInstaller(() => {
             return;
         }
         return _onPlayerDimensionChange(player, event.dimension);
+    }
+    // 1.26: a teleport across dimensions never reaches ServerPlayer::changeDimension -- that is the
+    // portal path only. Every change, the portal's included, is a ChangeDimensionRequest handed to
+    // PlayerDimensionTransferManager::requestPlayerChangeDimension (Level's virtual is a 12-byte
+    // forwarder to it), so that is the seam. The request (Endstone's change_dimension_request.h):
+    // state at +0, from at +4, to at +8. A request that stays in its dimension is not a change.
+    if (
+        !("?changeDimension@ServerPlayer@@UEAAXV?$AutomaticID@VDimension@@H@@@Z" in proc) &&
+        "?requestPlayerChangeDimension@PlayerDimensionTransferManager@@QEAAXAEBVPlayer@@$$QEAVChangeDimensionRequest@@@Z" in proc
+    ) {
+        const original = procHacker.hooking(
+            "?requestPlayerChangeDimension@PlayerDimensionTransferManager@@QEAAXAEBVPlayer@@$$QEAVChangeDimensionRequest@@@Z",
+            void_t,
+            null,
+            StaticPointer,
+            ServerPlayer,
+            StaticPointer,
+        )((manager, player, request) => {
+            const from = request.getInt32(4),
+                to = request.getInt32(8);
+            if (from !== to) {
+                const event = new PlayerDimensionChangeEvent(player, to, request.getBoolean(36)); // use_portal
+                if (events.playerDimensionChange.fire(event) === CANCEL) return;
+                if (event.dimension !== to) request.setInt32(event.dimension, 8);
+            }
+            return original(manager, player, request);
+        });
+        return;
+    }
+    // 1.26 spells the argument DimensionType, a struct of one int: the same register, another name
+    if ("?changeDimension@ServerPlayer@@UEAAXUDimensionType@@@Z" in proc) {
+        const original = procHacker.hooking(
+            "?changeDimension@ServerPlayer@@UEAAXUDimensionType@@@Z",
+            void_t,
+            null,
+            ServerPlayer,
+            int32_t,
+        )((player, dimension) => {
+            const event = new PlayerDimensionChangeEvent(player, dimension, false);
+            if (events.playerDimensionChange.fire(event) === CANCEL) return;
+            return original(player, event.dimension);
+        });
+        return;
     }
     const _onPlayerDimensionChange = procHacker.hooking(
         "?changeDimension@ServerPlayer@@UEAAXV?$AutomaticID@VDimension@@H@@@Z",
@@ -718,6 +830,40 @@ events.entityKnockback.setInstaller(() => {
             return;
         }
         return _onEntityKnockback(target, source, damage, event.xd, event.zd, event.power, event.height, event.heightCap);
+    }
+    // 1.26: knockback(Actor*, float damage, float xd, float zd, KnockbackParameters const&). The
+    // three values the event exposes beside the direction moved into the struct (Endstone's
+    // knockback_parameters.h: Vec2 power = (horizontal, vertical) at +0, the vertical cap at +8,
+    // 28 bytes). A listener that changes one gets a copy; the caller's struct is const.
+    if ("?knockback@Mob@@UEAAXPEAVActor@@MMMAEBUKnockbackParameters@@@Z" in proc) {
+        const original = procHacker.hooking(
+            "?knockback@Mob@@UEAAXPEAVActor@@MMMAEBUKnockbackParameters@@@Z",
+            void_t,
+            null,
+            Mob,
+            Actor,
+            float32_t,
+            float32_t,
+            float32_t,
+            StaticPointer,
+        )((target, source, damage, xd, zd, params) => {
+            const power = params.getFloat32(0),
+                height = params.getFloat32(4),
+                heightCap = params.getFloat32(8);
+            const event = new EntityKnockbackEvent(target, source, damage, xd, zd, power, height, heightCap, params);
+            if (events.entityKnockback.fire(event) === CANCEL) return;
+            let out = params;
+            if (event.power !== power || event.height !== height || event.heightCap !== heightCap) {
+                const copy = new AllocatedPointer(KNOCKBACK_PARAMETERS_SIZE);
+                copy.copyFrom(params, KNOCKBACK_PARAMETERS_SIZE);
+                copy.setFloat32(event.power, 0);
+                copy.setFloat32(event.height, 4);
+                copy.setFloat32(event.heightCap, 8);
+                out = copy;
+            }
+            return original(target, source, damage, event.xd, event.zd, out);
+        });
+        return;
     }
     const _onEntityKnockback = procHacker.hooking(
         "?knockback@Mob@@UEAAXPEAVActor@@HMMMMM@Z",

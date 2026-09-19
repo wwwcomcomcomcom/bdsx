@@ -688,6 +688,10 @@ Actor.prototype.isSimulatedPlayer = function () {
     return this instanceof SimulatedPlayer;
 };
 
+// Every actor a hook hands over goes through this resolver before the hook's own code runs, so a missing
+// Actor::hasType must not throw here: on 1.26.51.1 it did, and each event that carried a mob -- hurt,
+// knockback -- took the server down at its first call. Without it a mob is wrapped as a plain Actor.
+const Actor$hasTypeKnown = "?hasType@Actor@@QEBA_NW4ActorType@@@Z" in proc;
 Actor.setResolver(ptr => {
     if (ptr === null) return null;
     const binptr = ptr.getAddressBin();
@@ -700,7 +704,7 @@ Actor.setResolver(ptr => {
         actor = ptr.as(ServerPlayer);
     } else if (vftable.equalsptr(ItemActor$vftable)) {
         actor = ptr.as(ItemActor);
-    } else if (Actor$hasType.call(ptr, ActorType.Mob)) {
+    } else if (Actor$hasTypeKnown && Actor$hasType.call(ptr, ActorType.Mob)) {
         actor = ptr.as(Mob);
     } else {
         actor = ptr.as(Actor);
@@ -953,15 +957,28 @@ Actor.prototype.load = function (tag: CompoundTag | NBT.Compound): void {
     }
 };
 
-(Actor.prototype as any).hurt_ = procHacker.js(
-    "?hurt@Actor@@QEAA_NAEBVActorDamageSource@@M_N1@Z",
-    bool_t,
-    { this: Actor },
-    ActorDamageSource,
-    float32_t,
-    bool_t,
-    bool_t,
-);
+// 1.26: Actor::hurt(ActorDamageSource const&, float, P const&) returning an ActorHurtResult through a
+// hidden pointer, where P is the 24-byte struct Mob::_hurt takes (knock at +0, ignite at +1; see
+// event_impl/entityevent.ts). The result: a variant<bool, float> -- value at +0, index at +4 -- and an
+// allow-knockback flag at +8; "was hurt" is the bool when the variant holds one and true when it holds
+// the damage dealt. The rest of P is left zero here, which no caller in the binary was seen to do:
+// this path has not been executed (docs/findings-slots.md, "Changed signatures").
+(Actor.prototype as any).hurt_ =
+    "bdsx:Actor::hurt" in proc
+        ? (() => {
+              const hurt = procHacker.js("bdsx:Actor::hurt", StaticPointer, { this: Actor }, StaticPointer, ActorDamageSource, float32_t, StaticPointer);
+              return function (this: Actor, source: ActorDamageSource, damage: number, knock: boolean, ignite: boolean): boolean {
+                  const result = new AllocatedPointer(16);
+                  result.fill(0, 16);
+                  const params = new AllocatedPointer(24);
+                  params.fill(0, 24);
+                  params.setBoolean(knock, 0);
+                  params.setBoolean(ignite, 1);
+                  hurt.call(this, result, source, damage, params);
+                  return result.getUint8(4) === 0 ? result.getUint8(0) !== 0 : true;
+              };
+          })()
+        : procHacker.js("?hurt@Actor@@QEAA_NAEBVActorDamageSource@@M_N1@Z", bool_t, { this: Actor }, ActorDamageSource, float32_t, bool_t, bool_t);
 
 Actor.prototype.setStatusFlag = procHacker.js("?setStatusFlag@Actor@@UEAAXW4ActorFlags@@_N@Z", void_t, { this: Actor }, int32_t, bool_t);
 Actor.prototype.getStatusFlag = procHacker.js("?getStatusFlag@Actor@@UEBA_NW4ActorFlags@@@Z", bool_t, { this: Actor }, int32_t);
