@@ -856,8 +856,24 @@ Actor.prototype.die = procHacker.jsv("??_7Actor@@6B@", "?die@Actor@@UEAAXAEBVAct
 Actor.prototype.isSneaking = procHacker.js("?isSneaking@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t);
 Actor.prototype.isMoving = procHacker.js("?isMoving@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t);
 Actor.prototype.setSneaking = procHacker.js("?setSneaking@Actor@@UEAAX_N@Z", void_t, { this: Actor }, bool_t);
-Actor.prototype.getHealth = procHacker.js("?getHealth@Actor@@QEBAHXZ", int32_t, { this: Actor });
-Actor.prototype.getMaxHealth = procHacker.js("?getMaxHealth@Actor@@QEBAHXZ", int32_t, { this: Actor });
+// 1.26 has no out-of-line Actor::getHealth / Actor::getMaxHealth: both are free functions over the
+// entity's EntityContext, the same shape ActorEquipment already has here. (docs/findings-components.md)
+namespace ActorAttribute {
+    export function getHealth(context: EntityContext): number {
+        abstract();
+    }
+    export function getMaxHealth(context: EntityContext): number {
+        abstract();
+    }
+}
+ActorAttribute.getHealth = procHacker.js("?getHealth@ActorAttribute@@YAHAEBVEntityContext@@@Z", int32_t, null, EntityContext);
+ActorAttribute.getMaxHealth = procHacker.js("?getMaxHealth@ActorAttribute@@YAHAEBVEntityContext@@@Z", int32_t, null, EntityContext);
+Actor.prototype.getHealth = function () {
+    return ActorAttribute.getHealth(this.ctxbase);
+};
+Actor.prototype.getMaxHealth = function () {
+    return ActorAttribute.getMaxHealth(this.ctxbase);
+};
 Actor.prototype.startRiding = procHacker.jsv("??_7Actor@@6B@", "?startRiding@Actor@@UEAA_NAEAV1@@Z", bool_t, { this: Actor }, Actor);
 
 const Actor$save = procHacker.js("?save@Actor@@UEBA_NAEAVCompoundTag@@@Z", bool_t, { this: Actor }, CompoundTag);
