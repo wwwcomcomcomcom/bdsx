@@ -796,12 +796,6 @@ Actor.prototype.getScoreTag = function () {
     // accessed from Actor::setScoreTag
     return SynchedActorDataEntityWrapper$getString(this.getEntityData(), 0x54);
 };
-Actor.prototype.setScoreTag = procHacker.js(
-    "?setScoreTag@Actor@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: Actor },
-    CxxString,
-);
 Actor.prototype.getDimensionBlockSource = Actor.prototype.getRegion = procHacker.js("?getDimensionBlockSource@Actor@@QEBAAEAVBlockSource@@XZ", BlockSource, {
     this: Actor,
 });
@@ -1098,7 +1092,6 @@ Actor.prototype.remove = procHacker.jsv("??_7Actor@@6B@", "?remove@Actor@@UEAAXX
 Actor.prototype.isAngry = procHacker.js("?isAngry@Actor@@QEBA_NXZ", bool_t, {
     this: Actor,
 });
-Actor.prototype.getBlockTarget = procHacker.js("?getBlockTarget@Actor@@QEBA?AVBlockPos@@XZ", BlockPos, { this: Actor, structureReturn: true });
 Actor.prototype.isAttackableGamemode = procHacker.js("?isAttackableGamemode@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInvulnerableTo = procHacker.jsv(
     "??_7Actor@@6B@",
@@ -1553,6 +1546,57 @@ SynchedActorDataEntityWrapper.prototype.getInt = procHacker.js(
                 uint16_t,
                 float32_t.ref() /** float const & */,
             ),
+    );
+
+    // set<std::string> has no out-of-line copy in 1.26 either, and bdsx never names it: it is only
+    // reached through Actor::setScoreTag. The 2024 body (0x573da0) is the same shape as set<int> with
+    // the string compare and assignment in place of the int one -- `cmpb $4, 8(%rax)` for the type,
+    // a compare that returns without writing when the strings are already equal, the assignment into
+    // the item's own std::string, then the same dirty bit. Strings keep the payload at +0x10, where
+    // the <=4-byte types keep it at +0x0c (docs/findings-synched.md).
+    function setSynchedString(wrapper: SynchedActorDataEntityWrapper, id: number, value: string): void {
+        const item = dataItem(wrapper, id);
+        if (item === null) return;
+        if (DataItem$getType.call(item) !== 4 /* DataItemType::String */) return;
+        const p = item as any as StaticPointer;
+        const off = l.payload8 ?? 16;
+        if (p.getCxxString(off) === value) return;
+        p.setCxxString(value, off);
+        markDirty(wrapper, id);
+    }
+
+    // Actor::setScoreTag is a tail call into set<string>(entity_data, 84, v) and nothing else
+    // (2024 0x19c6fb0: `movq %rdx,%r8; addq $400,%rcx; movl $84,%edx; jmp`). Actor::setNameTag is NOT
+    // this shape -- its 2024 body (0x19c6ac0) also looks a component up and clears a cached string at
+    // Actor+880 -- so it stays missing rather than being written here from half a body.
+    Actor.prototype.setScoreTag = derived(
+        "?setScoreTag@Actor@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+        function (this: Actor, value: string): void {
+            setSynchedString(this.getEntityData(), 84, value);
+        },
+        () =>
+            procHacker.js(
+                "?setScoreTag@Actor@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+                void_t,
+                { this: Actor },
+                CxxString,
+            ),
+    );
+
+    // Actor::getBlockTarget is getPosition(entity_data, 47) and nothing else
+    // (2024 0x19b0d90: `movl $47,%r8d; addq $400,%rcx; jmp`).
+    const SynchedActorDataEntityWrapper$getPosition = procHacker.js(
+        "?getPosition@SynchedActorDataEntityWrapper@@QEBA?AVBlockPos@@G@Z",
+        BlockPos,
+        { this: SynchedActorDataEntityWrapper, structureReturn: true },
+        uint16_t,
+    );
+    Actor.prototype.getBlockTarget = derived(
+        "?getBlockTarget@Actor@@QEBA?AVBlockPos@@XZ",
+        function (this: Actor): BlockPos {
+            return SynchedActorDataEntityWrapper$getPosition.call(this.getEntityData(), 47);
+        },
+        () => procHacker.js("?getBlockTarget@Actor@@QEBA?AVBlockPos@@XZ", BlockPos, { this: Actor, structureReturn: true }),
     );
 }
 
