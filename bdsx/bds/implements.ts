@@ -46,6 +46,7 @@ import {
     ActorDamageCause,
     ActorDamageSource,
     ActorDefinitionIdentifier,
+    ActorFlags,
     ActorRuntimeID,
     ActorType,
     ActorUniqueID,
@@ -859,8 +860,6 @@ Actor.prototype.isType = procHacker.js("?isType@Actor@@QEBA_NW4ActorType@@@Z", b
 
 Actor.prototype.kill = procHacker.jsv("??_7Actor@@6B@", "?kill@Actor@@UEAAXXZ", void_t, { this: Actor });
 Actor.prototype.die = procHacker.jsv("??_7Actor@@6B@", "?die@Actor@@UEAAXAEBVActorDamageSource@@@Z", void_t, { this: Actor }, ActorDamageSource);
-Actor.prototype.isSneaking = procHacker.js("?isSneaking@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t);
-Actor.prototype.isMoving = procHacker.js("?isMoving@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t);
 Actor.prototype.setSneaking = procHacker.js("?setSneaking@Actor@@UEAAX_N@Z", void_t, { this: Actor }, bool_t);
 // 1.26 has no out-of-line Actor::getHealth / Actor::getMaxHealth: both are free functions over the
 // entity's EntityContext, the same shape ActorEquipment already has here. (docs/findings-components.md)
@@ -1002,8 +1001,114 @@ Actor.prototype.load = function (tag: CompoundTag | NBT.Compound): void {
           })()
         : procHacker.js("?hurt@Actor@@QEAA_NAEBVActorDamageSource@@M_N1@Z", bool_t, { this: Actor }, ActorDamageSource, float32_t, bool_t, bool_t);
 
-Actor.prototype.setStatusFlag = procHacker.js("?setStatusFlag@Actor@@UEAAXW4ActorFlags@@_N@Z", void_t, { this: Actor }, int32_t, bool_t);
-Actor.prototype.getStatusFlag = procHacker.js("?getStatusFlag@Actor@@UEBA_NW4ActorFlags@@@Z", bool_t, { this: Actor }, int32_t);
+// Actor::getStatusFlag / setStatusFlag (docs/findings-synched.md, "The status flags"). Both were
+// virtual in 2024; 1.26's Actor slot 0 is hasComponent and neither name exists in either build. The
+// bitset moved out of SynchedActorData into an ECS component, ActorDataFlagComponent, whose pointer
+// the wrapper caches at +8 -- so a read is a pointer hop and three instructions, and a write goes to
+// SynchedActorDataAccess::setActorFlag, the one out-of-line function in the image that touches the
+// bitset (it also sets the right ActorDataIDs dirty bit, which a hand-written write would have to
+// reproduce for three ranges).
+namespace SynchedActorDataAccess {
+    export function setActorFlag(context: EntityContext, flag: ActorFlags, value: boolean): void {
+        abstract();
+    }
+}
+SynchedActorDataAccess.setActorFlag = procHacker.js(
+    "?setActorFlag@SynchedActorDataAccess@@YAXAEAVEntityContext@@W4ActorFlags@@_N@Z",
+    void_t,
+    null,
+    EntityContext,
+    int32_t,
+    bool_t,
+);
+{
+    /** ActorDataFlagComponent*, cached in the wrapper; its bitset is 64-bit words at the component's +0 */
+    const FLAG_DATA = pdbcache.layouts.SynchedActorDataEntityWrapper?.flagData ?? 8;
+    const flagBits = (self: Actor): StaticPointer | null => {
+        const w = self.getEntityData() as any as StaticPointer;
+        if (w.isNull()) return null;
+        const p = w.getPointer(FLAG_DATA);
+        return p.isNull() ? null : p;
+    };
+    Actor.prototype.getStatusFlag = derived(
+        "?getStatusFlag@Actor@@UEBA_NW4ActorFlags@@@Z",
+        function getStatusFlag(this: Actor, flag: ActorFlags): boolean {
+            const bits = flagBits(this);
+            if (bits === null) return false;
+            return ((bits.getUint32((flag >>> 5) * 4) >>> (flag & 31)) & 1) !== 0;
+        },
+        () => procHacker.js("?getStatusFlag@Actor@@UEBA_NW4ActorFlags@@@Z", bool_t, { this: Actor }, int32_t),
+    );
+    Actor.prototype.setStatusFlag = derived(
+        "?setStatusFlag@Actor@@UEAAXW4ActorFlags@@_N@Z",
+        function setStatusFlag(this: Actor, flag: ActorFlags, value: boolean): void {
+            SynchedActorDataAccess.setActorFlag(this.ctxbase, flag, value);
+        },
+        () => procHacker.js("?setStatusFlag@Actor@@UEAAXW4ActorFlags@@_N@Z", void_t, { this: Actor }, int32_t, bool_t),
+    );
+
+    // The one-line flag getters. Each 2024 body is `movq (%rcx),%rax; movl $<flag>,%edx;
+    // movq (%rax),%rax; jmp [guard]` and nothing else, so the flag number is an immediate in the
+    // 2024 image -- those 44 immediates are where the corrected ActorFlags came from
+    // (docs/findings-synched.md), and Endstone's actor_flags.h agrees with every one of them.
+    // 1.26 keeps no out-of-line copy of any of them.
+    Actor.prototype.isSneaking = derived(
+        "?isSneaking@Actor@@QEBA_NXZ",
+        function isSneaking(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.Sneaking);
+        },
+        () => procHacker.js("?isSneaking@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t),
+    );
+    Actor.prototype.isMoving = derived(
+        "?isMoving@Actor@@QEBA_NXZ",
+        function isMoving(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.Moving);
+        },
+        () => procHacker.js("?isMoving@Actor@@QEBA_NXZ", bool_t, { this: Actor }, void_t),
+    );
+    Actor.prototype.isAngry = derived(
+        "?isAngry@Actor@@QEBA_NXZ",
+        function isAngry(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.Angry);
+        },
+        () => procHacker.js("?isAngry@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+    );
+    Actor.prototype.isSwimming = derived(
+        "?isSwimming@Actor@@QEBA_NXZ",
+        function isSwimming(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.Swimming);
+        },
+        () => procHacker.js("?isSwimming@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+    );
+    Actor.prototype.isInScaffolding = derived(
+        "?isInScaffolding@Actor@@QEBA_NXZ",
+        function isInScaffolding(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.InScaffolding);
+        },
+        () => procHacker.js("?isInScaffolding@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+    );
+    Actor.prototype.isInLove = derived(
+        "?isInLove@Actor@@QEBA_NXZ",
+        function isInLove(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.InLove);
+        },
+        () => procHacker.js("?isInLove@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+    );
+    Actor.prototype.isBaby = derived(
+        "?isBaby@Actor@@QEBA_NXZ",
+        function isBaby(this: Actor): boolean {
+            return this.getStatusFlag(ActorFlags.Baby);
+        },
+        () => procHacker.js("?isBaby@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+    );
+    Mob.prototype.isSprinting = derived(
+        "?isSprinting@Mob@@QEBA_NXZ",
+        function isSprinting(this: Mob): boolean {
+            return this.getStatusFlag(ActorFlags.Sprinting);
+        },
+        () => procHacker.js("?isSprinting@Mob@@QEBA_NXZ", bool_t, { this: Mob }),
+    );
+}
 
 Actor.prototype.getLevel = procHacker.js("?getLevel@Actor@@QEAAAEAVLevel@@XZ", Level, { this: Actor });
 
@@ -1071,7 +1176,17 @@ Actor.prototype.setOnFireNoEffects = function (seconds: number) {
 };
 Actor.prototype.getEquippedTotem = procHacker.js("?getEquippedTotem@Actor@@UEBAAEBVItemStack@@XZ", ItemStack, { this: Actor });
 Actor.prototype.consumeTotem = procHacker.js("?consumeTotem@Actor@@UEAA_NXZ", bool_t, { this: Actor });
-Actor.prototype.hasTotemEquipped = procHacker.js("?hasTotemEquipped@Actor@@QEBA_NXZ", bool_t, { this: Actor });
+// `Actor::hasTotemEquipped` is `!getEquippedTotem().isNull()` and nothing else: the 2024 body
+// (0x19b7020) calls the virtual getEquippedTotem through vftable+680, passes the result to
+// ItemStackBase::isNull and returns `sete` of it. Both of those resolve on both builds, so the
+// address buys nothing (docs/findings-utils.md).
+Actor.prototype.hasTotemEquipped = derived(
+    "?hasTotemEquipped@Actor@@QEBA_NXZ",
+    function hasTotemEquipped(this: Actor): boolean {
+        return !this.getEquippedTotem().isNull();
+    },
+    () => procHacker.js("?hasTotemEquipped@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 (Actor.prototype as any).hasFamily_ = procHacker.js("?hasFamily@Actor@@QEBA_NAEBVHashedString@@@Z", bool_t, { this: Actor }, HashedString);
 Actor.prototype.distanceTo = procHacker.js("?distanceTo@Actor@@QEBAMAEBVVec3@@@Z", float32_t, { this: Actor }, Vec3);
 // Actor's last-hurt block (docs/findings-layouts.md, "The last-hurt block"). 1.26 keeps every field and
@@ -1140,9 +1255,6 @@ Actor.prototype.isSurvival = derived(
 );
 Actor.prototype.isSpectator = procHacker.js("?isSpectator@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.remove = procHacker.jsv("??_7Actor@@6B@", "?remove@Actor@@UEAAXXZ", void_t, { this: Actor });
-Actor.prototype.isAngry = procHacker.js("?isAngry@Actor@@QEBA_NXZ", bool_t, {
-    this: Actor,
-});
 Actor.prototype.isAttackableGamemode = procHacker.js("?isAttackableGamemode@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInvulnerableTo = procHacker.jsv(
     "??_7Actor@@6B@",
@@ -1180,7 +1292,6 @@ Actor.prototype.getLastDeathDimension = procHacker.jsv(
 );
 (Actor.prototype as any)._getViewVector = procHacker.js("?getViewVector@Actor@@QEBA?AVVec3@@M@Z", Vec3, { this: Actor, structureReturn: true }, float32_t);
 Actor.prototype.isImmobile = procHacker.jsv("??_7Actor@@6B@", "?isImmobile@Actor@@UEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isSwimming = procHacker.js("?isSwimming@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInsidePortal = procHacker.js("?isInsidePortal@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInWorld = procHacker.js("?isInWorld@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInWaterOrRain = procHacker.js("?isInWaterOrRain@Actor@@QEBA_NXZ", bool_t, { this: Actor });
@@ -1188,14 +1299,10 @@ Actor.prototype.isInThunderstorm = procHacker.js("?isInThunderstorm@Actor@@QEBA_
 Actor.prototype.isInSnow = procHacker.js("?isInSnow@Actor@@QEBA_NXZ", bool_t, {
     this: Actor,
 });
-Actor.prototype.isInScaffolding = procHacker.js("?isInScaffolding@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInRain = procHacker.js("?isInRain@Actor@@QEBA_NXZ", bool_t, {
     this: Actor,
 });
 Actor.prototype.isInPrecipitation = procHacker.js("?isInPrecipitation@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isInLove = procHacker.js("?isInLove@Actor@@QEBA_NXZ", bool_t, {
-    this: Actor,
-});
 
 Actor.prototype.getLastHurtByPlayer = derived(
     "?getLastHurtByPlayer@Actor@@QEAAPEAVPlayer@@XZ",
@@ -1229,9 +1336,6 @@ Actor.prototype.isInLava = function () {
 };
 Actor.prototype.isInContactWithWater = procHacker.js("?isInContactWithWater@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInClouds = procHacker.js("?isInClouds@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isBaby = procHacker.js("?isBaby@Actor@@QEBA_NXZ", bool_t, {
-    this: Actor,
-});
 Actor.prototype.getEntityData = procHacker.js("?getEntityData@Actor@@QEBAAEBVSynchedActorDataEntityWrapper@@XZ", SynchedActorDataEntityWrapper, { this: Actor });
 Actor.prototype.getOwner = procHacker.js("?getOwner@Actor@@QEBAPEAVMob@@XZ", Mob, { this: Actor });
 Actor.prototype.setOwner = procHacker.js("?setOwner@Actor@@UEAAXUActorUniqueID@@@Z", void_t, { this: Actor }, ActorUniqueID);
@@ -1478,7 +1582,6 @@ Mob.prototype.getSpeed = procHacker.js("?getSpeed@Mob@@UEBAMXZ", float32_t, {
     this: Mob,
 });
 Mob.prototype.setSpeed = procHacker.js("?setSpeed@Mob@@UEAAXM@Z", void_t, { this: Mob }, float32_t);
-Mob.prototype.isSprinting = procHacker.js("?isSprinting@Mob@@QEBA_NXZ", bool_t, { this: Mob });
 Mob.prototype.sendArmorSlot = procHacker.js("?sendArmorSlot@Mob@@QEAAXW4ArmorSlot@@@Z", void_t, { this: Mob }, uint32_t);
 Mob.prototype.setSprinting = procHacker.js("?setSprinting@Mob@@UEAAX_N@Z", void_t, { this: Mob }, bool_t);
 Mob.prototype.isAlive = procHacker.js("?isAlive@Mob@@UEBA_NXZ", bool_t, {
@@ -1986,7 +2089,19 @@ Player.prototype.getUuid = function () {
 Player.prototype.forceAllowEating = procHacker.js("?forceAllowEating@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.getSpeed = procHacker.js("?getSpeed@Player@@UEBAMXZ", float32_t, { this: Player });
 Player.prototype.hasOpenContainer = procHacker.js("?hasOpenContainer@Player@@QEBA_NXZ", bool_t, { this: Player });
-Player.prototype.isHungry = procHacker.js("?isHungry@Player@@QEBA_NXZ", bool_t, { this: Player });
+// `Player::isHungry` is one comparison on the hunger attribute. The 2024 body (0x19e1950) loads
+// `Player::HUNGER`, calls Actor::getAttribute, then getCurrentValue into xmm6 and getMaxValue into
+// xmm0 and returns `comiss %xmm6,%xmm0; seta` -- max above current. bdsx reaches the instance through
+// the BaseAttributeMap lookup it already derives (docs/findings-layouts.md).
+Player.prototype.isHungry = derived(
+    "?isHungry@Player@@QEBA_NXZ",
+    function isHungry(this: Player): boolean {
+        const attr = this.getAttributes().getMutableInstance(AttributeId.PlayerHunger);
+        if (attr === null) return false;
+        return attr.maxValue > attr.currentValue;
+    },
+    () => procHacker.js("?isHungry@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 // the 2024 body (0x19e1990) is getHealth() > 0 && getHealth() < getMaxHealth(), and both of those
 // are functions bdsx already has on the 1.26 builds (ActorAttribute::getHealth / getMaxHealth)
 Player.prototype.isHurt = derived(
