@@ -428,6 +428,11 @@ export enum ActorFlags {
     Charging,
     WasdControlled,
     CanPowerJump,
+    /**
+     * 1.19 added this between CanPowerJump and Lingering; everything from here to
+     * OverScaffolding used to be one lower in bdsx.
+     */
+    CanDash,
     Lingering,
     HasCollision,
     HasGravity,
@@ -450,13 +455,12 @@ export enum ActorFlags {
      * @deprecated Typo!
      */
     Snezing,
-    Sneezing = 0x40,
+    Sneezing = 0x41,
     Trusting,
     Rolling,
     Scared,
     InScaffolding,
     OverScaffolding,
-    FallThroughScaffolding,
     DescendThroughBlock,
     Blocking,
     TransitionBlocking,
@@ -487,6 +491,39 @@ export enum ActorFlags {
     PlayingDead,
     InAscendableBlock,
     OverDescendableBlock,
+    // 101 and beyond do not exist in the 2024 build; the names come from Endstone's
+    // actor_flags.h (Apache-2.0), where v0.11.7 (1.26.40.8) and HEAD (1.26.51.1) agree
+    // on every one of them except 122, which 1.26.51.1 renamed to WasdFreeCameraControlled.
+    Croaking,
+    EatMob,
+    JumpGoalJump,
+    Emerging,
+    Sniffing,
+    Digging,
+    SonicBoom,
+    HasDashCooldown,
+    PushTowardsClosestSpace,
+    Deprecated1,
+    Deprecated2,
+    Deprecated3,
+    Searching,
+    Crawling,
+    TimerFlag1,
+    TimerFlag2,
+    TimerFlag3,
+    BodyRotationBlocked,
+    RendersWhenInvisible,
+    RotationAxisAligned,
+    Collidable,
+    /** renamed WasdFreeCameraControlled in 1.26.51.1 */
+    WasdAirControlled,
+    DoesServerAuthOnlyDismount,
+    BodyRotationAlwaysFollowsHead,
+    CanUseVerticalMovementAction,
+    RotationLockedToVehicle,
+    UsesLegacyFriction,
+    UsesUniformAirDrag,
+    NameplateDepthTested,
 }
 
 export enum ActorLinkType {
