@@ -33,6 +33,7 @@ import {
     uint8_t,
     void_t,
 } from "../nativetype";
+import { pdbcache } from "../pdbcache";
 import { CxxStringWrapper, Wrapper } from "../pointer";
 import { procHacker } from "../prochacker";
 import { CxxSharedPtr } from "../sharedpointer";
@@ -443,7 +444,23 @@ Level.prototype.getRandomPlayer = function () {
     list.destruct();
     return out;
 };
-Level.prototype.updateWeather = procHacker.js("?updateWeather@Level@@UEAAXMHMH@Z", void_t, { this: Level }, float32_t, int32_t, float32_t, int32_t);
+// On 1.26 the Level virtual is a 12-byte forwarder (`mov rcx,[rcx+weatherManager]; jmp`) that the table
+// does not ship, because levelWeatherChange hooks this name and twelve bytes cannot take a hook. The
+// function it forwards to is WeatherManager::updateWeather, reached through symbols.json
+// `layouts.Level.weatherManager` (docs/findings-slots.md, "The anchor that was wrong").
+Level.prototype.updateWeather = derived(
+    "?updateWeather@Level@@UEAAXMHMH@Z",
+    (() => {
+        let fn: ((this: StaticPointer, rainLevel: number, rainTime: number, lightningLevel: number, lightningTime: number) => void) | null = null;
+        return function updateWeather(this: Level, rainLevel: number, rainTime: number, lightningLevel: number, lightningTime: number): void {
+            const off = pdbcache.layouts.Level?.weatherManager;
+            if (off == null) throw Error("Level::updateWeather: no address and no layouts.Level.weatherManager in this build's symbols.json");
+            if (fn === null) fn = procHacker.js("?updateWeather@WeatherManager@@QEAAXMHMH@Z", void_t, { this: StaticPointer }, float32_t, int32_t, float32_t, int32_t);
+            fn.call((this as any as StaticPointer).getPointer(off), rainLevel, rainTime, lightningLevel, lightningTime);
+        };
+    })(),
+    () => procHacker.js("?updateWeather@Level@@UEAAXMHMH@Z", void_t, { this: Level }, float32_t, int32_t, float32_t, int32_t),
+);
 Level.prototype.setDefaultSpawn = procHacker.js("?setDefaultSpawn@Level@@UEAAXAEBVBlockPos@@@Z", void_t, { this: Level }, BlockPos);
 Level.prototype.getDefaultSpawn = procHacker.js("?getDefaultSpawn@Level@@UEBAAEBVBlockPos@@XZ", BlockPos, { this: Level });
 Level.prototype.explode = procHacker.js(
@@ -3198,21 +3215,65 @@ Ability.prototype.getFloat = procHacker.js("?getFloat@Ability@@QEBAMXZ", float32
 Ability.prototype.setBool = procHacker.js("?setBool@Ability@@QEAAX_N@Z", void_t, { this: Ability }, bool_t);
 
 // gamerules.ts
-const GameRules$getRule = procHacker.js("?getRule@GameRules@@QEBAPEBVGameRule@@UGameRuleId@@@Z", GameRule.ref(), { this: GameRules }, WrappedInt32);
-GameRules.prototype.getRule = function (id: GameRuleId): GameRule {
-    return GameRules$getRule.call(this, WrappedInt32.create(id));
+// getRule, hasRule and nameToGameRuleIndex are bodies over one layout: a std::vector<GameRule> inside
+// GameRules, indexed by id, each rule carrying its name. 1.26 keeps no separate copies to resolve, so
+// they are written here against symbols.json `layouts.GameRules` (the vector's offset, the element
+// size, the name's offset: read from the live object, docs/findings-slots.md). An id outside the
+// vector gives null / false, a name that is no rule gives -1, as the 2024 functions did.
+const gameRulesLayout = (): { rules: number; ruleSize: number; ruleName: number } => {
+    const l = pdbcache.layouts.GameRules;
+    if (l?.rules == null || l.ruleSize == null || l.ruleName == null) throw Error("GameRules: no address and no layouts.GameRules in this build's symbols.json");
+    return l as { rules: number; ruleSize: number; ruleName: number };
 };
-const GameRules$hasRule = procHacker.js("?hasRule@GameRules@@QEBA_NUGameRuleId@@@Z", bool_t, { this: GameRules }, WrappedInt32);
-GameRules.prototype.hasRule = function (id: GameRuleId): bool_t {
-    return GameRules$hasRule.call(this, WrappedInt32.create(id));
-};
+function gameRuleCount(rules: StaticPointer, l: { rules: number; ruleSize: number }): number {
+    const begin = rules.getPointer(l.rules),
+        end = rules.getPointer(l.rules + 8);
+    const d = end.subBin(begin.getAddressBin());
+    return Math.floor((d.getAddressHigh() * 0x100000000 + d.getAddressLow()) / l.ruleSize);
+}
+GameRules.prototype.getRule = derived(
+    "?getRule@GameRules@@QEBAPEBVGameRule@@UGameRuleId@@@Z",
+    function getRule(this: GameRules, id: GameRuleId): GameRule {
+        const l = gameRulesLayout(),
+            self = this as any as StaticPointer;
+        if (id < 0 || id >= gameRuleCount(self, l)) return null as any;
+        return self.getPointer(l.rules).addAs(GameRule, id * l.ruleSize);
+    },
+    () => {
+        const GameRules$getRule = procHacker.js("?getRule@GameRules@@QEBAPEBVGameRule@@UGameRuleId@@@Z", GameRule.ref(), { this: GameRules }, WrappedInt32);
+        return function getRule(this: GameRules, id: GameRuleId): GameRule {
+            return GameRules$getRule.call(this, WrappedInt32.create(id));
+        };
+    },
+);
+GameRules.prototype.hasRule = derived(
+    "?hasRule@GameRules@@QEBA_NUGameRuleId@@@Z",
+    function hasRule(this: GameRules, id: GameRuleId): bool_t {
+        return id >= 0 && id < gameRuleCount(this as any as StaticPointer, gameRulesLayout());
+    },
+    () => {
+        const GameRules$hasRule = procHacker.js("?hasRule@GameRules@@QEBA_NUGameRuleId@@@Z", bool_t, { this: GameRules }, WrappedInt32);
+        return function hasRule(this: GameRules, id: GameRuleId): bool_t {
+            return GameRules$hasRule.call(this, WrappedInt32.create(id));
+        };
+    },
+);
 
-GameRules.prototype.nameToGameRuleIndex = procHacker.js(
-    "?nameToGameRuleIndex@GameRules@@QEBA?AUGameRuleId@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    int32_t,
-    { this: GameRules, structureReturn: true },
-    CxxString,
-); // Will return -1 if not found, so int32 instead of uint32
+const nameToGameRuleIndexKey = "?nameToGameRuleIndex@GameRules@@QEBA?AUGameRuleId@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z";
+GameRules.prototype.nameToGameRuleIndex = derived(
+    nameToGameRuleIndexKey,
+    function nameToGameRuleIndex(this: GameRules, name: string): int32_t {
+        const l = gameRulesLayout(),
+            self = this as any as StaticPointer;
+        const n = gameRuleCount(self, l),
+            begin = self.getPointer(l.rules),
+            want = name.toLowerCase();
+        // rule names are compared without case, as `/gamerule` does
+        for (let i = 0; i < n; i++) if (begin.getCxxString(i * l.ruleSize + l.ruleName).toLowerCase() === want) return i;
+        return -1;
+    },
+    () => procHacker.js(nameToGameRuleIndexKey, int32_t, { this: GameRules, structureReturn: true }, CxxString), // Will return -1 if not found, so int32 instead of uint32
+);
 
 GameRules.nameToGameRuleIndex = function (name: string): int32_t {
     return bedrockServer.gameRules.nameToGameRuleIndex(name);

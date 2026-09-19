@@ -2,11 +2,20 @@ import { abstract } from "../common";
 import { nativeClass, NativeClass, nativeField, NativeStruct } from "../nativeclass";
 import { bool_t, float32_t, int32_t } from "../nativetype";
 
+/**
+ * The index of a rule in GameRules' vector. The order is the build's: this is
+ * 1.26's (39 vanilla rules -- read from the live vector and the same as
+ * Endstone's GameRules::GameRulesIndex), which inserted RecipesUnlock,
+ * DoLimitedCrafting, PlayerWaypoints, LocatorBar and ShowDaysPlayed into the
+ * 2024 order. Prefer GameRules.nameToGameRuleIndex(name) where a build may vary.
+ */
 export enum GameRuleId {
     CommandBlockOutput,
     DoDaylightCycle,
     DoEntityDrops,
     DoFireTick,
+    RecipesUnlock,
+    DoLimitedCrafting,
     DoMobLoot,
     DoMobSpawning,
     DoTileDrops,
@@ -18,6 +27,9 @@ export enum GameRuleId {
     MobGriefing,
     Pvp,
     ShowCoordinates,
+    PlayerWaypoints,
+    LocatorBar,
+    ShowDaysPlayed,
     NaturalRegeneration,
     TntExplodes,
     SendCommandFeedback,
@@ -33,6 +45,10 @@ export enum GameRuleId {
     FreezeDamage,
     RespawnBlocksExplode,
     ShowBorderEffect,
+    ShowRecipeMessages,
+    PlayersSleepingPercentage,
+    ProjectilesCanBreakBlocks,
+    TntExplosionDropDecay,
 }
 
 export class GameRules extends NativeClass {

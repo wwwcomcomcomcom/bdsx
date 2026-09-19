@@ -3,7 +3,9 @@ import { Actor } from "../bds/actor";
 import { BlockSource } from "../bds/block";
 import { Vec3 } from "../bds/blockpos";
 import { Level } from "../bds/level";
+import { proc } from "../bds/symbols";
 import { CANCEL } from "../common";
+import { StaticPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
 import { _firstTickHook, bedrockServer } from "../launcher";
@@ -117,6 +119,27 @@ events.levelWeatherChange.setInstaller(() => {
         if (!canceled) {
             return _onLevelWeatherChange(event.level, event.rainLevel, event.rainTime, event.lightningLevel, event.lightningTime);
         }
+    }
+    // 1.26: Level::updateWeather is a 12-byte forwarder to WeatherManager::updateWeather and cannot
+    // take a hook, so the table ships the manager's function instead (it is what Endstone hooks
+    // for the same event). Its receiver is the manager; the event still carries the level.
+    if (!("?updateWeather@Level@@UEAAXMHMH@Z" in proc) && "?updateWeather@WeatherManager@@QEAAXMHMH@Z" in proc) {
+        const original = procHacker.hooking(
+            "?updateWeather@WeatherManager@@QEAAXMHMH@Z",
+            void_t,
+            null,
+            StaticPointer,
+            float32_t,
+            int32_t,
+            float32_t,
+            int32_t,
+        )((manager, rainLevel, rainTime, lightningLevel, lightningTime) => {
+            // the level is the server's own long-lived object here, not a wrapper made for this call: never decayed
+            const event = new LevelWeatherChangeEvent(bedrockServer.level, rainLevel, rainTime, lightningLevel, lightningTime);
+            const canceled = events.levelWeatherChange.fire(event) === CANCEL;
+            if (!canceled) return original(manager, event.rainLevel, event.rainTime, event.lightningLevel, event.lightningTime);
+        });
+        return;
     }
     const _onLevelWeatherChange = procHacker.hooking(
         "?updateWeather@Level@@UEAAXMHMH@Z",
