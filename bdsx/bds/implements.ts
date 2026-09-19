@@ -3331,16 +3331,55 @@ Block.prototype.isSignalSource = procHacker.js("?isSignalSource@Block@@QEBA_NXZ"
 Block.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@Block@@QEBAMXZ", float32_t, { this: Block });
 
 // BDS calls BlockSource::setBlock (this, exactly same overload) when player moves to TheEnd Dimension, to secure the obsidian platform.
-(BlockSource.prototype as any)._setBlock = procHacker.js(
-    "?setBlock@BlockSource@@QEAA_NHHHAEBVBlock@@HPEAVActor@@@Z",
+//
+// 1.26 keeps no out-of-line copy of that (int,int,int,...) wrapper: a scan of every .pdata function
+// for the three-int spill that builds the BlockPos finds the 2024 one (0x1b1ad60) and nothing of that
+// shape in either 1.26 build. So bdsx builds the BlockPos and calls the virtual itself. Slot 32 of
+// ??_7BlockSource@@6B@ is the same function as 2024's slot 33 (which the 2024 wrapper reaches through
+// `movq 264(%rax)`), instruction for instruction bar the security cookie 1.26 added. The one thing
+// that changed is the last parameter, from `Actor*` to `BlockChangeContext const&`, and the body says
+// so on both builds: it reads the variant's index byte at +16 and takes the Actor* at +0 when that
+// byte is 2 (ActorChangeContext, the third alternative in Endstone's block_change_context.h). A
+// zeroed context is std::monostate, which is exactly what bdsx's null actor means.
+// docs/findings-blocks.md.
+const BlockSource$setBlockSlot = 0x100; // slot 32 in ??_7BlockSource@@6B@
+const BlockChangeContext$size = 24; // 16 bytes of variant storage, the index byte at +16
+const BlockChangeContext$indexOffset = 16;
+const BlockChangeContext$actorIndex = 2;
+const BlockSource$setBlockVirtual = makefunc.js(
+    [BlockSource$setBlockSlot],
     bool_t,
     { this: BlockSource },
-    int32_t,
-    int32_t,
-    int32_t,
+    BlockPos,
     Block,
     int32_t,
-    Actor,
+    VoidPointer, // ActorBlockSyncMessage const*: the 2024 wrapper always passed nullptr here too
+    VoidPointer, // BlockChangeContext const&
+);
+(BlockSource.prototype as any)._setBlock = derived(
+    "?setBlock@BlockSource@@QEAA_NHHHAEBVBlock@@HPEAVActor@@@Z",
+    function (this: BlockSource, x: number, y: number, z: number, block: Block, updateFlags: number, actor: Actor | null): boolean {
+        const pos = BlockPos.create(x, y, z);
+        const context = new AllocatedPointer(BlockChangeContext$size);
+        context.setBuffer(Buffer.alloc(BlockChangeContext$size));
+        if (actor != null) {
+            context.setPointer(actor, 0);
+            context.setUint8(BlockChangeContext$actorIndex, BlockChangeContext$indexOffset);
+        }
+        return BlockSource$setBlockVirtual.call(this, pos, block, updateFlags, null as any, context);
+    },
+    () =>
+        procHacker.js(
+            "?setBlock@BlockSource@@QEAA_NHHHAEBVBlock@@HPEAVActor@@@Z",
+            bool_t,
+            { this: BlockSource },
+            int32_t,
+            int32_t,
+            int32_t,
+            Block,
+            int32_t,
+            Actor,
+        ),
 );
 BlockSource.prototype.setBlock = function (blockPos: BlockPos, block: Block): boolean {
     if (block == null) throw Error("Block is null");
