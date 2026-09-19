@@ -1074,11 +1074,50 @@ Actor.prototype.consumeTotem = procHacker.js("?consumeTotem@Actor@@UEAA_NXZ", bo
 Actor.prototype.hasTotemEquipped = procHacker.js("?hasTotemEquipped@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 (Actor.prototype as any).hasFamily_ = procHacker.js("?hasFamily@Actor@@QEBA_NAEBVHashedString@@@Z", bool_t, { this: Actor }, HashedString);
 Actor.prototype.distanceTo = procHacker.js("?distanceTo@Actor@@QEBAMAEBVVec3@@@Z", float32_t, { this: Actor }, Vec3);
-Actor.prototype.getLastHurtByMob = procHacker.js("?getLastHurtByMob@Actor@@QEAAPEAVMob@@XZ", Mob, { this: Actor });
+// Actor's last-hurt block (docs/findings-layouts.md, "The last-hurt block"). 1.26 keeps every field and
+// no getter at all: six of the nine ship as symbols.json `accessors`, and the three that name another
+// actor are an ActorUniqueID, not a pointer, so the getter is one Level::fetchEntity over the id -- which
+// both builds resolve. -1 is the empty id. The real bodies also write -1 back when the fetch fails; that
+// is a cache detail BDS's own Actor::baseTick does anyway, so bdsx leaves the field alone.
+// The fallbacks are the 2024 offsets; the 1.26 block was reordered, so no constant delta carries them.
+const ACTOR_LAST_HURT: Record<string, number> = { lastHurtMobId: 944, lastHurtByMobId: 952, lastHurtByPlayerId: 960, lastHitByPlayerTime: 392 };
+function actorLastHurtOffset(member: string): number {
+    return pdbcache.layouts.Actor?.[member] ?? ACTOR_LAST_HURT[member];
+}
+const ACTOR_UNIQUE_ID_NONE = bin.make64(0xffffffff, 0xffffffff);
+function lastHurtActor(actor: Actor, member: string): Actor | null {
+    const id = (actor as unknown as StaticPointer).getBin64(actorLastHurtOffset(member));
+    if (id === ACTOR_UNIQUE_ID_NONE) return null;
+    return bedrockServer.level.fetchEntity(id, false);
+}
+Actor.prototype.getLastHurtByMob = derived(
+    "?getLastHurtByMob@Actor@@QEAAPEAVMob@@XZ",
+    function getLastHurtByMob(this: Actor): Mob | null {
+        return lastHurtActor(this, "lastHurtByMobId") as Mob | null;
+    },
+    () => procHacker.js("?getLastHurtByMob@Actor@@QEAAPEAVMob@@XZ", Mob, { this: Actor }),
+);
 Actor.prototype.getLastHurtCause = procHacker.js("?getLastHurtCause@Actor@@QEBA?AW4ActorDamageCause@@XZ", int32_t, { this: Actor });
-Actor.prototype.getLastHurtDamage = procHacker.js("?getLastHurtDamage@Actor@@QEBAMXZ", int32_t, { this: Actor });
-Actor.prototype.getLastHurtMob = procHacker.js("?getLastHurtMob@Actor@@QEAAPEAVMob@@XZ", Mob, { this: Actor });
-Actor.prototype.wasLastHitByPlayer = procHacker.js("?wasLastHitByPlayer@Actor@@QEAA_NXZ", bool_t, { this: Actor });
+// `?getLastHurtDamage@Actor@@QEBAMXZ`: M is float, the 2024 body is `movss 980(%rcx), %xmm0` and 1.26's
+// writer in Mob::hurtEffects is `movss %xmm0, 0x344(%rsi)`. bdsx has declared it int32_t since 2024 --
+// an upstream bug: an int return makes makefunc read eax, which holds nothing the function wrote.
+Actor.prototype.getLastHurtDamage = procHacker.js("?getLastHurtDamage@Actor@@QEBAMXZ", float32_t, { this: Actor });
+Actor.prototype.getLastHurtMob = derived(
+    "?getLastHurtMob@Actor@@QEAAPEAVMob@@XZ",
+    function getLastHurtMob(this: Actor): Mob | null {
+        return lastHurtActor(this, "lastHurtMobId") as Mob | null;
+    },
+    () => procHacker.js("?getLastHurtMob@Actor@@QEAAPEAVMob@@XZ", Mob, { this: Actor }),
+);
+// the 400-tick countdown Actor::setLastHurtByMob starts when the attacker is a player; it cannot be a
+// field accessor because bool_t reads the low byte of a value that spends most of its life above 255
+Actor.prototype.wasLastHitByPlayer = derived(
+    "?wasLastHitByPlayer@Actor@@QEAA_NXZ",
+    function wasLastHitByPlayer(this: Actor): boolean {
+        return (this as unknown as StaticPointer).getInt32(actorLastHurtOffset("lastHitByPlayerTime")) > 0;
+    },
+    () => procHacker.js("?wasLastHitByPlayer@Actor@@QEAA_NXZ", bool_t, { this: Actor }),
+);
 Actor.prototype.getSpeedInMetersPerSecond = procHacker.js("?getSpeedInMetersPerSecond@Actor@@QEBAMXZ", float32_t, { this: Actor });
 (Actor.prototype as any).fetchNearbyActorsSorted_ = procHacker.js(
     "?fetchNearbyActorsSorted@Actor@@QEAA?AV?$vector@UDistanceSortedActor@@V?$allocator@UDistanceSortedActor@@@std@@@std@@AEBVVec3@@W4ActorType@@@Z",
@@ -1158,7 +1197,13 @@ Actor.prototype.isInLove = procHacker.js("?isInLove@Actor@@QEBA_NXZ", bool_t, {
     this: Actor,
 });
 
-Actor.prototype.getLastHurtByPlayer = procHacker.js("?getLastHurtByPlayer@Actor@@QEAAPEAVPlayer@@XZ", Player, { this: Actor });
+Actor.prototype.getLastHurtByPlayer = derived(
+    "?getLastHurtByPlayer@Actor@@QEAAPEAVPlayer@@XZ",
+    function getLastHurtByPlayer(this: Actor): Player | null {
+        return lastHurtActor(this, "lastHurtByPlayerId") as Player | null;
+    },
+    () => procHacker.js("?getLastHurtByPlayer@Actor@@QEAAPEAVPlayer@@XZ", Player, { this: Actor }),
+);
 Actor.prototype.getLastHurtByMobTime = procHacker.js("?getLastHurtByMobTime@Actor@@QEAAHXZ", int32_t, { this: Actor });
 Actor.prototype.getLastHurtByMobTimestamp = procHacker.js("?getLastHurtByMobTimestamp@Actor@@QEAAHXZ", int32_t, { this: Actor });
 Actor.prototype.getLastHurtMobTimestamp = procHacker.js("?getLastHurtMobTimestamp@Actor@@QEAAHXZ", int32_t, { this: Actor });
@@ -1942,9 +1987,19 @@ Player.prototype.forceAllowEating = procHacker.js("?forceAllowEating@Player@@QEB
 Player.prototype.getSpeed = procHacker.js("?getSpeed@Player@@UEBAMXZ", float32_t, { this: Player });
 Player.prototype.hasOpenContainer = procHacker.js("?hasOpenContainer@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isHungry = procHacker.js("?isHungry@Player@@QEBA_NXZ", bool_t, { this: Player });
-Player.prototype.isHurt = procHacker.js("?isHurt@Player@@QEAA_NXZ", bool_t, {
-    this: Player,
-});
+// the 2024 body (0x19e1990) is getHealth() > 0 && getHealth() < getMaxHealth(), and both of those
+// are functions bdsx already has on the 1.26 builds (ActorAttribute::getHealth / getMaxHealth)
+Player.prototype.isHurt = derived(
+    "?isHurt@Player@@QEAA_NXZ",
+    function isHurt(this: Player): boolean {
+        const health = this.getHealth();
+        return health > 0 && health < this.getMaxHealth();
+    },
+    () =>
+        procHacker.js("?isHurt@Player@@QEAA_NXZ", bool_t, {
+            this: Player,
+        }),
+);
 Player.prototype.isSpawned = procHacker.js("?isSpawned@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isLoading = procHacker.jsv("??_7ServerPlayer@@6B@", "?isLoading@ServerPlayer@@UEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isPlayerInitialized = procHacker.jsv("??_7ServerPlayer@@6B@", "?isPlayerInitialized@ServerPlayer@@UEBA_NXZ", bool_t, { this: Player });
