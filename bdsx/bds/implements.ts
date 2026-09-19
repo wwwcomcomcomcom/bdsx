@@ -1029,7 +1029,16 @@ Actor.fromUniqueIdBin = function (bin, getRemovedActor = true) {
 Actor.prototype.setHurtTime = procHacker.js("?setHurtTime@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t);
 Actor.prototype.addEffect = procHacker.js("?addEffect@Actor@@QEAAXAEBVMobEffectInstance@@@Z", void_t, { this: Actor }, MobEffectInstance);
 Actor.prototype.removeEffect = procHacker.js("?removeEffect@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t);
-(Actor.prototype as any)._hasEffect = procHacker.js("?hasEffect@Actor@@QEBA_NAEBVMobEffect@@@Z", bool_t, { this: Actor }, MobEffect);
+// 1.26 keeps no out-of-line hasEffect: the 2024 build's was a 20-byte thunk (call getEffect; test; setne)
+// and the inliner removed it. The definition is exactly that thunk, so bdsx carries it -- and the address
+// propagation had given the name is the getEffect(unsigned int) overload, which returns a pointer.
+(Actor.prototype as any)._hasEffect = derived(
+    "?hasEffect@Actor@@QEBA_NAEBVMobEffect@@@Z",
+    function _hasEffect(this: Actor, mobEffect: MobEffect): boolean {
+        return (this as any)._getEffect(mobEffect) !== null;
+    },
+    () => procHacker.js("?hasEffect@Actor@@QEBA_NAEBVMobEffect@@@Z", bool_t, { this: Actor }, MobEffect),
+);
 (Actor.prototype as any)._getEffect = procHacker.js("?getEffect@Actor@@QEBAPEBVMobEffectInstance@@AEBVMobEffect@@@Z", MobEffectInstance, { this: Actor }, MobEffect);
 Actor.prototype.removeAllEffects = procHacker.js("?removeAllEffects@Actor@@QEAAXXZ", void_t, { this: Actor });
 Actor.prototype.setOnFire = function (seconds: number) {

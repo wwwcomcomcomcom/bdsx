@@ -88,20 +88,17 @@ export class MobEffect extends NativeClass {
     }
 }
 
-@nativeClass(0x80)
+// 1.26 grew MobEffectInstance from 0x80 to 0x88 and moved everything after `duration`: the three
+// difficulty durations are gone and two pointers sit at 0x10 and 0x18, so `amplifier` and the four
+// flags are at 0x20 / 0x24 (docs/findings-layouts.md, "MobEffectInstance"). Read off a live instance
+// with tools/actor-layout-probe.ts `effprobe`, which dumps the first 0x28 bytes.
+@nativeClass(0x88)
 export class MobEffectInstance extends NativeClass {
     @nativeField(uint32_t)
     id: uint32_t;
     @nativeField(int32_t)
     duration: int32_t;
-    @nativeField(int32_t)
-    durationEasy: int32_t;
-    @nativeField(int32_t)
-    durationNormal: int32_t;
-
-    @nativeField(int32_t)
-    durationHard: int32_t;
-    @nativeField(int32_t)
+    @nativeField(int32_t, 0x20)
     amplifier: int32_t;
     @nativeField(bool_t)
     displayAnimation: bool_t;
