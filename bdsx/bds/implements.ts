@@ -796,9 +796,21 @@ Actor.prototype.getScoreTag = function () {
     // accessed from Actor::setScoreTag
     return SynchedActorDataEntityWrapper$getString(this.getEntityData(), 0x54);
 };
-Actor.prototype.getDimensionBlockSource = Actor.prototype.getRegion = procHacker.js("?getDimensionBlockSource@Actor@@QEBAAEAVBlockSource@@XZ", BlockSource, {
-    this: Actor,
-});
+// Actor::getDimensionBlockSource is one line in 2024 (0x19b1f30: getDimension(), then a tail jump to
+// Dimension::getBlockSourceFromMainChunkSource) and 1.26 keeps no out-of-line copy. Both halves ship
+// as live-read field accessors on both builds, so bdsx walks them itself. The address the table used
+// to carry for this name was a throw helper with 1,564 callers -- retracted, see
+// data/candidates-instances-<v>.json.
+Actor.prototype.getDimensionBlockSource = Actor.prototype.getRegion = derived(
+    "?getDimensionBlockSource@Actor@@QEBAAEAVBlockSource@@XZ",
+    function (this: Actor): BlockSource {
+        return this.getDimension().getBlockSource();
+    },
+    () =>
+        procHacker.js("?getDimensionBlockSource@Actor@@QEBAAEAVBlockSource@@XZ", BlockSource, {
+            this: Actor,
+        }),
+);
 Actor.prototype.getUniqueIdPointer = procHacker.js("?getOrCreateUniqueID@Actor@@QEBAAEBUActorUniqueID@@XZ", StaticPointer, { this: Actor });
 Actor.prototype.getEntityTypeId = procHacker.js("?getEntityTypeId@Actor@@QEBA?AW4ActorType@@XZ", int32_t, { this: Actor }); // ActorType getEntityTypeId()
 Actor.prototype.getRuntimeID = procHacker.js("?getRuntimeID@Actor@@QEBA?AVActorRuntimeID@@XZ", ActorRuntimeID, { this: Actor, structureReturn: true });
@@ -3035,7 +3047,22 @@ BlockLegacy.prototype.getSilkTouchedItemInstance = function (block) {
     return this.asItemInstance(this.getRenderBlock());
 };
 
-(Block.prototype as any)._getName = procHacker.js("?getName@Block@@QEBAAEBVHashedString@@XZ", HashedString, { this: Block });
+// Block::getName is one line in 2024 (0x2f2d00: `movq 48(%rcx),%rax; addq $152,%rax`) and 1.26 keeps no
+// out-of-line copy -- the inliner took it, and neither image holds a function of that shape. The two
+// offsets it walks were read off live objects instead (docs/findings-reach.md: Block+0x68 is the
+// BlockLegacy, and every legacy block carries its own name there), so bdsx walks them itself. The
+// literals are the 2024 offsets, used only when the table ships no layouts for these classes.
+const Block$blockLegacyOffset = pdbcache.layouts.Block?.blockLegacy ?? 0x30;
+// 1.26: +0xe0. findings-reach.md recorded +0xe8, which is the std::string *inside* the HashedString --
+// reading the HashedString from there returned "t:dirt" for "minecraft:dirt" (docs/findings-blocks.md).
+const BlockLegacy$nameOffset = pdbcache.layouts.BlockLegacy?.name ?? 0x98;
+(Block.prototype as any)._getName = derived(
+    "?getName@Block@@QEBAAEBVHashedString@@XZ",
+    function (this: Block): HashedString {
+        return (this as any as StaticPointer).getPointer(Block$blockLegacyOffset).addAs(HashedString, BlockLegacy$nameOffset);
+    },
+    () => procHacker.js("?getName@Block@@QEBAAEBVHashedString@@XZ", HashedString, { this: Block }),
+);
 Block.create = function (blockName: string, data: number = 0): Block | null {
     data |= 0;
     if (data < 0 || data > 0x7fff) data = 0;
