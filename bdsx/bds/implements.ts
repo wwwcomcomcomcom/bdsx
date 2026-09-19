@@ -1472,26 +1472,89 @@ SynchedActorDataEntityWrapper.prototype.getFloat = procHacker.js(
     { this: SynchedActorDataEntityWrapper },
     uint16_t,
 );
-SynchedActorDataEntityWrapper.prototype.setFloat = procHacker.js(
-    "??$set@M@SynchedActorDataEntityWrapper@@QEAAXGAEBM@Z",
-    void_t,
-    { this: SynchedActorDataEntityWrapper },
-    uint16_t,
-    float32_t.ref() /** float const & */,
-);
 SynchedActorDataEntityWrapper.prototype.getInt = procHacker.js(
     "?getInt@SynchedActorDataEntityWrapper@@QEBAHG@Z",
     int32_t,
     { this: SynchedActorDataEntityWrapper },
     uint16_t,
 );
-SynchedActorDataEntityWrapper.prototype.setInt = procHacker.js(
-    "??$set@H@SynchedActorDataEntityWrapper@@QEAAXGAEBH@Z",
-    void_t,
-    { this: SynchedActorDataEntityWrapper },
-    uint16_t,
-    int32_t.ref() /** int const & */,
-);
+
+// SynchedActorDataEntityWrapper::set<T> (docs/findings-synched.md). 1.26 keeps no out-of-line copy of
+// either one -- every caller inlined it -- and what propagation offered for set<int> was a trade
+// function. What the setter does is fixed by the container rather than by the binary, and the
+// container did not change: the wrapper's first word is the SynchedActorData, its vector of DataItem
+// pointers is indexed by the id itself (the invariant every getter relies on), and the dirty bitset
+// sits at +24. So bdsx writes it out. The shape is the 2024 body (0x1417f0) and 1.26's inlined copy
+// (0x23990b0 on 1.26.40.8) agreeing step for step: look the item up, refuse it if its type is not
+// this setter's, do nothing at all when the value is already there, write the payload, then set the
+// id's dirty bit unless the id is past the bitset.
+{
+    const l = pdbcache.layouts.SynchedActorData ?? {};
+    const DIRTY = l.dirtyFlags ?? 24;
+    const ID_COUNT = l.idCount ?? 132; // 141 in 1.26; the 2024 fallback is what 0x1417f0 compares
+    const PAYLOAD = l.payload4 ?? 16; // 1.26 moved <=4-byte payloads to +0x0c; 2024 kept them at +0x10
+    /** DataItem::getType, vftable slot 2 -- 1.26's code never reads the field directly, so neither do we */
+    const DataItem$getType = makefunc.js([0x10], uint8_t, { this: VoidPointer });
+
+    /** the DataItem the wrapper holds for `id`, or null when the id is out of range or the slot is empty */
+    function dataItem(wrapper: SynchedActorDataEntityWrapper, id: number): VoidPointer | null {
+        const data = (wrapper as any as StaticPointer).getPointer(0);
+        if (data.isNull()) return null;
+        const begin = data.getPointer(0);
+        if (begin.isNull()) return null;
+        if (data.getPointer(8).subptr(begin) >>> 3 <= id) return null;
+        const item = begin.getPointer(id * 8);
+        return item.isNull() ? null : item;
+    }
+    /** std::bitset<Count> at SynchedActorData+24: 64-bit words, so uint32 halves in order are the same bits */
+    function markDirty(wrapper: SynchedActorDataEntityWrapper, id: number): void {
+        if (id >= ID_COUNT) return;
+        const data = (wrapper as any as StaticPointer).getPointer(0);
+        const off = DIRTY + (id >>> 5) * 4;
+        data.setUint32((data.getUint32(off) | (1 << (id & 31))) >>> 0, off);
+    }
+
+    SynchedActorDataEntityWrapper.prototype.setInt = derived(
+        "??$set@H@SynchedActorDataEntityWrapper@@QEAAXGAEBH@Z",
+        function (this: SynchedActorDataEntityWrapper, id: number, value: number): void {
+            const item = dataItem(this, id);
+            if (item === null) return;
+            if (DataItem$getType.call(item) !== 2 /* DataItemType::Int */) return;
+            const p = item as any as StaticPointer;
+            if (p.getInt32(PAYLOAD) === value) return;
+            p.setInt32(value, PAYLOAD);
+            markDirty(this, id);
+        },
+        () =>
+            procHacker.js(
+                "??$set@H@SynchedActorDataEntityWrapper@@QEAAXGAEBH@Z",
+                void_t,
+                { this: SynchedActorDataEntityWrapper },
+                uint16_t,
+                int32_t.ref() /** int const & */,
+            ),
+    );
+    SynchedActorDataEntityWrapper.prototype.setFloat = derived(
+        "??$set@M@SynchedActorDataEntityWrapper@@QEAAXGAEBM@Z",
+        function (this: SynchedActorDataEntityWrapper, id: number, value: number): void {
+            const item = dataItem(this, id);
+            if (item === null) return;
+            if (DataItem$getType.call(item) !== 3 /* DataItemType::Float */) return;
+            const p = item as any as StaticPointer;
+            if (p.getFloat32(PAYLOAD) === value) return;
+            p.setFloat32(value, PAYLOAD);
+            markDirty(this, id);
+        },
+        () =>
+            procHacker.js(
+                "??$set@M@SynchedActorDataEntityWrapper@@QEAAXGAEBM@Z",
+                void_t,
+                { this: SynchedActorDataEntityWrapper },
+                uint16_t,
+                float32_t.ref() /** float const & */,
+            ),
+    );
+}
 
 @nativeClass(0x20)
 class StackResultStorageEntity extends NativeClass {
