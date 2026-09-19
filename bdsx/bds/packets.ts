@@ -535,6 +535,12 @@ export class MobEffectPacket extends Packet {
 @nativeClass(null)
 class AttributeModifier extends AbstractClass {}
 
+// 1.26 added two floats in the middle of AttributeData: the protocol gained "Default Min Value" and
+// "Default Max Value", which AttributeData::write emits from +0x10 and +0x14, so everything after them
+// moved by 8 and the element became 96 bytes rather than 88. The size is what matters most: CxxVector
+// strides by componentType[NativeType.size], so an 88-byte element makes BDS's own destructor -- which
+// strides by 96 (`addq $96, %rbx` in the packet destructor, 0xb04818 on 1.26.40.8, 0x9c4ba8 on 1.26.51.1)
+// -- run past `end` and off the heap. That is why pushing even a string-free element killed the server.
 @nativeClass()
 export class AttributeData extends NativeClass {
     @nativeField(float32_t)
@@ -545,6 +551,12 @@ export class AttributeData extends NativeClass {
     max: number;
     @nativeField(float32_t)
     default: number;
+    /** "Default Min Value"; BDS fills it from AttributeInstance+0x68 */
+    @nativeField(float32_t)
+    defaultMin: number;
+    /** "Default Max Value"; BDS fills it from AttributeInstance+0x6c */
+    @nativeField(float32_t)
+    defaultMax: number;
     @nativeField(HashedString)
     readonly name: HashedString;
     // TODO: clarify dummy, it seems CxxVector
@@ -560,6 +572,8 @@ export class AttributeData extends NativeClass {
         this.max = 0;
         this.current = 0;
         this.default = 0;
+        this.defaultMin = 0;
+        this.defaultMax = 0;
         this._dummy1 = null;
         this._dummy2 = null;
         this._dummy3 = null;
@@ -572,6 +586,12 @@ export class UpdateAttributesPacket extends Packet {
     actorId: ActorRuntimeID;
     @nativeField(CxxVector.make<AttributeData>(AttributeData))
     readonly attributes: CxxVector<AttributeData>;
+    /** 1.26: serialized as "Input tick" */
+    @nativeField(bin64_t)
+    tick: bin64_t;
+    /** 1.26: SerializationMode, which the constructor sets to 1 */
+    @nativeField(uint32_t)
+    serializationMode: uint32_t;
 }
 
 @nativeClass(null)

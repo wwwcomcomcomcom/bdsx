@@ -32,6 +32,10 @@ export class AttributeInstance extends AbstractClass {
     minValue: float32_t;
     maxValue: float32_t;
     defaultValue: float32_t;
+    /** 1.26 only: the "Default Min Value" AttributeData carries */
+    defaultMinValue: float32_t;
+    /** 1.26 only: the "Default Max Value" AttributeData carries */
+    defaultMaxValue: float32_t;
 }
 export class BaseAttributeMap extends AbstractClass {
     getMutableInstance(type: AttributeId): AttributeInstance | null {

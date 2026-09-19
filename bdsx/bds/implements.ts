@@ -1641,6 +1641,10 @@ ServerPlayer.prototype.setAttribute = function (id: AttributeId, value: number):
     data.min = attr.minValue;
     data.max = attr.maxValue;
     data.default = attr.defaultValue;
+    // 1.26 sends these two as well; BDS's own AttributeData(AttributeInstance const&) takes them
+    // from +0x68 and +0x6c, so send what it would send rather than zero
+    data.defaultMin = attr.defaultMinValue;
+    data.defaultMax = attr.defaultMaxValue;
     packet.attributes.push(data);
     data.destruct();
     this.sendNetworkPacket(packet);
@@ -2314,6 +2318,12 @@ namespace ExtendedCertificate {
         minValue: [float32_t, l.minValue ?? 0x7c],
         maxValue: [float32_t, l.maxValue ?? 0x80],
         defaultValue: [float32_t, l.defaultValue ?? 0x78],
+        // the two 1.26 added, read off AttributeData's constructor from AttributeInstance (+0x68 / +0x6c,
+        // right below defaultValue). The fallbacks are those offsets shifted by the same eight the other
+        // four moved by; no 2024 body reads them, so the fallbacks are unverified and only matter when
+        // symbols.json carries no layout at all.
+        defaultMinValue: [float32_t, l.defaultMinValue ?? 0x70],
+        defaultMaxValue: [float32_t, l.defaultMaxValue ?? 0x74],
     });
 }
 
