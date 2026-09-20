@@ -1,3 +1,4 @@
+import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register } from "../assembler";
 import { bin } from "../bin";
@@ -2726,9 +2727,33 @@ const baseAttributeMapLayout = (): { ids: number; instances: number; instanceSiz
     }
     return l as { ids: number; instances: number; instanceSize: number };
 };
+// The attribute ids are not the same in the two 1.26 builds: the five player attributes are one
+// lower on 1.26.51.1, which has no id 6 at all, while everything from Health (7) up is unchanged
+// (docs/findings-layouts.md). bdsx's AttributeId enum stays the 2024 numbering -- it is public API
+// and plugins are written against it -- and every id is translated here, at the one place an
+// attribute id reaches the binary. A build whose table has no `AttributeId` layout is assumed to
+// use the enum's own numbering, which is what 1.26.40.8 does.
+const attributeIdReported = new Set<string>();
+function nativeAttributeId(type: AttributeId): number {
+    const table = pdbcache.layouts.AttributeId;
+    if (table === undefined) return type;
+    const name = AttributeId[type];
+    if (name === undefined) return type;
+    const mapped = table[name];
+    if (typeof mapped !== "number") return type;
+    if (mapped !== type && !attributeIdReported.has(name)) {
+        attributeIdReported.add(name);
+        console.error(colors.cyan(`[bdsx] AttributeId.${name}: this build numbers it ${mapped}, not ${type}`));
+    }
+    return mapped;
+}
+BaseAttributeMap.prototype.nativeIdOf = function (type: AttributeId): number {
+    return nativeAttributeId(type);
+};
 BaseAttributeMap.prototype.getMutableInstance = derived(
     "?getMutableInstance@BaseAttributeMap@@QEAAPEAVAttributeInstance@@I@Z",
-    function getMutableInstance(this: BaseAttributeMap, type: AttributeId): AttributeInstance | null {
+    function getMutableInstance(this: BaseAttributeMap, wanted: AttributeId): AttributeInstance | null {
+        const type = nativeAttributeId(wanted);
         const l = baseAttributeMapLayout(),
             self = this as any as StaticPointer;
         const begin = self.getPointer(l.ids),
@@ -2745,13 +2770,18 @@ BaseAttributeMap.prototype.getMutableInstance = derived(
         if (lo >= count || begin.getUint32(lo * 4) !== type) return null;
         return self.getPointer(l.instances).addAs(AttributeInstance, lo * l.instanceSize);
     },
-    () =>
-        procHacker.js(
+    () => {
+        // the binary wants this build's id too, so the translation wraps the real function as well
+        const native = procHacker.js(
             "?getMutableInstance@BaseAttributeMap@@QEAAPEAVAttributeInstance@@I@Z",
             AttributeInstance,
             { this: BaseAttributeMap },
             int32_t,
-        ),
+        );
+        return function getMutableInstance(this: BaseAttributeMap, wanted: AttributeId): AttributeInstance | null {
+            return native.call(this, nativeAttributeId(wanted));
+        };
+    },
 );
 
 // server.ts

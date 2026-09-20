@@ -41,6 +41,15 @@ export class BaseAttributeMap extends AbstractClass {
     getMutableInstance(type: AttributeId): AttributeInstance | null {
         abstract();
     }
+    /**
+     * The id this build gives the attribute bdsx calls `type`. The enum above is the 2024
+     * numbering, which 1.26.40.8 still uses and 1.26.51.1 does not -- there the five player
+     * attributes are one lower and there is no id 6 (docs/findings-layouts.md, "The attribute
+     * ids are not the same in the two 1.26 builds"). Every lookup goes through this.
+     */
+    nativeIdOf(type: AttributeId): number {
+        abstract();
+    }
 }
 @nativeClass()
 export class AttributeInstanceHandle extends AbstractClass {
