@@ -38,7 +38,7 @@ import { pdbcache } from "../pdbcache";
 import { CxxStringWrapper, Wrapper } from "../pointer";
 import { procHacker } from "../prochacker";
 import { CxxSharedPtr } from "../sharedpointer";
-import { Abilities, AbilitiesIndex, AbilitiesLayer, Ability, LayeredAbilities } from "./abilities";
+import { abilityCount, abilityStride, Abilities, AbilitiesIndex, AbilitiesLayer, Ability, LayeredAbilities } from "./abilities";
 import {
     Actor,
     ActorDamageByActorSource,
@@ -2229,7 +2229,15 @@ Player.prototype.setSpawnBlockRespawnPosition = procHacker.js(
 );
 Player.prototype.setSelectedSlot = procHacker.js("?setSelectedSlot@Player@@QEAAAEBVItemStack@@H@Z", ItemStack, { this: Player }, int32_t);
 Player.prototype.getDirection = procHacker.js("?getDirection@Player@@QEBAHXZ", int32_t, { this: Player });
-Player.prototype.isFlying = procHacker.js("?isFlying@Player@@QEBA_NXZ", bool_t, { this: Player });
+// 2024: try_get<AbilitiesComponent> then a tail jump into LayeredAbilities::getBool with index 9.
+// getAbilities resolves on both 1.26 builds and getBool is bdsx's own body, so this is the two of them.
+Player.prototype.isFlying = derived(
+    "?isFlying@Player@@QEBA_NXZ",
+    function isFlying(this: Player): boolean {
+        return this.getAbilities().getBool(AbilitiesIndex.Flying);
+    },
+    () => procHacker.js("?isFlying@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
 Player.prototype.isInRaid = procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isUsingItem = procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player });
@@ -3657,28 +3665,127 @@ BlockUtils.getLiquidBlockHeight = procHacker.js("?getLiquidBlockHeight@BlockUtil
 BlockUtils.canGrowTreeWithBeehive = procHacker.js("?canGrowTreeWithBeehive@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
 
 // abilties.ts
-const Abilities$setAbilityBool = procHacker.js("?setAbility@Abilities@@QEAAXW4AbilitiesIndex@@_N@Z", void_t, { this: Abilities }, uint16_t, bool_t);
+// The ability block (docs/findings-abilities.md). 1.26 inlined every one of these functions away:
+// Player::getAbilities still resolves, and after it everything is arithmetic over one layout --
+// a layer is `abilityCount` Ability records of `abilityStride` bytes, LayeredAbilities holds
+// `layerCount` of them starting at `layers`, and a lookup walks the layers from the top down to
+// the first record that is not Unset, falling back to Abilities::INVALID_ABILITY. The numbers come
+// from symbols.json `layouts` (1.26: 20 abilities, 6 layers at +24, 240 bytes each) and the
+// fallbacks are the 2024 shape (19 abilities, 5 layers at +4). Each body is written from the
+// semantics; the binary wins whenever a build resolves the name.
+Ability.define({
+    type: uint8_t,
+    value: Ability.Value,
+    options: uint8_t,
+});
+const Ability$layout = pdbcache.layouts.Ability ?? {};
+const ABILITY_VALUE = Ability$layout.value ?? 0x04;
+const LayeredAbilities$layout = pdbcache.layouts.LayeredAbilities ?? {};
+const LA_LAYERS = LayeredAbilities$layout.layers ?? 4;
+const LA_LAYER_STRIDE = LayeredAbilities$layout.layerStride ?? abilityCount * abilityStride;
+const LA_LAYER_COUNT = LayeredAbilities$layout.layerCount ?? 5;
+/** the layer `setAbility` writes into; the engine's own setter only ever touches this one */
+const LA_BASE_LAYER = LayeredAbilities$layout.baseLayer ?? AbilitiesLayer.Base;
+
+/** `&layers_[layer].abilities_[index]`, or INVALID_ABILITY for an index the layer does not have */
+function abilityIn(self: LayeredAbilities, layer: number, abilityIndex: AbilitiesIndex): Ability {
+    if (abilityIndex < 0 || abilityIndex >= abilityCount) return Ability.INVALID_ABILITY;
+    return (self as any as StaticPointer).addAs(Ability, LA_LAYERS + layer * LA_LAYER_STRIDE + abilityIndex * abilityStride);
+}
+/** the topmost layer that has the ability set; INVALID_ABILITY when none of them does */
+function topmostAbility(self: LayeredAbilities, abilityIndex: AbilitiesIndex): Ability {
+    for (let layer = LA_LAYER_COUNT - 1; layer >= 0; layer--) {
+        const ability = abilityIn(self, layer, abilityIndex);
+        if (ability.type !== Ability.Type.Unset) return ability;
+    }
+    return Ability.INVALID_ABILITY;
+}
+// A layer index the object does not have: the engine returns a shared, never-written Abilities, so
+// every record in it reads as Invalid with a zero value. bdsx keeps its own zeroed copy for that.
+let emptyAbilities: Abilities | null = null;
+function noSuchLayer(): Abilities {
+    if (emptyAbilities === null) {
+        const ptr = new AllocatedPointer(LA_LAYER_STRIDE);
+        ptr.setBuffer(Buffer.alloc(LA_LAYER_STRIDE));
+        emptyAbilities = ptr.as(Abilities);
+    }
+    return emptyAbilities;
+}
+
+Ability.prototype.getBool = derived(
+    "?getBool@Ability@@QEBA_NXZ",
+    function getBool(this: Ability): boolean {
+        return this.type === Ability.Type.Unset ? false : this.getUint8(ABILITY_VALUE) !== 0;
+    },
+    () => procHacker.js("?getBool@Ability@@QEBA_NXZ", bool_t, { this: Ability }),
+);
+Ability.prototype.getFloat = derived(
+    "?getFloat@Ability@@QEBAMXZ",
+    function getFloat(this: Ability): number {
+        return this.type === Ability.Type.Unset ? 0 : this.getFloat32(ABILITY_VALUE);
+    },
+    () => procHacker.js("?getFloat@Ability@@QEBAMXZ", float32_t, { this: Ability }),
+);
+Ability.prototype.setBool = derived(
+    "?setBool@Ability@@QEAAX_N@Z",
+    function setBool(this: Ability, value: boolean): void {
+        // an Unset record becomes a Bool one with a cleared union first, as the engine's setter does
+        if (this.type === Ability.Type.Unset) {
+            this.type = Ability.Type.Bool;
+            this.setUint8(0, ABILITY_VALUE);
+        }
+        this.setUint8(value ? 1 : 0, ABILITY_VALUE);
+    },
+    () => procHacker.js("?setBool@Ability@@QEAAX_N@Z", void_t, { this: Ability }, bool_t),
+);
+
+Abilities.prototype.getBool = derived(
+    "?getBool@Abilities@@QEBA_NW4AbilitiesIndex@@@Z",
+    function getBool(this: Abilities, abilityIndex: AbilitiesIndex): boolean {
+        return this.getAbility(abilityIndex).getBool();
+    },
+    () => procHacker.js("?getBool@Abilities@@QEBA_NW4AbilitiesIndex@@@Z", bool_t, { this: Abilities }, uint16_t),
+);
+Abilities.prototype.getFloat = derived(
+    "?getFloat@Abilities@@QEBAMW4AbilitiesIndex@@@Z",
+    function getFloat(this: Abilities, abilityIndex: AbilitiesIndex): number {
+        return this.getAbility(abilityIndex).getFloat();
+    },
+    () => procHacker.js("?getFloat@Abilities@@QEBAMW4AbilitiesIndex@@@Z", float32_t, { this: Abilities }, uint16_t),
+);
+const Abilities$setAbilityBool = derived(
+    "?setAbility@Abilities@@QEAAXW4AbilitiesIndex@@_N@Z",
+    function setAbilityBool(this: Abilities, abilityIndex: AbilitiesIndex, value: boolean): void {
+        this.getAbility(abilityIndex).setBool(value);
+    },
+    () => {
+        const bound = procHacker.js("?setAbility@Abilities@@QEAAXW4AbilitiesIndex@@_N@Z", void_t, { this: Abilities }, uint16_t, bool_t);
+        return function setAbilityBool(this: Abilities, abilityIndex: AbilitiesIndex, value: boolean): void {
+            bound.call(this, abilityIndex, value);
+        };
+    },
+);
 Abilities.prototype.setAbility = function (abilityIndex: AbilitiesIndex, value: boolean | number) {
     switch (typeof value) {
         case "boolean":
-            Abilities$setAbilityBool.call(abilityIndex, value);
+            Abilities$setAbilityBool.call(this, abilityIndex, value);
             break;
         case "number":
             this.getAbility(abilityIndex).setFloat(value);
             break;
     }
 };
-Abilities.prototype.getBool = procHacker.js("?getBool@Abilities@@QEBA_NW4AbilitiesIndex@@@Z", bool_t, { this: Abilities }, uint16_t);
-Abilities.prototype.getFloat = procHacker.js("?getFloat@Abilities@@QEBAMW4AbilitiesIndex@@@Z", float32_t, { this: Abilities }, uint16_t);
 Abilities.prototype.isFlying = function () {
     return this.getBool(AbilitiesIndex.Flying);
 };
 
-LayeredAbilities.prototype.getLayer = procHacker.js(
+LayeredAbilities.prototype.getLayer = derived(
     "?getLayer@LayeredAbilities@@QEAAAEAVAbilities@@W4AbilitiesLayer@@@Z",
-    Abilities,
-    { this: LayeredAbilities },
-    uint16_t,
+    function getLayer(this: LayeredAbilities, layer: AbilitiesLayer): Abilities {
+        if (layer < 0 || layer >= LA_LAYER_COUNT) return noSuchLayer();
+        return (this as any as StaticPointer).addAs(Abilities, LA_LAYERS + layer * LA_LAYER_STRIDE);
+    },
+    () => procHacker.js("?getLayer@LayeredAbilities@@QEAAAEAVAbilities@@W4AbilitiesLayer@@@Z", Abilities, { this: LayeredAbilities }, uint16_t),
 );
 LayeredAbilities.prototype.getCommandPermissions = procHacker.js("?getCommandPermissions@LayeredAbilities@@QEBA?AW4CommandPermissionLevel@@XZ", int32_t, {
     this: LayeredAbilities,
@@ -3704,18 +3811,36 @@ LayeredAbilities.prototype.getPlayerPermissionLevel = LayeredAbilities.prototype
 LayeredAbilities.prototype.setCommandPermissionLevel = LayeredAbilities.prototype.setCommandPermissions;
 LayeredAbilities.prototype.setPlayerPermissionLevel = LayeredAbilities.prototype.setPlayerPermissions;
 
-const LayeredAbilities$getAbility = procHacker.js(
+const LayeredAbilities$getAbility = derived(
     "?getAbility@LayeredAbilities@@QEAAAEAVAbility@@W4AbilitiesLayer@@W4AbilitiesIndex@@@Z",
-    Ability,
-    { this: LayeredAbilities },
-    uint16_t,
-    uint16_t,
+    function getAbility(this: LayeredAbilities, abilityLayer: AbilitiesLayer, abilityIndex: AbilitiesIndex): Ability {
+        if (abilityLayer < 0 || abilityLayer >= LA_LAYER_COUNT) return Ability.INVALID_ABILITY;
+        return abilityIn(this, abilityLayer, abilityIndex);
+    },
+    () => {
+        const bound = procHacker.js(
+            "?getAbility@LayeredAbilities@@QEAAAEAVAbility@@W4AbilitiesLayer@@W4AbilitiesIndex@@@Z",
+            Ability,
+            { this: LayeredAbilities },
+            uint16_t,
+            uint16_t,
+        );
+        return function getAbility(this: LayeredAbilities, abilityLayer: AbilitiesLayer, abilityIndex: AbilitiesIndex): Ability {
+            return bound.call(this, abilityLayer, abilityIndex);
+        };
+    },
 );
-const LayeredAbilities$getAbilityOnlyIndex = procHacker.js(
+const LayeredAbilities$getAbilityOnlyIndex = derived(
     "?getAbility@LayeredAbilities@@QEBAAEBVAbility@@W4AbilitiesIndex@@@Z",
-    Ability,
-    { this: LayeredAbilities },
-    uint16_t,
+    function getAbility(this: LayeredAbilities, abilityIndex: AbilitiesIndex): Ability {
+        return topmostAbility(this, abilityIndex);
+    },
+    () => {
+        const bound = procHacker.js("?getAbility@LayeredAbilities@@QEBAAEBVAbility@@W4AbilitiesIndex@@@Z", Ability, { this: LayeredAbilities }, uint16_t);
+        return function getAbility(this: LayeredAbilities, abilityIndex: AbilitiesIndex): Ability {
+            return bound.call(this, abilityIndex);
+        };
+    },
 );
 LayeredAbilities.prototype.getAbility = function (abilityLayer: AbilitiesLayer | AbilitiesIndex, abilityIndex?: AbilitiesIndex) {
     if (abilityIndex == null) {
@@ -3724,19 +3849,29 @@ LayeredAbilities.prototype.getAbility = function (abilityLayer: AbilitiesLayer |
         return LayeredAbilities$getAbility.call(this, abilityLayer, abilityIndex);
     }
 };
-const LayeredAbilities$setAbilityFloat = procHacker.js(
+const LayeredAbilities$setAbilityFloat = derived(
     "?setAbility@LayeredAbilities@@QEAAXW4AbilitiesIndex@@M@Z",
-    void_t,
-    { this: LayeredAbilities },
-    uint16_t,
-    float32_t,
+    function setAbilityFloat(this: LayeredAbilities, abilityIndex: AbilitiesIndex, value: number): void {
+        abilityIn(this, LA_BASE_LAYER, abilityIndex).setFloat(value);
+    },
+    () => {
+        const bound = procHacker.js("?setAbility@LayeredAbilities@@QEAAXW4AbilitiesIndex@@M@Z", void_t, { this: LayeredAbilities }, uint16_t, float32_t);
+        return function setAbilityFloat(this: LayeredAbilities, abilityIndex: AbilitiesIndex, value: number): void {
+            bound.call(this, abilityIndex, value);
+        };
+    },
 );
-const LayeredAbilities$setAbilityBool = procHacker.js(
+const LayeredAbilities$setAbilityBool = derived(
     "?setAbility@LayeredAbilities@@QEAAXW4AbilitiesIndex@@_N@Z",
-    void_t,
-    { this: LayeredAbilities },
-    uint16_t,
-    bool_t,
+    function setAbilityBool(this: LayeredAbilities, abilityIndex: AbilitiesIndex, value: boolean): void {
+        abilityIn(this, LA_BASE_LAYER, abilityIndex).setBool(value);
+    },
+    () => {
+        const bound = procHacker.js("?setAbility@LayeredAbilities@@QEAAXW4AbilitiesIndex@@_N@Z", void_t, { this: LayeredAbilities }, uint16_t, bool_t);
+        return function setAbilityBool(this: LayeredAbilities, abilityIndex: AbilitiesIndex, value: boolean): void {
+            bound.call(this, abilityIndex, value);
+        };
+    },
 );
 LayeredAbilities.prototype.setAbility = function (abilityIndex: AbilitiesIndex, value: boolean | number) {
     switch (typeof value) {
@@ -3749,12 +3884,33 @@ LayeredAbilities.prototype.setAbility = function (abilityIndex: AbilitiesIndex, 
     }
 };
 
-LayeredAbilities.prototype.getBool = procHacker.js("?getBool@LayeredAbilities@@QEBA_NW4AbilitiesIndex@@@Z", bool_t, { this: LayeredAbilities }, uint16_t);
-(LayeredAbilities as any).prototype._getFloatWithLayer = procHacker.js(
-    "?getFloatWithLayer@LayeredAbilities@@QEBA?AU?$pair@MW4AbilitiesLayer@@@std@@W4AbilitiesIndex@@@Z",
-    CxxPair.make(float32_t, int32_t),
-    { this: LayeredAbilities },
-    uint16_t,
+LayeredAbilities.prototype.getBool = derived(
+    "?getBool@LayeredAbilities@@QEBA_NW4AbilitiesIndex@@@Z",
+    function getBool(this: LayeredAbilities, abilityIndex: AbilitiesIndex): boolean {
+        return topmostAbility(this, abilityIndex).getBool();
+    },
+    () => procHacker.js("?getBool@LayeredAbilities@@QEBA_NW4AbilitiesIndex@@@Z", bool_t, { this: LayeredAbilities }, uint16_t),
+);
+const AbilityFloatWithLayer = CxxPair.make(float32_t, int32_t);
+const getFloatWithLayerKey = "?getFloatWithLayer@LayeredAbilities@@QEBA?AU?$pair@MW4AbilitiesLayer@@@std@@W4AbilitiesIndex@@@Z";
+(LayeredAbilities as any).prototype._getFloatWithLayer = derived(
+    getFloatWithLayerKey,
+    function getFloatWithLayer(this: LayeredAbilities, abilityIndex: AbilitiesIndex): CxxPair<float32_t, int32_t> {
+        const pair = AbilityFloatWithLayer.construct();
+        for (let layer = LA_LAYER_COUNT - 1; layer >= 0; layer--) {
+            const ability = abilityIn(this, layer, abilityIndex);
+            if (ability.type !== Ability.Type.Unset) {
+                pair.first = ability.getFloat();
+                pair.second = layer;
+                return pair;
+            }
+        }
+        // nothing set anywhere: the engine reports zero and LayerCount, which is no layer at all
+        pair.first = 0;
+        pair.second = LA_LAYER_COUNT;
+        return pair;
+    },
+    () => procHacker.js(getFloatWithLayerKey, AbilityFloatWithLayer, { this: LayeredAbilities }, uint16_t),
 );
 LayeredAbilities.prototype.isFlying = function () {
     return this.getBool(AbilitiesIndex.Flying);
@@ -3774,15 +3930,6 @@ const Abilities$nameToAbilityIndex = procHacker.js(
 Abilities.nameToAbilityIndex = function (name: string): int16_t {
     return Abilities$nameToAbilityIndex(name.toLowerCase());
 };
-
-Ability.define({
-    type: uint8_t,
-    value: Ability.Value,
-    options: uint8_t,
-});
-Ability.prototype.getBool = procHacker.js("?getBool@Ability@@QEBA_NXZ", bool_t, { this: Ability });
-Ability.prototype.getFloat = procHacker.js("?getFloat@Ability@@QEBAMXZ", float32_t, { this: Ability });
-Ability.prototype.setBool = procHacker.js("?setBool@Ability@@QEAAX_N@Z", void_t, { this: Ability }, bool_t);
 
 // gamerules.ts
 // getRule, hasRule and nameToGameRuleIndex are bodies over one layout: a std::vector<GameRule> inside

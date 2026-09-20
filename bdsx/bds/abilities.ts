@@ -1,19 +1,29 @@
 import { abstract } from "../common";
 import { CxxPair } from "../cxxpair";
-import { makefunc } from "../makefunc";
 import { AbstractClass, nativeClass, NativeClass, nativeField, NativeStruct } from "../nativeclass";
 import { bool_t, float32_t } from "../nativetype";
+import { pdbcache } from "../pdbcache";
 import type { CommandPermissionLevel } from "./command";
 import type { PlayerPermission } from "./player";
 import { proc } from "./symbols";
 
-@nativeClass(0x140)
+// The ability block's shape, from symbols.json `layouts` (docs/findings-abilities.md). 1.26 added
+// one ability (VerticalFlySpeed) and one layer (Editor), so a layer is 20 * 12 bytes rather than
+// 19 * 12 and LayeredAbilities carries six of them after a 24-byte PermissionsHandler. The literals
+// are the 2024 shape, which is what a build without the layouts entry had.
+const Abilities$layout = pdbcache.layouts.Abilities ?? {};
+/** bytes per Ability; the ability count is the bound the binary checks before indexing */
+export const abilityStride = Abilities$layout.abilityStride ?? 0x0c;
+export const abilityCount = Abilities$layout.abilityCount ?? 19;
+const Abilities$size = Abilities$layout.size ?? abilityCount * abilityStride;
+
+@nativeClass(Abilities$size)
 export class Abilities extends AbstractClass {
     getAbility(abilityIndex: AbilitiesIndex): Ability {
-        if (abilityIndex >= AbilitiesIndex.AbilityCount) {
+        if (abilityIndex < 0 || abilityIndex >= abilityCount) {
             return Ability.INVALID_ABILITY;
         }
-        return this.addAs(Ability, abilityIndex * Ability[makefunc.size]);
+        return this.addAs(Ability, abilityIndex * abilityStride);
     }
     setAbility(abilityIndex: AbilitiesIndex, value: boolean | number): void {
         abstract();
@@ -36,8 +46,20 @@ export class Abilities extends AbstractClass {
     }
 }
 
-export enum AbilitiesLayer {}
-// TODO: fill
+/**
+ * The ability layers, highest first when a value is looked up: the topmost layer that has the
+ * ability set wins. 1.26 has six (Endstone's layered_abilities.h, Apache-2.0); 2024 had five,
+ * without Editor. `LayerCount` is the count this build actually carries.
+ */
+export enum AbilitiesLayer {
+    CustomCache = 0,
+    Base = 1,
+    Spectator = 2,
+    Commands = 3,
+    Editor = 4,
+    LoadingScreen = 5,
+    LayerCount = 6,
+}
 
 @nativeClass(null)
 export class LayeredAbilities extends AbstractClass {
@@ -145,8 +167,13 @@ export enum AbilitiesIndex {
     Muted,
     WorldBuilder,
     NoClip,
-    // unknown,
+    PrivilegedBuilder = 18,
+    /**
+     * The 2024 count, kept because it is public API. The bound the binary checks is
+     * `abilityCount` above, which is 20 on 1.26 -- the build that added VerticalFlySpeed.
+     */
     AbilityCount = 19,
+    VerticalFlySpeed = 19,
 }
 
 export class Ability extends NativeClass {
