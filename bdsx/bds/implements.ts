@@ -190,7 +190,7 @@ import {
     UpdateAttributesPacket,
 } from "./packets";
 import { BatchedNetworkPeer } from "./peer";
-import { Player, ServerPlayer, SimulatedPlayer } from "./player";
+import { Player, PlayerPermission, ServerPlayer, SimulatedPlayer } from "./player";
 import { RakNet } from "./raknet";
 import { RakNetConnector } from "./raknetinstance";
 import { DisplayObjective, IdentityDefinition, Objective, ObjectiveCriteria, ScoreInfo, Scoreboard, ScoreboardId, ScoreboardIdentityRef } from "./scoreboard";
@@ -1986,12 +1986,30 @@ Player.prototype.getGameMode = procHacker.js("?getGameMode@Player@@QEBAAEAVGameM
 Player.prototype.getGameType = procHacker.js("?getPlayerGameType@Player@@QEBA?AW4GameType@@XZ", int32_t, { this: Player });
 Player.prototype.getInventory = Player.prototype.getSupplies = procHacker.js("?getSupplies@Player@@QEAAAEAVPlayerInventory@@XZ", PlayerInventory, { this: Player });
 Player.prototype.getCommandPermissionLevel = procHacker.js("?getCommandPermissionLevel@Player@@UEBA?AW4CommandPermissionLevel@@XZ", int32_t, { this: Actor });
-Player.prototype.getPermissionLevel = procHacker.js("?getPlayerPermissionLevel@Player@@QEBA?AW4PlayerPermissionLevel@@XZ", int32_t, { this: Player });
+// `Player::getPlayerPermissionLevel` and `Player::setPermissions` are one EnTT lookup and one byte.
+// The 2024 bodies (0x19df780 and 0x19e8b60) are the same four instructions: try_get<AbilitiesComponent>
+// on the entity context, then a tail jump into LayeredAbilities -- getPlayerPermissions, which is
+// `movzbl 1(%rcx),%eax`, and setCommandPermissions, which is `movb %dl,(%rcx)`. bdsx has both halves on
+// 1.26: Player::getAbilities resolves as an address and those two LayeredAbilities names ship as
+// symbols.json `accessors` at +1 and +0 (docs/findings-layouts.md).
+Player.prototype.getPermissionLevel = derived(
+    "?getPlayerPermissionLevel@Player@@QEBA?AW4PlayerPermissionLevel@@XZ",
+    function getPlayerPermissionLevel(this: Player): PlayerPermission {
+        return this.getAbilities().getPlayerPermissions();
+    },
+    () => procHacker.js("?getPlayerPermissionLevel@Player@@QEBA?AW4PlayerPermissionLevel@@XZ", int32_t, { this: Player }),
+);
 Player.prototype.getSkin = procHacker.js("?getSkin@Player@@QEAAAEAVSerializedSkin@@XZ", SerializedSkin, { this: Player });
 Player.prototype.startCooldown = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item);
 Player.prototype.getItemCooldownLeft = procHacker.js("?getItemCooldownLeft@Player@@QEBAHAEBVHashedString@@@Z", int32_t, { this: Player }, HashedString);
 Player.prototype.setGameType = procHacker.js("?setPlayerGameType@ServerPlayer@@UEAAXW4GameType@@@Z", void_t, { this: Player }, int32_t);
-Player.prototype.setPermissions = procHacker.js("?setPermissions@Player@@QEAAXW4CommandPermissionLevel@@@Z", void_t, { this: Player }, int32_t);
+Player.prototype.setPermissions = derived(
+    "?setPermissions@Player@@QEAAXW4CommandPermissionLevel@@@Z",
+    function setPermissions(this: Player, permissions: CommandPermissionLevel): void {
+        this.getAbilities().setCommandPermissions(permissions);
+    },
+    () => procHacker.js("?setPermissions@Player@@QEAAXW4CommandPermissionLevel@@@Z", void_t, { this: Player }, int32_t),
+);
 Player.prototype.setSleeping = procHacker.js("?setSleeping@Player@@UEAAX_N@Z", void_t, { this: Player }, bool_t);
 Player.prototype.isSleeping = procHacker.js("?isSleeping@Player@@UEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isJumping = procHacker.js("?isJumping@Actor@@QEBA_NXZ", bool_t, { this: Player });
@@ -2011,8 +2029,51 @@ Player.prototype.syncAbilities = function () {
     pkt.destruct();
 };
 
-Player.prototype.clearRespawnPosition = procHacker.js("?clearRespawnPosition@Player@@QEAAXXZ", void_t, { this: Player });
-Player.prototype.hasRespawnPosition = procHacker.js("?hasRespawnPosition@Player@@QEBA_NXZ", bool_t, { this: Player });
+// Player's respawn point (docs/findings-layouts.md, "The respawn point"). 1.26 keeps the struct and
+// two of the five functions: setRespawnPosition and setSpawnBlockRespawnPosition resolve as addresses,
+// getSpawnPosition and getSpawnDimension ship as symbols.json `accessors`, and the three below have no
+// body left in the binary. The unset value is INT_MIN in each of the six ints and Undefined (3) in the
+// dimension -- 2024 loads those from globals, 1.26 spells INT_MIN as an overflow test and the dimension
+// as the immediate 3. The fallbacks are the 2024 offsets; 1.26's are a constant -3728 from them.
+const PLAYER_RESPAWN_POINT: Record<string, number> = { respawnBlockPos: 6512, respawnPos: 6524, respawnDimension: 6536 };
+function playerRespawnOffset(member: string): number {
+    return pdbcache.layouts.Player?.[member] ?? PLAYER_RESPAWN_POINT[member];
+}
+// the sentinel the 2024 bodies load from a global and compare against each of x, y and z: it is
+// BlockPos::MIN.x, which both builds ship as a symbols.json `constant` of three INT_MINs
+const RESPAWN_POS_UNSET = BlockPos.MIN.x;
+const RESPAWN_DIM_UNSET = 3; // DimensionId.Undefined
+function respawnPosIsUnset(player: Player, member: string): boolean {
+    const p = player as unknown as StaticPointer;
+    const off = playerRespawnOffset(member);
+    return p.getInt32(off) === RESPAWN_POS_UNSET && p.getInt32(off + 4) === RESPAWN_POS_UNSET && p.getInt32(off + 8) === RESPAWN_POS_UNSET;
+}
+// the 2024 body (0x19e0160) is `!(player_position is unset) && dimension != Undefined`, in that order:
+// it returns false as soon as the three ints are all INT_MIN, and false again if the dimension is 3
+Player.prototype.hasRespawnPosition = derived(
+    "?hasRespawnPosition@Player@@QEBA_NXZ",
+    function hasRespawnPosition(this: Player): boolean {
+        if (respawnPosIsUnset(this, "respawnPos")) return false;
+        return (this as unknown as StaticPointer).getInt32(playerRespawnOffset("respawnDimension")) !== RESPAWN_DIM_UNSET;
+    },
+    () => procHacker.js("?hasRespawnPosition@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
+// the 2024 body (0x19dbcb0) writes INT_MIN over all six ints of player_respawn_point_ and Undefined
+// over the dimension -- nothing else
+Player.prototype.clearRespawnPosition = derived(
+    "?clearRespawnPosition@Player@@QEAAXXZ",
+    function clearRespawnPosition(this: Player): void {
+        const p = this as unknown as StaticPointer;
+        for (const member of ["respawnBlockPos", "respawnPos"]) {
+            const off = playerRespawnOffset(member);
+            p.setInt32(RESPAWN_POS_UNSET, off);
+            p.setInt32(RESPAWN_POS_UNSET, off + 4);
+            p.setInt32(RESPAWN_POS_UNSET, off + 8);
+        }
+        p.setInt32(RESPAWN_DIM_UNSET, playerRespawnOffset("respawnDimension"));
+    },
+    () => procHacker.js("?clearRespawnPosition@Player@@QEAAXXZ", void_t, { this: Player }),
+);
 Player.prototype.setRespawnPosition = procHacker.js(
     "?setRespawnPosition@Player@@QEAAXAEBVBlockPos@@V?$AutomaticID@VDimension@@H@@@Z",
     void_t,
@@ -2020,7 +2081,17 @@ Player.prototype.setRespawnPosition = procHacker.js(
     BlockPos,
     int32_t,
 );
-Player.prototype.setBedRespawnPosition = procHacker.js("?setBedRespawnPosition@Player@@QEAAXAEBVBlockPos@@@Z", void_t, { this: Player }, BlockPos);
+// 1.26 has one function where 2024 had two: the three callers of setSpawnBlockRespawnPosition are
+// 2024's two (SimulatedPlayer::create, RespawnAnchorBlock::_trySetSpawn) plus Player::startSleepInBed,
+// which in 2024 called setBedRespawnPosition. The surviving signature is the three-argument one, so the
+// bed form is that call with the player's own dimension -- which is what the 2024 body used too.
+Player.prototype.setBedRespawnPosition = derived(
+    "?setBedRespawnPosition@Player@@QEAAXAEBVBlockPos@@@Z",
+    function setBedRespawnPosition(this: Player, pos: BlockPos): void {
+        this.setSpawnBlockRespawnPosition(pos, this.getDimensionId());
+    },
+    () => procHacker.js("?setBedRespawnPosition@Player@@QEAAXAEBVBlockPos@@@Z", void_t, { this: Player }, BlockPos),
+);
 Player.prototype.getSpawnDimension = procHacker.js("?getSpawnDimension@Player@@QEBA?AV?$AutomaticID@VDimension@@H@@XZ", int32_t, {
     this: Player,
     structureReturn: true,
@@ -2075,7 +2146,22 @@ Player.prototype.canDestroy = procHacker.js("?canDestroy@Player@@QEBA_NAEBVBlock
 Player.prototype.addExperience = procHacker.js("?addExperience@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
 Player.prototype.addExperienceLevels = procHacker.js("?addLevels@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
 Player.prototype.resetExperienceLevels = procHacker.js("?resetPlayerLevel@Player@@QEAAXXZ", void_t, { this: Player });
-Player.prototype.getXpNeededForNextLevel = procHacker.js("?getXpNeededForNextLevel@Player@@QEBAHXZ", int32_t, { this: Player });
+// the XP curve. The 2024 body (0x19dfcd0) reads the player's level attribute, truncates it, divides by
+// 15 and picks one of three affine formulas by the quotient -- 2L+7 below 15, 5L-38 below 30, 9L-158
+// above -- caching the result in a field beside a dirty flag. 1.26 has no copy of it (the three
+// `leal` forms that spell those constants appear once in 2024 and nowhere in either 1.26 build), and
+// it needs no address: the level is the PlayerLevel attribute bdsx already reads.
+Player.prototype.getXpNeededForNextLevel = derived(
+    "?getXpNeededForNextLevel@Player@@QEBAHXZ",
+    function getXpNeededForNextLevel(this: Player): number {
+        const level = Math.trunc(this.getExperienceLevel());
+        const quotient = Math.trunc(level / 15);
+        if (quotient === 0) return level * 2 + 7;
+        if (quotient === 1) return level * 5 - 38;
+        return level * 9 - 158;
+    },
+    () => procHacker.js("?getXpNeededForNextLevel@Player@@QEBAHXZ", int32_t, { this: Player }),
+);
 Player.prototype.setCursorSelectedItem = procHacker.js("?setCursorSelectedItem@Player@@QEAAXAEBVItemStack@@@Z", void_t, { this: Player }, ItemStack);
 Player.prototype.getCursorSelectedItem = function (): ItemStack {
     return this.getPlayerUIItem(PlayerUISlot.CursorSelected);
