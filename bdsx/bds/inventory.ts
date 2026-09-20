@@ -212,7 +212,29 @@ const StringFromCreativeItemCategoryMap: Record<CreativeItemCategory, string> = 
     [CreativeItemCategory.None]: "none",
 };
 
-@nativeClass(0x88)
+// ItemStackBase's tail was reordered in 1.26 and the class lost eight bytes with it. 2024 put
+// `show_pick_up_`/`was_picked_up_` at +48/+49, behind `pick_up_time_`; 1.26 puts them in the
+// padding at +36/+37 that was already there, and everything after closes up: `can_place_on_`
+// +56 -> +48, `can_destroy_` +88 -> +80, `charged_item_` +128 -> +120, sizeof 136 -> **128**,
+// and every `ItemStack` by value 160 -> **152**. Three routes say so, two of them the binary:
+//   - every ItemStackBase constructor (the functions that store `??_7ItemStackBase@@6B@`) opens
+//     `movw $0x101, 35(%rcx); movb $0, 37(%rcx)` and hands `lea 48(%rcx)` / `lea 80(%rcx)` to its
+//     unwind frame as the two vectors, where 2024's writes `movw $1, 48(%rcx)`;
+//   - the deleting destructor at vftable slot 0 sized-deletes `$128` (ItemStack's: `$152`), and
+//     the real destructor frees +120 and walks 80/88/96 then 48/56/64, where 2024's walks
+//     88/96/104 then 56/64/72;
+//   - Endstone's 1.26 `item_stack_base.h` declares the same order and asserts sizeof 128.
+// The literals below are the 2024 values, used only when the table ships no layouts for the class.
+// docs/findings-containers.md
+const ItemStackBase$layout = pdbcache.layouts.ItemStackBase ?? {};
+const ItemStackBase$size = ItemStackBase$layout.size ?? 0x88;
+const ItemStackBase$pickupTime = ItemStackBase$layout.pickupTime ?? 40;
+const ItemStackBase$showPickup = ItemStackBase$layout.showPickup ?? 48;
+const ItemStackBase$canPlaceOn = ItemStackBase$layout.canPlaceOn ?? 0x38;
+const ItemStackBase$canDestroy = ItemStackBase$layout.canDestroy ?? 0x58;
+const ItemStack$size = pdbcache.layouts.ItemStack?.size ?? 0xa0;
+
+@nativeClass(ItemStackBase$size)
 export class ItemStackBase extends NativeClass {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
@@ -233,13 +255,13 @@ export class ItemStackBase extends NativeClass {
     valid: bool_t;
     //////////////////
 
-    @nativeField(bin64_t)
+    @nativeField(bin64_t, ItemStackBase$pickupTime)
     pickupTime: bin64_t;
-    @nativeField(bool_t) // uint16_t
+    @nativeField(bool_t, ItemStackBase$showPickup) // was_picked_up_ follows it
     showPickup: bool_t;
-    @nativeField(CxxVector.make(BlockLegacy.ref()), 0x38)
+    @nativeField(CxxVector.make(BlockLegacy.ref()), ItemStackBase$canPlaceOn)
     canPlaceOn: CxxVector<BlockLegacy>;
-    @nativeField(CxxVector.make(BlockLegacy.ref()), 0x58)
+    @nativeField(CxxVector.make(BlockLegacy.ref()), ItemStackBase$canDestroy)
     canDestroy: CxxVector<BlockLegacy>;
 
     protected _getItem(): Item {
@@ -493,7 +515,7 @@ export class ItemStackBase extends NativeClass {
     }
 }
 
-@nativeClass(0xa0)
+@nativeClass(ItemStack$size)
 export class ItemStack extends ItemStackBase {
     static readonly EMPTY_ITEM: ItemStack = proc["?EMPTY_ITEM@ItemStack@@2V1@B"].as(ItemStack);
     /**
