@@ -114,6 +114,7 @@ import { HashedString, HashedStringToString } from "./hashedstring";
 import {
     ComponentItem,
     Container,
+    ContainerId,
     EnderChestContainer,
     FillingContainer,
     Inventory,
@@ -3022,10 +3023,50 @@ ItemStackBase.prototype.toDebugString = procHacker.jsv(
 ItemStackBase.prototype.remove = procHacker.js("?remove@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
 ItemStackBase.prototype.addAmount = procHacker.js("?add@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
 ItemStackBase.prototype.setAuxValue = procHacker.js("?setAuxValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t);
-ItemStackBase.prototype.getAuxValue = procHacker.js("?getAuxValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase });
+// ItemStackBase's three readers 1.26 inlined away (next-steps Q1-B-2, docs/findings-containers.md 11).
+// Both offsets they need moved, and both 1.26 builds say the same thing:
+//   `Item::id_` 162 -> **170**. The whole of `ItemStackBase::getId` is inlined into
+//   `ItemStackBase::toString` (40 0x1bbfb40 / 51 0x1a52430) byte for byte -- `mov dx,0xffff;
+//   cmpb $1,35(%rsi); jne -> -1; mov rcx,[rsi+8]; test/je -> 0; mov rcx,[rcx]; test/je -> 0;
+//   movzwl 170(%rcx),%edx` -- which is also why the "@aux" toString prints is `aux_` (the very next
+//   instruction is `movswl 32(%rsi),%edx`) and not getAuxValue().
+//   `Block::data_` 40 -> **288**. Endstone's 1.26 block.h takes DataID out of its old place behind
+//   components_ (its `// DataID data_;` comment is still sitting there) and puts it in the tail,
+//   asserting sizeof(Block) == 296; `??_GBlock` (40 0x1bb6360 / 51 0x2cfae90) frees client_data_ at
+//   +280, which pins the tail at 280 client_data_ / 288 data_ / 290 has_runtime_id_ / 296.
+// The literals below are the 2024 offsets, used only when the table ships no layouts.
+const Item$id = pdbcache.layouts.Item?.id ?? 162;
+const Block$data = pdbcache.layouts.Block?.data ?? 40;
+ItemStackBase.prototype.getAuxValue = derived(
+    "?getAuxValue@ItemStackBase@@QEBAFXZ",
+    // 2024 0x1b5f320 is ten instructions: `block_ && aux_ != 0x7FFF ? block_->data_ : aux_`.
+    function getAuxValue(this: ItemStackBase): number {
+        const self = this as unknown as StaticPointer;
+        const aux = self.getInt16(32);
+        if (aux === 0x7fff) return aux;
+        const block = self.getNullablePointer(24);
+        if (block === null) return aux;
+        return block.getInt16(Block$data);
+    },
+    () => procHacker.js("?getAuxValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isValidAuxValue = procHacker.js("?isValidAuxValue@ItemStackBase@@QEBA_NH@Z", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.getMaxStackSize = procHacker.js("?getMaxStackSize@ItemStackBase@@QEBAEXZ", int32_t, { this: ItemStackBase });
-ItemStackBase.prototype.getId = procHacker.js("?getId@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase });
+ItemStackBase.prototype.getId = derived(
+    "?getId@ItemStackBase@@QEBAFXZ",
+    // 2024 0x1b61150: `!valid_ ? -1 : (item_ && *item_ ? Item::getId(*item_) : 0)`, and
+    // `Item::getId` (2024 0x1cad2e0) is the two-instruction leaf `movzwl 162(%rcx); retq`.
+    function getId(this: ItemStackBase): number {
+        const self = this as unknown as StaticPointer;
+        if (self.getUint8(35) === 0) return -1;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return 0;
+        const item = weak.getNullablePointer(0);
+        if (item === null) return 0;
+        return item.getInt16(Item$id);
+    },
+    () => procHacker.js("?getId@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.getRawNameId = procHacker.js(
     "?getRawNameId@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
     CxxString,
@@ -3100,7 +3141,16 @@ ItemStackBase.prototype.isMusicDiscItem = function () {
     return this.getItem()?.isMusicDisk() === true;
 };
 
-(ItemStackBase.prototype as any)._getItem = procHacker.js("?getItem@ItemStackBase@@QEBAPEBVItem@@XZ", Item, { this: ItemStackBase });
+(ItemStackBase.prototype as any)._getItem = derived(
+    "?getItem@ItemStackBase@@QEBAPEBVItem@@XZ",
+    // 2024 0x1b61370 is the whole function: `rax = [this+8]; return rax ? [rax] : nullptr`.
+    function _getItem(this: ItemStackBase): Item | null {
+        const weak = (this as unknown as StaticPointer).getNullablePointer(8);
+        if (weak === null) return null;
+        return weak.getNullablePointerAs(Item, 0);
+    },
+    () => procHacker.js("?getItem@ItemStackBase@@QEBAPEBVItem@@XZ", Item, { this: ItemStackBase }),
+);
 (ItemStackBase.prototype as any)._setCustomLore = procHacker.js(
     "?setCustomLore@ItemStackBase@@QEAAXAEBV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@@Z",
     void_t,
@@ -3254,6 +3304,49 @@ FillingContainer.prototype.canAdd = procHacker.jsv(
 
 Inventory.prototype.dropSlot = procHacker.js("?dropSlot@Inventory@@QEAAXH_N00@Z", void_t, { this: Inventory }, int32_t, bool_t, bool_t, bool_t);
 
+// PlayerInventory (next-steps Q1-B-3, docs/findings-containers.md 11). Every one of these is a
+// forwarder into `inventory_`, and 1.26 keeps no out-of-line copy of any of them; what each one
+// forwards to is a Container/FillingContainer/Inventory virtual the table already resolves, so bdsx
+// carries the forwarder and the binary keeps doing the work. The 2024 bodies are three to six
+// instructions each -- bail out unless the ContainerID is Inventory(0), then `container->vft[n]()`:
+//
+//   getItem           0x186b450  r8b != 0 -> &EMPTY_ITEM         else vft[7]  getItem
+//   getSelectedItem   0x186c1d0  [this+184] != 0 -> &EMPTY_ITEM  else vft[7](selected_ at +16)
+//   setItem           0x1879a90  r9b != 0 -> return              else vft[13](slot, item, linkEmptySlot)
+//   setSelectedItem   0x187a320  [this+184] != 0 -> return       else vft[12](selected_, item)
+//   clearSlot         0x1869830  r8b != 0 -> return              else vft[43] FillingContainer::clearSlot
+//   add               0x1868540  vft[41] FillingContainer::add          (the bool is dropped)
+//   canAdd            0x1869340  vft[42] FillingContainer::canAdd
+//   getContainerSize  0x186a900  dl != 0 -> 0                    else vft[20] getContainerSize
+//   getFirstEmptySlot 0x186ae40  vft[46] Inventory::getFirstEmptySlot
+//   getHotbarSize     0x186b1c0  tail-jumps FillingContainer::getHotbarSize
+//
+// Those slot numbers are 2024's and none of them is carried: `??_7FillingContainer@@6B@` and
+// `??_7Inventory@@6B@` are searched by name here, and both tables line up with Endstone's
+// filling_container.h / inventory.h declaration order slot for slot on both builds (Container is
+// 44 slots on 1.26.40.8 and 43 on 1.26.51.1 -- docs/findings-containers.md 2 and 3).
+// `FillingContainer::getHotbarSize` is `movl $9,%eax; retq`, the same six bytes in all three builds
+// (2024 0xa27d60, 40 0x14842c0, 51 0x1286390), so bdsx returns the constant.
+const FillingContainer$setItem = procHacker.jsv("??_7FillingContainer@@6B@", "?setItem@FillingContainer@@UEAAXHAEBVItemStack@@@Z", void_t, { this: Container }, int32_t, ItemStack);
+const FillingContainer$setItemWithForceBalance = procHacker.jsv(
+    "??_7FillingContainer@@6B@",
+    "?setItemWithForceBalance@FillingContainer@@UEAAXHAEBVItemStack@@_N@Z",
+    void_t,
+    { this: Container },
+    int32_t,
+    ItemStack,
+    bool_t,
+);
+const FillingContainer$getContainerSize = procHacker.jsv("??_7FillingContainer@@6B@", "?getContainerSize@FillingContainer@@UEBAHXZ", int32_t, { this: Container });
+const FillingContainer$add = procHacker.jsv("??_7FillingContainer@@6B@", "?add@FillingContainer@@UEAA_NAEAVItemStack@@@Z", bool_t, { this: FillingContainer }, ItemStack);
+const FillingContainer$clearSlot = procHacker.jsv("??_7FillingContainer@@6B@", "?clearSlot@FillingContainer@@UEAAXH@Z", void_t, { this: FillingContainer }, int32_t);
+const Inventory$getFirstEmptySlot = procHacker.jsv("??_7Inventory@@6B@", "?getFirstEmptySlot@Inventory@@UEBAHXZ", int32_t, { this: Inventory });
+/** PlayerInventory::selected_container_id_, 2024 +184, 1.26 +176 -- it moved with sizeof(ItemStack) */
+const PlayerInventory$selectedContainerId = pdbcache.layouts.PlayerInventory?.selectedContainerId ?? 184;
+function selectedContainerId(inv: PlayerInventory): number {
+    return (inv as unknown as StaticPointer).getUint8(PlayerInventory$selectedContainerId);
+}
+
 PlayerInventory.prototype.getSlotWithItem = procHacker.js(
     "?getSlotWithItem@PlayerInventory@@QEBAHAEBVItemStack@@_N1@Z",
     int32_t,
@@ -3262,30 +3355,77 @@ PlayerInventory.prototype.getSlotWithItem = procHacker.js(
     bool_t,
     bool_t,
 );
-PlayerInventory.prototype.addItem = procHacker.js("?add@PlayerInventory@@QEAA_NAEAVItemStack@@_N@Z", bool_t, { this: PlayerInventory }, ItemStack, bool_t);
-PlayerInventory.prototype.clearSlot = procHacker.js("?clearSlot@PlayerInventory@@QEAAXHW4ContainerID@@@Z", void_t, { this: PlayerInventory }, int32_t, int32_t);
-PlayerInventory.prototype.getContainerSize = procHacker.js("?getContainerSize@PlayerInventory@@QEBAHW4ContainerID@@@Z", int32_t, { this: PlayerInventory }, int32_t);
-PlayerInventory.prototype.getFirstEmptySlot = procHacker.js("?getFirstEmptySlot@PlayerInventory@@QEBAHXZ", int32_t, { this: PlayerInventory });
-PlayerInventory.prototype.getHotbarSize = procHacker.js("?getHotbarSize@PlayerInventory@@QEBAHXZ", int32_t, { this: PlayerInventory });
-PlayerInventory.prototype.getItem = procHacker.js(
+PlayerInventory.prototype.addItem = derived(
+    "?add@PlayerInventory@@QEAA_NAEAVItemStack@@_N@Z",
+    function addItem(this: PlayerInventory, itemStack: ItemStack, _linkEmptySlot: boolean): boolean {
+        return FillingContainer$add.call(this.container, itemStack);
+    },
+    () => procHacker.js("?add@PlayerInventory@@QEAA_NAEAVItemStack@@_N@Z", bool_t, { this: PlayerInventory }, ItemStack, bool_t),
+);
+PlayerInventory.prototype.clearSlot = derived(
+    "?clearSlot@PlayerInventory@@QEAAXHW4ContainerID@@@Z",
+    function clearSlot(this: PlayerInventory, slot: number, containerId: ContainerId = ContainerId.Inventory): void {
+        if (containerId !== ContainerId.Inventory) return;
+        FillingContainer$clearSlot.call(this.container, slot);
+    },
+    () => procHacker.js("?clearSlot@PlayerInventory@@QEAAXHW4ContainerID@@@Z", void_t, { this: PlayerInventory }, int32_t, int32_t),
+);
+PlayerInventory.prototype.getContainerSize = derived(
+    "?getContainerSize@PlayerInventory@@QEBAHW4ContainerID@@@Z",
+    function getContainerSize(this: PlayerInventory, containerId: ContainerId = ContainerId.Inventory): number {
+        if (containerId !== ContainerId.Inventory) return 0;
+        return FillingContainer$getContainerSize.call(this.container);
+    },
+    () => procHacker.js("?getContainerSize@PlayerInventory@@QEBAHW4ContainerID@@@Z", int32_t, { this: PlayerInventory }, int32_t),
+);
+PlayerInventory.prototype.getFirstEmptySlot = derived(
+    "?getFirstEmptySlot@PlayerInventory@@QEBAHXZ",
+    function getFirstEmptySlot(this: PlayerInventory): number {
+        return Inventory$getFirstEmptySlot.call(this.container);
+    },
+    () => procHacker.js("?getFirstEmptySlot@PlayerInventory@@QEBAHXZ", int32_t, { this: PlayerInventory }),
+);
+PlayerInventory.prototype.getHotbarSize = derived(
+    "?getHotbarSize@PlayerInventory@@QEBAHXZ",
+    function getHotbarSize(this: PlayerInventory): number {
+        return 9;
+    },
+    () => procHacker.js("?getHotbarSize@PlayerInventory@@QEBAHXZ", int32_t, { this: PlayerInventory }),
+);
+PlayerInventory.prototype.getItem = derived(
     "?getItem@PlayerInventory@@QEBAAEBVItemStack@@HW4ContainerID@@@Z",
-    ItemStack,
-    { this: PlayerInventory },
-    int32_t,
-    int32_t,
+    function getItem(this: PlayerInventory, slot: number, containerId: ContainerId = ContainerId.Inventory): ItemStack {
+        if (containerId !== ContainerId.Inventory) return ItemStack.EMPTY_ITEM;
+        return this.container.getItem(slot);
+    },
+    () => procHacker.js("?getItem@PlayerInventory@@QEBAAEBVItemStack@@HW4ContainerID@@@Z", ItemStack, { this: PlayerInventory }, int32_t, int32_t),
 );
-PlayerInventory.prototype.getSelectedItem = procHacker.js("?getSelectedItem@PlayerInventory@@QEBAAEBVItemStack@@XZ", ItemStack, { this: PlayerInventory });
+PlayerInventory.prototype.getSelectedItem = derived(
+    "?getSelectedItem@PlayerInventory@@QEBAAEBVItemStack@@XZ",
+    function getSelectedItem(this: PlayerInventory): ItemStack {
+        if (selectedContainerId(this) !== ContainerId.Inventory) return ItemStack.EMPTY_ITEM;
+        return this.container.getItem(this.getSelectedSlot());
+    },
+    () => procHacker.js("?getSelectedItem@PlayerInventory@@QEBAAEBVItemStack@@XZ", ItemStack, { this: PlayerInventory }),
+);
 PlayerInventory.prototype.selectSlot = procHacker.js("?selectSlot@PlayerInventory@@QEAA_NHW4ContainerID@@@Z", void_t, { this: PlayerInventory }, int32_t, int32_t);
-PlayerInventory.prototype.setItem = procHacker.js(
+PlayerInventory.prototype.setItem = derived(
     "?setItem@PlayerInventory@@QEAAXHAEBVItemStack@@W4ContainerID@@_N@Z",
-    void_t,
-    { this: PlayerInventory },
-    int32_t,
-    ItemStack,
-    int32_t,
-    bool_t,
+    function setItem(this: PlayerInventory, slot: number, itemStack: ItemStack, containerId: ContainerId, linkEmptySlot: boolean): void {
+        if (containerId !== ContainerId.Inventory) return;
+        FillingContainer$setItemWithForceBalance.call(this.container, slot, itemStack, linkEmptySlot);
+    },
+    () =>
+        procHacker.js("?setItem@PlayerInventory@@QEAAXHAEBVItemStack@@W4ContainerID@@_N@Z", void_t, { this: PlayerInventory }, int32_t, ItemStack, int32_t, bool_t),
 );
-PlayerInventory.prototype.setSelectedItem = procHacker.js("?setSelectedItem@PlayerInventory@@QEAAXAEBVItemStack@@@Z", void_t, { this: PlayerInventory }, ItemStack);
+PlayerInventory.prototype.setSelectedItem = derived(
+    "?setSelectedItem@PlayerInventory@@QEAAXAEBVItemStack@@@Z",
+    function setSelectedItem(this: PlayerInventory, itemStack: ItemStack): void {
+        if (selectedContainerId(this) !== ContainerId.Inventory) return;
+        FillingContainer$setItem.call(this.container, this.getSelectedSlot(), itemStack);
+    },
+    () => procHacker.js("?setSelectedItem@PlayerInventory@@QEAAXAEBVItemStack@@@Z", void_t, { this: PlayerInventory }, ItemStack),
+);
 PlayerInventory.prototype.swapSlots = procHacker.js("?swapSlots@PlayerInventory@@QEAAXHH@Z", void_t, { this: PlayerInventory }, int32_t, int32_t);
 const FillingContainer$removeResource = procHacker.js(
     "?removeResource@FillingContainer@@QEAAHAEBVItemStack@@_N1H@Z",
@@ -3302,7 +3442,13 @@ PlayerInventory.prototype.removeResource = function (item: ItemStack, requireExa
     maxCount ??= container.getItemCount(item);
     return FillingContainer$removeResource(container, item, requireExactAux, requireExactData, maxCount);
 };
-PlayerInventory.prototype.canAdd = procHacker.js("?canAdd@PlayerInventory@@QEBA_NAEBVItemStack@@@Z", bool_t, { this: PlayerInventory }, ItemStack);
+PlayerInventory.prototype.canAdd = derived(
+    "?canAdd@PlayerInventory@@QEBA_NAEBVItemStack@@@Z",
+    function canAdd(this: PlayerInventory, itemStack: ItemStack): boolean {
+        return this.container.canAdd(itemStack);
+    },
+    () => procHacker.js("?canAdd@PlayerInventory@@QEBA_NAEBVItemStack@@@Z", bool_t, { this: PlayerInventory }, ItemStack),
+);
 PlayerInventory.prototype.dropAllOnDeath = procHacker.js("?dropAllOnDeath@PlayerInventory@@QEAAX_N@Z", void_t, { this: PlayerInventory }, bool_t);
 
 ItemDescriptor.prototype[NativeType.ctor] = procHacker.js("??0ItemDescriptor@@QEAA@XZ", void_t, { this: ItemDescriptor });
