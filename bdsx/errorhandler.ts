@@ -1,6 +1,7 @@
 import * as path from "path";
 import { asm } from "./assembler";
 import { cgate, ipfilter, jshook, runtimeError, VoidPointer } from "./core";
+import { installCrashCapture, printCrashCapture } from "./crashcapture";
 import { dllraw } from "./dllraw";
 import { events } from "./event";
 import { makefunc } from "./makefunc";
@@ -67,6 +68,11 @@ function getDllNameFromAddress(addr: VoidPointer): string | null {
 
 export function installErrorHandler(): void {
     jshook.setOnError(events.errorFire);
+    try {
+        installCrashCapture();
+    } catch (err) {
+        console.error(`[bdsx] fault capture not installed: ${(err as Error).message}`);
+    }
 
     const origEmit = process.emit;
     process.emit = function (type: string, ...args: any[]) {
@@ -118,7 +124,12 @@ export function installErrorHandler(): void {
                 switch (err.code) {
                     case EXCEPTION_ACCESS_VIOLATION: {
                         const info = err.exceptionInfos;
-                        errmsg += `, Accessing an invalid memory address at 0x${numberWithFillZero(info[1], 16, 16)}`;
+                        // ExceptionInformation[0] is the access kind: 0 read, 1 write, 8 execute (DEP). An
+                        // execute fault means the RIP itself is the bad address -- a call through a wrong
+                        // pointer -- and the stack walker then loses every frame up to the next one it can unwind.
+                        const kind = Number(info[0]);
+                        const kindName = kind === 0 ? "read" : kind === 1 ? "write" : kind === 8 ? "execute" : `kind ${kind}`;
+                        errmsg += `, Accessing an invalid memory address at 0x${numberWithFillZero(info[1], 16, 16)} (${kindName})`;
                         break;
                     }
                 }
@@ -194,6 +205,11 @@ export function installErrorHandler(): void {
                 }
                 console.error(out);
                 insideChakra = false;
+            }
+            try {
+                printCrashCapture(line => console.error(line));
+            } catch (captureErr) {
+                console.error(`[ Fault Capture ] failed: ${(captureErr as Error).message}`);
             }
             console.error("[ JS Stack ]");
         } else {
