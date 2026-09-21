@@ -1842,7 +1842,24 @@ Mob.prototype.isAlive = procHacker.js("?isAlive@Mob@@UEBA_NXZ", bool_t, {
     bool_t,
     bool_t,
 );
-Mob.prototype.getArmorCoverPercentage = procHacker.js("?getArmorCoverPercentage@Mob@@QEBAMXZ", float32_t, { this: Mob });
+// 1.26 has no out-of-line copy: no caller of ActorEquipment::getAllArmor converts an int to a
+// float, and no function in either build holds both `cvtdq2ps` and the ActorEquipmentComponent
+// hash. 2024's body (0x19119d0, 201 bytes) is entirely `getAllArmor(ctx)` -- which is
+// `getArmorContainer(ctx)->getSlots()` -- then 0.25f for every piece whose isNull() is false,
+// so bdsx counts the same slots of the same container. docs/findings-armor.md.
+Mob.prototype.getArmorCoverPercentage = derived(
+    "?getArmorCoverPercentage@Mob@@QEBAMXZ",
+    function getArmorCoverPercentage(this: Mob): float32_t {
+        const slots = this.getArmorContainer().getSlots();
+        let worn = 0;
+        for (const stack of slots) {
+            if (!stack.isNull()) worn++;
+        }
+        slots.destruct();
+        return worn * 0.25;
+    },
+    () => procHacker.js("?getArmorCoverPercentage@Mob@@QEBAMXZ", float32_t, { this: Mob }),
+);
 Mob.prototype.getToughnessValue = function () {
     let toughness = 0;
     const armors = this.getArmorContainer();
