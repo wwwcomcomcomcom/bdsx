@@ -998,11 +998,18 @@ Actor.prototype.load = function (tag: CompoundTag | NBT.Compound): void {
 };
 
 // 1.26: Actor::hurt(ActorDamageSource const&, float, P const&) returning an ActorHurtResult through a
-// hidden pointer, where P is the 24-byte struct Mob::_hurt takes (knock at +0, ignite at +1; see
+// hidden pointer, where P is HurtEffectsSettings, the 24-byte struct Mob::_hurt takes (Endstone's
+// hurt_effects_settings.h: knockback at +0, ignition at +1, receive_damage at +2, an optional<Vec3>
+// aim direction at +4 whose engaged flag is at +16, and an extra knockback power at +20; see
 // event_impl/entityevent.ts). The result: a variant<bool, float> -- value at +0, index at +4 -- and an
 // allow-knockback flag at +8; "was hurt" is the bool when the variant holds one and true when it holds
-// the damage dealt. The rest of P is left zero here, which no caller in the binary was seen to do:
-// this path has not been executed (docs/findings-slots.md, "Changed signatures").
+// the damage dealt. Actor::hurt reads that index and calls the bad_variant_access thrower (an int3,
+// exit 0x80000003) on anything but 0 or 1, so the struct has to be the shape the callee expects.
+// receive_damage is the field 2024 did not have. BDS's own caller (1.26.40.8 0x82e6010) writes only
+// the first two bytes as a word, the engaged flag at +16 and the extra power at +20, and leaves
+// +2..+15 as stack garbage -- and the struct the entityHurt hook is handed carries a non-zero +2 on
+// both builds, so that is what bdsx writes. It is not load-bearing: Mob::_hurt called directly with
+// +2 = 0 still dealt the damage (q2hu40/q2hu51). What was fatal was the source, not this struct.
 (Actor.prototype as any).hurt_ =
     "bdsx:Actor::hurt" in proc
         ? (() => {
@@ -1014,6 +1021,7 @@ Actor.prototype.load = function (tag: CompoundTag | NBT.Compound): void {
                   params.fill(0, 24);
                   params.setBoolean(knock, 0);
                   params.setBoolean(ignite, 1);
+                  params.setBoolean(true, 2);
                   hurt.call(this, result, source, damage, params);
                   return result.getUint8(4) === 0 ? result.getUint8(0) !== 0 : true;
               };
@@ -1730,19 +1738,52 @@ ShooterComponent.prototype.shootProjectile = procHacker.js(
 );
 
 Mob.prototype.getArmorValue = procHacker.jsv("??_7Mob@@6B@", "?getArmorValue@Mob@@UEBAHXZ", int32_t, { this: Actor });
-Mob.prototype.knockback = procHacker.jsv(
-    "??_7Mob@@6B@",
-    "?knockback@Mob@@UEAAXPEAVActor@@HMMMMM@Z",
-    void_t,
-    { this: Mob },
-    Actor,
-    int32_t,
-    float32_t,
-    float32_t,
-    float32_t,
-    float32_t,
-    float32_t,
-);
+// 1.26: Mob::knockback(Actor*, float damage, float xd, float zd, KnockbackParameters const&). The
+// three values that used to follow xd and zd in registers are fields of a 28-byte struct (Endstone's
+// knockback_parameters.h: the Vec2 power at +0, the vertical velocity cap at +8, the slowdown scale
+// at +12, three bools at +16..18, an extra power at +20 and its approach at +24). Called with the
+// 2024 prototype the callee reads a float where it wants that pointer. The event has hooked the
+// present name since 2026-09-19 (event_impl/entityevent.ts); this is the call side, which had not
+// been changed. The slowdown is the value BDS itself passes, read out of the struct in
+// entityKnockback on both builds (docs/findings-slots.md, "Changed signatures").
+const KNOCKBACK_PARAMETERS_SIZE = 28;
+const KNOCKBACK_SLOWDOWN = 0.5;
+const KNOCKBACK_1_26 = "?knockback@Mob@@UEAAXPEAVActor@@MMMAEBUKnockbackParameters@@@Z";
+if (KNOCKBACK_1_26 in proc) {
+    const knockback = procHacker.jsv("??_7Mob@@6B@", KNOCKBACK_1_26, void_t, { this: Mob }, Actor, float32_t, float32_t, float32_t, StaticPointer);
+    Mob.prototype.knockback = function (
+        this: Mob,
+        source: Actor | null,
+        damage: number,
+        xd: number,
+        zd: number,
+        power: number,
+        height: number,
+        heightCap: number,
+    ): void {
+        const params = new AllocatedPointer(KNOCKBACK_PARAMETERS_SIZE);
+        params.fill(0, KNOCKBACK_PARAMETERS_SIZE);
+        params.setFloat32(power, 0);
+        params.setFloat32(height, 4);
+        params.setFloat32(heightCap, 8);
+        params.setFloat32(KNOCKBACK_SLOWDOWN, 12);
+        (knockback as any).call(this, source, damage, xd, zd, params);
+    };
+} else {
+    Mob.prototype.knockback = procHacker.jsv(
+        "??_7Mob@@6B@",
+        "?knockback@Mob@@UEAAXPEAVActor@@HMMMMM@Z",
+        void_t,
+        { this: Mob },
+        Actor,
+        int32_t,
+        float32_t,
+        float32_t,
+        float32_t,
+        float32_t,
+        float32_t,
+    );
+}
 Mob.prototype.getSpeed = procHacker.js("?getSpeed@Mob@@UEBAMXZ", float32_t, {
     this: Mob,
 });
@@ -2009,12 +2050,39 @@ ActorDefinitionIdentifier.constructWith = function (type: string | number): Acto
     return identifier;
 };
 
-const ActorDamageSource$ActorDamageSource = procHacker.js("??0ActorDamageSource@@QEAA@W4ActorDamageCause@@@Z", void_t, null, ActorDamageSource, int32_t);
-ActorDamageSource.create = function (cause): ActorDamageSource {
-    const source = new ActorDamageSource(true);
-    ActorDamageSource$ActorDamageSource(source, cause);
-    return source;
-};
+// 1.26: ActorDamageSource is 48 bytes, not 16. The vftable's slot 0 destroys a std::string at +16
+// (data +16, size +32, capacity +40), resets it to the empty small string and sized-deletes 48, on
+// both builds, byte for byte; 2024's slot 0 sized-deleted 16 and destroyed nothing. The constructor
+// is gone from both builds, so bdsx builds the object: the vftable, the cause, and the empty small
+// string the destructor itself leaves behind (size 0, capacity 15). Handing Mob::_hurt a 16-byte
+// one makes it read that string out of the next heap block -- an access violation on 1.26.40.8 and
+// a bad_variant_access int3 on 1.26.51.1 (docs/findings-slots.md, "Changed signatures").
+// The declared class size stays 0x10: the derived sources' 1.26 layouts have not been measured, and
+// raising the base would move their fields by guess. The buffer is held by the object that views it.
+const ACTOR_DAMAGE_SOURCE_VFTABLE = "??_7ActorDamageSource@@6B@";
+const ACTOR_DAMAGE_SOURCE_SIZE = 0x30;
+ActorDamageSource.create = derived(
+    "??0ActorDamageSource@@QEAA@W4ActorDamageCause@@@Z",
+    function (cause: ActorDamageCause): ActorDamageSource {
+        if (!(ACTOR_DAMAGE_SOURCE_VFTABLE in proc)) throw Error(`ActorDamageSource.create needs ${ACTOR_DAMAGE_SOURCE_VFTABLE}, which this build's table does not have`);
+        const buf = new AllocatedPointer(ACTOR_DAMAGE_SOURCE_SIZE);
+        buf.fill(0, ACTOR_DAMAGE_SOURCE_SIZE);
+        buf.setPointer(proc[ACTOR_DAMAGE_SOURCE_VFTABLE], 0);
+        buf.setInt32(cause, 8);
+        buf.setInt32(15, 40); // std::string capacity: the small-string buffer at +16, size already 0
+        const source = buf.as(ActorDamageSource);
+        (source as any).$buffer = buf; // the view does not own the memory; this reference does
+        return source;
+    },
+    () => {
+        const ctor = procHacker.js("??0ActorDamageSource@@QEAA@W4ActorDamageCause@@@Z", void_t, null, ActorDamageSource, int32_t);
+        return function (cause: ActorDamageCause): ActorDamageSource {
+            const source = new ActorDamageSource(true);
+            ctor(source, cause);
+            return source;
+        };
+    },
+);
 
 const ActorDamageByActorSource$vftable = proc["??_7ActorDamageByActorSource@@6B@"];
 const ActorDamageByChildActorSource$vftable = proc["??_7ActorDamageByChildActorSource@@6B@"];

@@ -19,7 +19,20 @@ import { Wrapper } from "../pointer";
 import { procHacker } from "../prochacker";
 
 export class EntityHurtEvent {
-    constructor(public entity: Mob, public damage: number, public damageSource: ActorDamageSource, public knock: boolean, public ignite: boolean) {}
+    constructor(
+        public entity: Mob,
+        public damage: number,
+        public damageSource: ActorDamageSource,
+        public knock: boolean,
+        public ignite: boolean,
+        /**
+         * 1.26 and later: the caller's HurtEffectsSettings (24 bytes, read-only), of which knock and
+         * ignite above are the first two bytes. Endstone's hurt_effects_settings.h names the rest:
+         * receive_damage at +2, an optional<Vec3> aim direction at +4 (engaged flag at +16) and an
+         * extra knockback power at +20. null on builds with the 2024 signature.
+         */
+        public parameters: StaticPointer | null = null,
+    ) {}
 }
 
 export class EntityHealthChangeEvent {
@@ -297,7 +310,7 @@ events.entityHurt.setInstaller(() => {
             (entity, result, actorDamageSource, damage, params) => {
                 const knock = params.getBoolean(0),
                     ignite = params.getBoolean(1);
-                const event = new EntityHurtEvent(entity, damage, actorDamageSource, knock, ignite);
+                const event = new EntityHurtEvent(entity, damage, actorDamageSource, knock, ignite, params);
                 let canceled = false;
                 // the caller reads the struct this returns a pointer to: a listener that throws must not
                 // leave the hook without one, so the error is reported and the hurt goes ahead unchanged
