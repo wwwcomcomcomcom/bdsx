@@ -3612,19 +3612,54 @@ const FillingContainer$getContainerSize = procHacker.jsv("??_7FillingContainer@@
 const FillingContainer$add = procHacker.jsv("??_7FillingContainer@@6B@", "?add@FillingContainer@@UEAA_NAEAVItemStack@@@Z", bool_t, { this: FillingContainer }, ItemStack);
 const FillingContainer$clearSlot = procHacker.jsv("??_7FillingContainer@@6B@", "?clearSlot@FillingContainer@@UEAAXH@Z", void_t, { this: FillingContainer }, int32_t);
 const Inventory$getFirstEmptySlot = procHacker.jsv("??_7Inventory@@6B@", "?getFirstEmptySlot@Inventory@@UEBAHXZ", int32_t, { this: Inventory });
+// The three FillingContainer members the first Q1-B-3 batch left open (docs/findings-containers.md
+// 12). 1.26 made `removeResource` and `swapSlots` the first two of FillingContainer's nine own
+// virtuals -- 2024's table has six own slots and neither of these was one of them -- so they carry a
+// `U` decoration here and are reached through the table by name, never by slot number.
+// `getSlotWithItem` is non-virtual in both and 1.26 still keeps it out of line.
+const FillingContainer$removeResource = procHacker.jsv(
+    "??_7FillingContainer@@6B@",
+    "?removeResource@FillingContainer@@UEAAHAEBVItemStack@@_N1H@Z",
+    int32_t,
+    { this: FillingContainer },
+    ItemStack,
+    bool_t,
+    bool_t,
+    int32_t,
+);
+const FillingContainer$swapSlots = procHacker.jsv(
+    "??_7FillingContainer@@6B@",
+    "?swapSlots@FillingContainer@@UEAAXHH@Z",
+    void_t,
+    { this: FillingContainer },
+    int32_t,
+    int32_t,
+);
+const FillingContainer$getSlotWithItem = procHacker.js(
+    "?getSlotWithItem@FillingContainer@@QEBAHAEBVItemStack@@_N1@Z",
+    int32_t,
+    { this: FillingContainer },
+    ItemStack,
+    bool_t,
+    bool_t,
+);
+/** FillingContainer::HOTBAR_SIZE -- `movl $9,%eax; retq` in all three builds (2024 0xa27d60) */
+const HOTBAR_SIZE = 9;
+/** PlayerInventory::selected_, +16 in every build; 2024's getSelectedItemSlot and 1.26's inlined copies read it there */
+const PlayerInventory$selected = pdbcache.layouts.PlayerInventory?.selected ?? 16;
 /** PlayerInventory::selected_container_id_, 2024 +184, 1.26 +176 -- it moved with sizeof(ItemStack) */
 const PlayerInventory$selectedContainerId = pdbcache.layouts.PlayerInventory?.selectedContainerId ?? 184;
 function selectedContainerId(inv: PlayerInventory): number {
     return (inv as unknown as StaticPointer).getUint8(PlayerInventory$selectedContainerId);
 }
 
-PlayerInventory.prototype.getSlotWithItem = procHacker.js(
+PlayerInventory.prototype.getSlotWithItem = derived(
     "?getSlotWithItem@PlayerInventory@@QEBAHAEBVItemStack@@_N1@Z",
-    int32_t,
-    { this: PlayerInventory },
-    ItemStack,
-    bool_t,
-    bool_t,
+    function getSlotWithItem(this: PlayerInventory, itemStack: ItemStack, checkAux: boolean, checkData: boolean): number {
+        // 2024's body (0x186c250) is `movq 192(%rcx),%rcx; jmp FillingContainer::getSlotWithItem`.
+        return FillingContainer$getSlotWithItem.call(this.container, itemStack, checkAux, checkData);
+    },
+    () => procHacker.js("?getSlotWithItem@PlayerInventory@@QEBAHAEBVItemStack@@_N1@Z", int32_t, { this: PlayerInventory }, ItemStack, bool_t, bool_t),
 );
 PlayerInventory.prototype.addItem = derived(
     "?add@PlayerInventory@@QEAA_NAEAVItemStack@@_N@Z",
@@ -3679,7 +3714,19 @@ PlayerInventory.prototype.getSelectedItem = derived(
     },
     () => procHacker.js("?getSelectedItem@PlayerInventory@@QEBAAEBVItemStack@@XZ", ItemStack, { this: PlayerInventory }),
 );
-PlayerInventory.prototype.selectSlot = procHacker.js("?selectSlot@PlayerInventory@@QEAA_NHW4ContainerID@@@Z", void_t, { this: PlayerInventory }, int32_t, int32_t);
+PlayerInventory.prototype.selectSlot = derived(
+    "?selectSlot@PlayerInventory@@QEAA_NHW4ContainerID@@@Z",
+    function selectSlot(this: PlayerInventory, slot: number, containerId: ContainerId = ContainerId.Inventory): void {
+        // 2024's body (0x1878380) is the hotbar bound check and two stores: it calls
+        // FillingContainer::getHotbarSize on inventory_ (the constant 9), bails on `slot >= that`
+        // and on `slot < 0`, then writes selected_ and selected_container_id_ and returns true.
+        if (slot < 0 || slot >= HOTBAR_SIZE) return;
+        const self = this as unknown as StaticPointer;
+        self.setInt32(slot, PlayerInventory$selected);
+        self.setUint8(containerId, PlayerInventory$selectedContainerId);
+    },
+    () => procHacker.js("?selectSlot@PlayerInventory@@QEAA_NHW4ContainerID@@@Z", void_t, { this: PlayerInventory }, int32_t, int32_t),
+);
 PlayerInventory.prototype.setItem = derived(
     "?setItem@PlayerInventory@@QEAAXHAEBVItemStack@@W4ContainerID@@_N@Z",
     function setItem(this: PlayerInventory, slot: number, itemStack: ItemStack, containerId: ContainerId, linkEmptySlot: boolean): void {
@@ -3697,21 +3744,18 @@ PlayerInventory.prototype.setSelectedItem = derived(
     },
     () => procHacker.js("?setSelectedItem@PlayerInventory@@QEAAXAEBVItemStack@@@Z", void_t, { this: PlayerInventory }, ItemStack),
 );
-PlayerInventory.prototype.swapSlots = procHacker.js("?swapSlots@PlayerInventory@@QEAAXHH@Z", void_t, { this: PlayerInventory }, int32_t, int32_t);
-const FillingContainer$removeResource = procHacker.js(
-    "?removeResource@FillingContainer@@QEAAHAEBVItemStack@@_N1H@Z",
-    int32_t,
-    null,
-    FillingContainer,
-    ItemStack,
-    bool_t,
-    bool_t,
-    int32_t,
+PlayerInventory.prototype.swapSlots = derived(
+    "?swapSlots@PlayerInventory@@QEAAXHH@Z",
+    function swapSlots(this: PlayerInventory, primarySlot: number, secondarySlot: number): void {
+        // 2024's body (0x187bc60) is `movq 192(%rcx),%rcx; jmp FillingContainer::swapSlots`.
+        FillingContainer$swapSlots.call(this.container, primarySlot, secondarySlot);
+    },
+    () => procHacker.js("?swapSlots@PlayerInventory@@QEAAXHH@Z", void_t, { this: PlayerInventory }, int32_t, int32_t),
 );
 PlayerInventory.prototype.removeResource = function (item: ItemStack, requireExactAux: boolean = true, requireExactData: boolean = false, maxCount?: int32_t) {
     const container = this.container;
     maxCount ??= container.getItemCount(item);
-    return FillingContainer$removeResource(container, item, requireExactAux, requireExactData, maxCount);
+    return FillingContainer$removeResource.call(container, item, requireExactAux, requireExactData, maxCount);
 };
 PlayerInventory.prototype.canAdd = derived(
     "?canAdd@PlayerInventory@@QEBA_NAEBVItemStack@@@Z",
