@@ -471,6 +471,14 @@ export class Player extends Mob implements HasStorage {
     }
 
     /**
+     * Marks the player as initialized -- the byte {@link isPlayerInitialized} reads last.
+     * BDS itself sets it when it handles the SetLocalPlayerAsInitialized packet.
+     */
+    setLocalPlayerAsInitialized(): void {
+        abstract();
+    }
+
+    /**
      * Get block destroy progress
      * @param block
      */

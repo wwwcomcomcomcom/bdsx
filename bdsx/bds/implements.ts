@@ -1399,7 +1399,28 @@ Actor.prototype.hasTotemEquipped = derived(
     () => procHacker.js("?hasTotemEquipped@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
 );
 (Actor.prototype as any).hasFamily_ = procHacker.js("?hasFamily@Actor@@QEBA_NAEBVHashedString@@@Z", bool_t, { this: Actor }, HashedString);
-Actor.prototype.distanceTo = procHacker.js("?distanceTo@Actor@@QEBAMAEBVVec3@@@Z", float32_t, { this: Actor }, Vec3);
+// `?distanceTo@Actor@@` and `?getSpeedInMetersPerSecond@Actor@@` are the same two reads: 2024 takes
+// the StateVectorComponent* at Actor+656 and works on `pos` (+0) and, for the speed, `pos_prev` (+12).
+// 1.26 has no out-of-line copy of either, and it does not need one -- that pointer is Actor+536 here,
+// which is exactly what the execution-confirmed `?getPosition@Actor@@` accessor returns, and Endstone's
+// state_vector_component.h keeps pos / pos_prev / pos_delta at +0 / +12 / +24. The speed is the distance
+// the actor moved in one tick times 20 ticks per second, the constant 2024 multiplies by.
+// docs/findings-layouts.md, "The state vector".
+const ACTOR_STATE_VECTOR = 536; // the 2024 fallback is a different offset, so there is no useful literal
+function actorStateVector(actor: Actor): StaticPointer {
+    return (actor as unknown as StaticPointer).getPointer(pdbcache.layouts.Actor?.stateVector ?? ACTOR_STATE_VECTOR);
+}
+function length3(x: number, y: number, z: number): number {
+    return Math.sqrt(x * x + y * y + z * z);
+}
+Actor.prototype.distanceTo = derived(
+    "?distanceTo@Actor@@QEBAMAEBVVec3@@@Z",
+    function distanceTo(this: Actor, to: Vec3): number {
+        const from = this.getPosition();
+        return length3(from.x - to.x, from.y - to.y, from.z - to.z);
+    },
+    () => procHacker.js("?distanceTo@Actor@@QEBAMAEBVVec3@@@Z", float32_t, { this: Actor }, Vec3),
+);
 // Actor's last-hurt block (docs/findings-layouts.md, "The last-hurt block"). 1.26 keeps every field and
 // no getter at all: six of the nine ship as symbols.json `accessors`, and the three that name another
 // actor are an ActorUniqueID, not a pointer, so the getter is one Level::fetchEntity over the id -- which
@@ -1444,7 +1465,14 @@ Actor.prototype.wasLastHitByPlayer = derived(
     },
     () => procHacker.js("?wasLastHitByPlayer@Actor@@QEAA_NXZ", bool_t, { this: Actor }),
 );
-Actor.prototype.getSpeedInMetersPerSecond = procHacker.js("?getSpeedInMetersPerSecond@Actor@@QEBAMXZ", float32_t, { this: Actor });
+Actor.prototype.getSpeedInMetersPerSecond = derived(
+    "?getSpeedInMetersPerSecond@Actor@@QEBAMXZ",
+    function getSpeedInMetersPerSecond(this: Actor): number {
+        const v = actorStateVector(this);
+        return length3(v.getFloat32(0) - v.getFloat32(12), v.getFloat32(4) - v.getFloat32(16), v.getFloat32(8) - v.getFloat32(20)) * 20;
+    },
+    () => procHacker.js("?getSpeedInMetersPerSecond@Actor@@QEBAMXZ", float32_t, { this: Actor }),
+);
 (Actor.prototype as any).fetchNearbyActorsSorted_ = procHacker.js(
     "?fetchNearbyActorsSorted@Actor@@QEAA?AV?$vector@UDistanceSortedActor@@V?$allocator@UDistanceSortedActor@@@std@@@std@@AEBVVec3@@W4ActorType@@@Z",
     CxxVector.make(DistanceSortedActor),
@@ -2496,7 +2524,19 @@ Player.prototype.getUuid = function () {
 };
 Player.prototype.forceAllowEating = procHacker.js("?forceAllowEating@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.getSpeed = procHacker.js("?getSpeed@Player@@UEBAMXZ", float32_t, { this: Player });
-Player.prototype.hasOpenContainer = procHacker.js("?hasOpenContainer@Player@@QEBA_NXZ", bool_t, { this: Player });
+// `?hasOpenContainer@Player@@` is `cmpq $0, <the container manager>; setne` and 1.26 kept no copy of it.
+// The member is Player+1440 here (2024: +1872) -- ?setContainerManager@Player@@ stores there on both
+// builds, and ?canOpenContainerScreen@Player@@, whose second step is the execution-confirmed
+// ?isInsidePortal@Actor@@, opens by testing it. docs/findings-layouts.md, "The container manager".
+const PLAYER_CONTAINER_MANAGER = 1872; // the 2024 offset, used only if a build resolves no layout
+Player.prototype.hasOpenContainer = derived(
+    "?hasOpenContainer@Player@@QEBA_NXZ",
+    function hasOpenContainer(this: Player): boolean {
+        const off = pdbcache.layouts.Player?.containerManager ?? PLAYER_CONTAINER_MANAGER;
+        return (this as unknown as StaticPointer).getNullablePointer(off) !== null;
+    },
+    () => procHacker.js("?hasOpenContainer@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 // `Player::isHungry` is one comparison on the hunger attribute. The 2024 body (0x19e1950) loads
 // `Player::HUNGER`, calls Actor::getAttribute, then getCurrentValue into xmm6 and getMaxValue into
 // xmm0 and returns `comiss %xmm6,%xmm0; seta` -- max above current. bdsx reaches the instance through
@@ -2526,6 +2566,19 @@ Player.prototype.isHurt = derived(
 Player.prototype.isSpawned = procHacker.js("?isSpawned@Player@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isLoading = procHacker.jsv("??_7ServerPlayer@@6B@", "?isLoading@ServerPlayer@@UEBA_NXZ", bool_t, { this: Player });
 Player.prototype.isPlayerInitialized = procHacker.jsv("??_7ServerPlayer@@6B@", "?isPlayerInitialized@ServerPlayer@@UEBA_NXZ", bool_t, { this: Player });
+// `?setLocalPlayerAsInitialized@ServerPlayer@@` is one byte store (2024: `movb $1,7754(%rcx); retq`) and
+// 1.26 inlined it into the packet handler -- which is why events.playerJoin already falls back to hooking
+// that handler. The offset is the byte ServerPlayer::isPlayerInitialized returns, the last of its four
+// steps, and that function this table does resolve on both builds. It is the one offset that differs
+// between them. docs/findings-layouts.md, "The initialized byte".
+const SERVER_PLAYER_INITIALIZED = 7754; // 2024's; both 1.26 builds ship their own in layouts.ServerPlayer
+Player.prototype.setLocalPlayerAsInitialized = derived(
+    "?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ",
+    function setLocalPlayerAsInitialized(this: Player): void {
+        (this as unknown as StaticPointer).setUint8(1, pdbcache.layouts.ServerPlayer?.localPlayerInitialized ?? SERVER_PLAYER_INITIALIZED);
+    },
+    () => procHacker.js("?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ", void_t, { this: Player }),
+);
 Player.prototype.getDestroyProgress = procHacker.js("?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block);
 Player.prototype.respawn = procHacker.js("?respawn@Player@@UEAAXXZ", void_t, {
     this: Player,
