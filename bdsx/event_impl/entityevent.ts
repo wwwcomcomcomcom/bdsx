@@ -38,10 +38,18 @@ export class EntityStartSwimmingEvent {
     constructor(public entity: Actor) {}
 }
 export class EntityStartRidingEvent {
-    constructor(public entity: Actor, public ride: Actor) {}
+    /** @param force 1.26's third argument: skip the vehicle's canAddPassenger check (docs/findings-riding.md) */
+    constructor(public entity: Actor, public ride: Actor, public force: boolean = false) {}
 }
 export class EntityStopRidingEvent {
-    constructor(public entity: Actor, public exitFromRider: boolean, public actorIsBeingDestroyed: boolean, public switchingRides: boolean) {}
+    /** @param isBeingTeleported 1.26's fourth argument (docs/findings-riding.md) */
+    constructor(
+        public entity: Actor,
+        public exitFromRider: boolean,
+        public actorIsBeingDestroyed: boolean,
+        public switchingRides: boolean,
+        public isBeingTeleported: boolean = false,
+    ) {}
 }
 export class EntitySneakEvent {
     constructor(public entity: Actor, public isSneaking: boolean) {}
@@ -379,28 +387,37 @@ events.entityStartSwimming.setInstaller(() => {
     const _onPlayerStartSwimming = procHacker.hooking("?startSwimming@Player@@UEAAXXZ", void_t, null, Player)(onPlayerStartSwimming);
 });
 
+// 1.26 added a third argument to Actor::startRiding and a fourth to Actor::stopRiding, so both hooks
+// take and pass on what the caller really put in the registers (docs/findings-riding.md). Hooking the
+// 2024 prototypes would call the originals with a register the caller's value never reached.
 events.entityStartRiding.setInstaller(() => {
-    function onEntityStartRiding(entity: Actor, ride: Actor): boolean {
-        const event = new EntityStartRidingEvent(entity, ride);
+    function onEntityStartRiding(entity: Actor, ride: Actor, force: boolean): boolean {
+        const event = new EntityStartRidingEvent(entity, ride, force);
         const canceled = events.entityStartRiding.fire(event) === CANCEL;
         if (canceled) {
             return false;
         }
-        return _onEntityStartRiding(event.entity, event.ride);
+        return _onEntityStartRiding(event.entity, event.ride, event.force);
     }
-    const _onEntityStartRiding = procHacker.hooking("?startRiding@Actor@@UEAA_NAEAV1@@Z", bool_t, null, Actor, Actor)(onEntityStartRiding);
+    const _onEntityStartRiding = procHacker.hooking("?startRiding@Actor@@UEAA_NAEAV1@_N@Z", bool_t, null, Actor, Actor, bool_t)(onEntityStartRiding);
 });
 
 events.entityStopRiding.setInstaller(() => {
-    function onEntityStopRiding(entity: Actor, exitFromRider: boolean, actorIsBeingDestroyed: boolean, switchingRides: boolean): void {
-        const event = new EntityStopRidingEvent(entity, exitFromRider, actorIsBeingDestroyed, switchingRides);
+    function onEntityStopRiding(
+        entity: Actor,
+        exitFromRider: boolean,
+        actorIsBeingDestroyed: boolean,
+        switchingRides: boolean,
+        isBeingTeleported: boolean,
+    ): void {
+        const event = new EntityStopRidingEvent(entity, exitFromRider, actorIsBeingDestroyed, switchingRides, isBeingTeleported);
         const canceled = events.entityStopRiding.fire(event) === CANCEL;
         if (canceled) {
             return;
         }
-        return _onEntityStopRiding(event.entity, event.exitFromRider, event.actorIsBeingDestroyed, event.switchingRides);
+        return _onEntityStopRiding(event.entity, event.exitFromRider, event.actorIsBeingDestroyed, event.switchingRides, event.isBeingTeleported);
     }
-    const _onEntityStopRiding = procHacker.hooking("?stopRiding@Actor@@QEAAX_N00@Z", void_t, null, Actor, bool_t, bool_t, bool_t)(onEntityStopRiding);
+    const _onEntityStopRiding = procHacker.hooking("?stopRiding@Actor@@QEAAX_N000@Z", void_t, null, Actor, bool_t, bool_t, bool_t, bool_t)(onEntityStopRiding);
 });
 
 events.entitySneak.setInstaller(() => {

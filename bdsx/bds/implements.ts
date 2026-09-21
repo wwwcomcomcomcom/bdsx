@@ -891,7 +891,14 @@ Actor.prototype.getHealth = function () {
 Actor.prototype.getMaxHealth = function () {
     return ActorAttribute.getMaxHealth(this.ctxbase);
 };
-Actor.prototype.startRiding = procHacker.jsv("??_7Actor@@6B@", "?startRiding@Actor@@UEAA_NAEAV1@@Z", bool_t, { this: Actor }, Actor);
+// 1.26 gave Actor::startRiding a third argument: a bool that, when set, skips the virtual
+// canAddPassenger call on the vehicle that 2024 made unconditionally (docs/findings-riding.md). The
+// 2024 decoration would hand makefunc a two-argument prototype for a three-argument function, so the
+// address ships under the 1.26 name and bdsx's one-argument API passes the bool 2024 behaved as.
+const Actor$startRiding = procHacker.jsv("??_7Actor@@6B@", "?startRiding@Actor@@UEAA_NAEAV1@_N@Z", bool_t, { this: Actor }, Actor, bool_t);
+Actor.prototype.startRiding = function startRiding(this: Actor, ride: Actor): boolean {
+    return Actor$startRiding.call(this, ride, false);
+};
 
 const Actor$save = procHacker.js("?save@Actor@@UEBA_NAEAVCompoundTag@@@Z", bool_t, { this: Actor }, CompoundTag);
 Actor.prototype.save = function (tag?: CompoundTag): any {
@@ -1128,9 +1135,156 @@ Actor.prototype.isAlive = procHacker.js("?isAlive@Actor@@UEBA_NXZ", bool_t, {
     this: Actor,
 });
 Actor.prototype.isInvisible = procHacker.js("?isInvisible@Actor@@UEBA_NXZ", bool_t, { this: Actor });
-(Actor.prototype as any)._isRiding = procHacker.js("?isRiding@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-(Actor.prototype as any)._isRidingOn = procHacker.js("?isRiding@Actor@@QEBA_NPEAV1@@Z", bool_t, { this: Actor }, Actor);
-(Actor.prototype as any)._isPassenger = procHacker.js("?isPassenger@Actor@@QEBA_NAEBV1@@Z", bool_t, { this: Actor }, Actor);
+// --- EnTT component lookup, and the riding family on top of it (docs/findings-riding.md) ---
+// 1.26 has no out-of-line Actor::getVehicle / isRiding / isPassenger at all: every caller inlined the
+// component lookup, and the ActorRiding free functions those bodies called in 2024 were leaves the
+// inliner took with them. What survived is the lookup itself, and it is the same instructions in every
+// one of them -- Actor::getEntityTypeId, Actor::getRuntimeID and Player::getAbilities differ only in the
+// component's size -- so bdsx walks it here, over offsets the table ships as layouts.EnTTRegistry.
+// The label is entt::type_hash, which in these builds is FNV-1a-32 of the bare component name
+// (docs/findings-components.md): fnv1a("PassengerComponent") = 0x98e40c0e on both 1.26 builds.
+const EnTT$layout = pdbcache.layouts.EnTTRegistry ?? {};
+const ENTT_POOLS_BEGIN = EnTT$layout.poolsBegin ?? 72;
+const ENTT_POOLS_END = EnTT$layout.poolsEnd ?? 80;
+const ENTT_NODES = EnTT$layout.nodes ?? 104;
+const ENTT_NODES_END = EnTT$layout.nodesEnd ?? 112;
+const ENTT_NODE_STRIDE = EnTT$layout.nodeStride ?? 32;
+const ENTT_NODE_HASH = EnTT$layout.nodeHash ?? 8;
+const ENTT_NODE_STORAGE = EnTT$layout.nodeStorage ?? 16;
+const ENTT_SPARSE_BEGIN = EnTT$layout.sparseBegin ?? 8;
+const ENTT_SPARSE_END = EnTT$layout.sparseEnd ?? 16;
+const ENTT_PACKED = EnTT$layout.packed ?? 80;
+const ENTT_ENTITY_BITS = EnTT$layout.entityBits ?? 18; // entt::entity: 18 index bits, the rest version
+const ENTT_SPARSE_PAGE_BITS = EnTT$layout.sparsePageBits ?? 11; // 2048 entries per sparse page
+const ENTT_PACKED_PAGE_BITS = EnTT$layout.packedPageBits ?? 7; // 128 elements per packed page
+const ENTT_ENTITY_MASK = (1 << ENTT_ENTITY_BITS) - 1;
+const ACTOR_ENTT_REGISTRY = pdbcache.layouts.Actor?.enttRegistry ?? 16;
+const ACTOR_ENTITY_ID = pdbcache.layouts.Actor?.entityId ?? 24;
+
+function enttTypeHash(component: string): number {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < component.length; i++) {
+        h = Math.imul((h ^ component.charCodeAt(i)) >>> 0, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+}
+
+/** an index a dense_map bucket or node holds; entt's null is all ones */
+function enttIndex(p: StaticPointer, offset: number): number | null {
+    const low = p.getUint32(offset);
+    const high = p.getUint32(offset + 4);
+    if (low === 0xffffffff && high === 0xffffffff) return null;
+    return high * 0x100000000 + low;
+}
+
+/** the storage (pool) a registry keeps for one component type, or null when it has none */
+function enttStorage(registry: StaticPointer, hash: number): StaticPointer | null {
+    const begin = registry.getPointer(ENTT_POOLS_BEGIN);
+    const buckets = registry.getPointer(ENTT_POOLS_END).subptr(begin) >> 3;
+    if (buckets <= 0) return null;
+    const nodes = registry.getPointer(ENTT_NODES);
+    const end = registry.getPointer(ENTT_NODES_END);
+    let index = enttIndex(begin, (((buckets - 1) & hash) >>> 0) * 8);
+    for (let hops = 0; index !== null && hops < 1024; hops++) {
+        const node = nodes.add(index * ENTT_NODE_STRIDE);
+        if (node.getUint32(ENTT_NODE_HASH) === hash) {
+            return node.equalsptr(end) ? null : node.getNullablePointer(ENTT_NODE_STORAGE);
+        }
+        index = enttIndex(node, 0);
+    }
+    return null;
+}
+
+/** the component an actor holds, by the component's type hash, or null when it holds none */
+function enttComponent(actor: Actor, hash: number, size: number): StaticPointer | null {
+    const self = actor as unknown as StaticPointer;
+    const registry = self.getNullablePointer(ACTOR_ENTT_REGISTRY);
+    if (registry === null) return null;
+    const entity = self.getUint32(ACTOR_ENTITY_ID);
+    const storage = enttStorage(registry, hash);
+    if (storage === null) return null;
+    const index = entity & ENTT_ENTITY_MASK;
+    const sparseBegin = storage.getPointer(ENTT_SPARSE_BEGIN);
+    const page = index >>> ENTT_SPARSE_PAGE_BITS;
+    if (page >= storage.getPointer(ENTT_SPARSE_END).subptr(sparseBegin) >> 3) return null;
+    const sparse = sparseBegin.getNullablePointer(page * 8);
+    if (sparse === null) return null;
+    const entry = sparse.getUint32((index & ((1 << ENTT_SPARSE_PAGE_BITS) - 1)) * 4);
+    if (((entry ^ entity) & ~ENTT_ENTITY_MASK) !== 0) return null; // a stale version is not this entity
+    if ((entry & ENTT_ENTITY_MASK) === ENTT_ENTITY_MASK) return null; // entt::null
+    const packed = storage.getPointer(ENTT_PACKED).getNullablePointer(((entry & ENTT_ENTITY_MASK) >>> ENTT_PACKED_PAGE_BITS) * 8);
+    if (packed === null) return null;
+    return packed.add((entry & ((1 << ENTT_PACKED_PAGE_BITS) - 1)) * size);
+}
+
+// PassengerComponent is one StrictActorIDEntityContextPair (the vehicle); VehicleComponent is a vector of
+// them (the passengers). Both are Endstone's headers and both are what the 2024 bodies read: 2024's
+// ActorRiding::getVehicleID returns *(component + 8), the pair's ActorUniqueID.
+const PASSENGER_COMPONENT_HASH = enttTypeHash("PassengerComponent");
+const VEHICLE_COMPONENT_HASH = enttTypeHash("VehicleComponent");
+const Passenger$layout = pdbcache.layouts.PassengerComponent ?? {};
+const PASSENGER_COMPONENT_SIZE = Passenger$layout.size ?? 16;
+const PASSENGER_VEHICLE_ID = Passenger$layout.vehicleActorId ?? 8;
+const Vehicle$layout = pdbcache.layouts.VehicleComponent ?? {};
+const VEHICLE_COMPONENT_SIZE = Vehicle$layout.size ?? 24;
+const VEHICLE_PASSENGERS = Vehicle$layout.passengers ?? 0;
+const RIDER_PAIR_STRIDE = Vehicle$layout.passengerStride ?? 16;
+const RIDER_PAIR_ID = Vehicle$layout.passengerActorId ?? 8;
+
+Actor.prototype.getVehicle = derived(
+    "?getVehicle@Actor@@QEBAPEAV1@XZ",
+    function getVehicle(this: Actor): Actor | null {
+        const component = enttComponent(this, PASSENGER_COMPONENT_HASH, PASSENGER_COMPONENT_SIZE);
+        if (component === null) return null;
+        const id = component.getBin64(PASSENGER_VEHICLE_ID);
+        if (id === ACTOR_UNIQUE_ID_NONE) return null;
+        return bedrockServer.level.fetchEntity(id, false);
+    },
+    () => procHacker.js("?getVehicle@Actor@@QEBAPEAV1@XZ", Actor, { this: Actor }),
+);
+// 2024's body is exactly this: getVehicle() != nullptr (0x19ba440 is a call, a test and a setne)
+(Actor.prototype as any)._isRiding = derived(
+    "?isRiding@Actor@@QEBA_NXZ",
+    function _isRiding(this: Actor): boolean {
+        return this.getVehicle() !== null;
+    },
+    () => procHacker.js("?isRiding@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
+// and 2024's isRiding(Actor*) walks the vehicle chain upwards comparing with the argument
+(Actor.prototype as any)._isRidingOn = derived(
+    "?isRiding@Actor@@QEBA_NPEAV1@@Z",
+    function _isRidingOn(this: Actor, entity: Actor): boolean {
+        let vehicle = this.getVehicle();
+        for (let hops = 0; vehicle !== null && hops < 16; hops++) {
+            if (vehicle.equalsptr(entity)) return true;
+            vehicle = vehicle.getVehicle();
+        }
+        return false;
+    },
+    () => procHacker.js("?isRiding@Actor@@QEBA_NPEAV1@@Z", bool_t, { this: Actor }, Actor),
+);
+// 2024's isPassenger asks the other way round: ActorRiding::getPassengers(this) contains the argument --
+// `this` is the vehicle. 2024 compares Actor::getOrCreateUniqueID with each pair's id; bdsx resolves each
+// id through Level::fetchEntity and compares the actor instead, which is the same answer through a
+// function this table has confirmed by execution.
+(Actor.prototype as any)._isPassenger = derived(
+    "?isPassenger@Actor@@QEBA_NAEBV1@@Z",
+    function _isPassenger(this: Actor, ride: Actor): boolean {
+        const component = enttComponent(this, VEHICLE_COMPONENT_HASH, VEHICLE_COMPONENT_SIZE);
+        if (component === null) return false;
+        const begin = component.getPointer(VEHICLE_PASSENGERS);
+        const count = component.getPointer(VEHICLE_PASSENGERS + 8).subptr(begin) / RIDER_PAIR_STRIDE;
+        if (!(count > 0)) return false;
+        for (let i = 0; i < count && i < 64; i++) {
+            const id = begin.getBin64(i * RIDER_PAIR_STRIDE + RIDER_PAIR_ID);
+            if (id === ACTOR_UNIQUE_ID_NONE) continue;
+            const passenger = bedrockServer.level.fetchEntity(id, false);
+            if (passenger !== null && passenger.equalsptr(ride)) return true;
+        }
+        return false;
+    },
+    () => procHacker.js("?isPassenger@Actor@@QEBA_NAEBV1@@Z", bool_t, { this: Actor }, Actor),
+);
 Actor.prototype.setVelocity = procHacker.js("?setVelocity@Actor@@QEAAXAEBVVec3@@@Z", void_t, { this: Actor }, Vec3);
 Actor.prototype.isInWater = procHacker.js("?isInWater@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 

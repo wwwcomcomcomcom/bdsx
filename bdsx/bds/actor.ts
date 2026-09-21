@@ -1183,6 +1183,12 @@ export class Actor extends AbstractClass {
     startRiding(ride: Actor): boolean {
         abstract();
     }
+    /**
+     * Returns the entity this entity is riding on, or null when it is riding nothing
+     */
+    getVehicle(): Actor | null {
+        abstract();
+    }
     protected _isRiding(): boolean {
         abstract();
     }
