@@ -1532,7 +1532,30 @@ Actor.prototype.getLastDeathDimension = procHacker.jsv(
 (Actor.prototype as any)._getViewVector = procHacker.js("?getViewVector@Actor@@QEBA?AVVec3@@M@Z", Vec3, { this: Actor, structureReturn: true }, float32_t);
 Actor.prototype.isImmobile = procHacker.jsv("??_7Actor@@6B@", "?isImmobile@Actor@@UEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInsidePortal = procHacker.js("?isInsidePortal@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isInWorld = procHacker.js("?isInWorld@Actor@@QEBA_NXZ", bool_t, { this: Actor });
+// `?hasDimension@Actor@@` is 2024's weak_ptr lock test on the dimension reference (0x19b69f0: a null
+// control block or a zero use count is false, otherwise the pointer is checked), and `?isInWorld@Actor@@`
+// is `added && hasDimension() && !removed` (0x19b9ac0). 1.26 kept no copy of either. The reference is
+// the WeakRef<Dimension> the live-confirmed getDimension accessor reads (+456, control block +464); the
+// two bytes are +138 / +617 (docs/findings-layouts.md, "isInWorld and hasDimension").
+const ACTOR_WORLD_2024 = { added: 233, removed: 737, dimensionRef: 576 };
+function actorHasDimension(actor: Actor): boolean {
+    const off = pdbcache.layouts.Actor?.dimensionRef ?? ACTOR_WORLD_2024.dimensionRef;
+    const sp = actor as unknown as StaticPointer;
+    const rep = sp.getNullablePointer(off + 8);
+    if (rep === null || rep.getInt32(8) === 0) return false;
+    return sp.getNullablePointer(off) !== null;
+}
+Actor.prototype.isInWorld = derived(
+    "?isInWorld@Actor@@QEBA_NXZ",
+    function isInWorld(this: Actor): boolean {
+        const l = pdbcache.layouts.Actor ?? {};
+        const sp = this as unknown as StaticPointer;
+        if (sp.getUint8(l.added ?? ACTOR_WORLD_2024.added) === 0) return false;
+        if (!actorHasDimension(this)) return false;
+        return sp.getUint8(l.removed ?? ACTOR_WORLD_2024.removed) === 0;
+    },
+    () => procHacker.js("?isInWorld@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 Actor.prototype.isInWaterOrRain = procHacker.js("?isInWaterOrRain@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInThunderstorm = procHacker.js("?isInThunderstorm@Actor@@QEBA_NXZ", bool_t, { this: Actor });
 Actor.prototype.isInSnow = procHacker.js("?isInSnow@Actor@@QEBA_NXZ", bool_t, {
@@ -2328,7 +2351,21 @@ Player.prototype.getPermissionLevel = derived(
     },
     () => procHacker.js("?getPlayerPermissionLevel@Player@@QEBA?AW4PlayerPermissionLevel@@XZ", int32_t, { this: Player }),
 );
-Player.prototype.getSkin = procHacker.js("?getSkin@Player@@QEAAAEAVSerializedSkin@@XZ", SerializedSkin, { this: Player });
+// 2024's `?getSkin@Player@@` is `lea 1920(%rcx)`: the SerializedSkin was a member. 1.26 holds a
+// unique_ptr<SerializedSkinRef> instead (+2736 -- Player::getActorRendererId loads it where 2024 took the
+// lea), and SerializedSkinRef is a shared_ptr whose object is SerializedSkinImpl at +0 of an empty-based
+// ThreadOwner; the impl's members are 2024's SerializedSkin members in the same order. There is no 2024
+// fallback: the member became a pointer, so a build without the layout has nothing correct to return.
+Player.prototype.getSkin = derived(
+    "?getSkin@Player@@QEAAAEAVSerializedSkin@@XZ",
+    function getSkin(this: Player): SerializedSkin {
+        const off = pdbcache.layouts.Player?.skin;
+        if (off === undefined) throw Error("getSkin: this build's symbols.json has no layouts.Player.skin");
+        const ref = (this as unknown as StaticPointer).getPointer(off);
+        return ref.getPointerAs(SerializedSkin, 0);
+    },
+    () => procHacker.js("?getSkin@Player@@QEAAAEAVSerializedSkin@@XZ", SerializedSkin, { this: Player }),
+);
 Player.prototype.startCooldown = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item);
 Player.prototype.getItemCooldownLeft = procHacker.js("?getItemCooldownLeft@Player@@QEBAHAEBVHashedString@@@Z", int32_t, { this: Player }, HashedString);
 Player.prototype.setGameType = procHacker.js("?setPlayerGameType@ServerPlayer@@UEAAXW4GameType@@@Z", void_t, { this: Player }, int32_t);
@@ -2583,7 +2620,26 @@ Player.prototype.getDestroyProgress = procHacker.js("?getDestroyProgress@Player@
 Player.prototype.respawn = procHacker.js("?respawn@Player@@UEAAXXZ", void_t, {
     this: Player,
 });
-Player.prototype.setRespawnReady = procHacker.js("?setRespawnReady@Player@@QEAAXAEBVVec3@@@Z", void_t, { this: Player }, Vec3);
+// `?setRespawnReady@Player@@` is three stores (2024 0x19e91b0: the Vec3 at +6604, `movb $1,+2864`,
+// `movb $0,+2905`) and 1.26 kept no copy. It inlined the whole body into the successor of
+// setRespawnPositionCandidate (40 0x56a6960 / 51 0x9109070): the Vec3 to +2904, `movb $1,1800`,
+// `movb $0,1802`, in that order. Player::respawn reads the Vec3 with `lea 2904` where 2024's takes
+// `lea 6604`. docs/findings-layouts.md, "setRespawnReady".
+const PLAYER_RESPAWN_2024 = { respawnReady: 2864, respawningFromTheEnd: 2905, respawnOriginalPosition: 6604 };
+Player.prototype.setRespawnReady = derived(
+    "?setRespawnReady@Player@@QEAAXAEBVVec3@@@Z",
+    function setRespawnReady(this: Player, vec3: Vec3): void {
+        const l = pdbcache.layouts.Player ?? {};
+        const ptr = this as unknown as StaticPointer;
+        const pos = l.respawnOriginalPosition ?? PLAYER_RESPAWN_2024.respawnOriginalPosition;
+        ptr.setFloat32(vec3.x, pos);
+        ptr.setFloat32(vec3.y, pos + 4);
+        ptr.setFloat32(vec3.z, pos + 8);
+        ptr.setUint8(1, l.respawnReady ?? PLAYER_RESPAWN_2024.respawnReady);
+        ptr.setUint8(0, l.respawningFromTheEnd ?? PLAYER_RESPAWN_2024.respawningFromTheEnd);
+    },
+    () => procHacker.js("?setRespawnReady@Player@@QEAAXAEBVVec3@@@Z", void_t, { this: Player }, Vec3),
+);
 Player.prototype.setSpawnBlockRespawnPosition = procHacker.js(
     "?setSpawnBlockRespawnPosition@Player@@QEAAXAEBVBlockPos@@V?$AutomaticID@VDimension@@H@@@Z",
     void_t,
@@ -2626,8 +2682,25 @@ Player.prototype.isFlying = derived(
 );
 Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
 Player.prototype.isInRaid = procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player });
-Player.prototype.isUsingItem = procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player });
-Player.prototype.hasDimension = procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player });
+// 2024's `?isUsingItem@Player@@` is `!item_in_use_.getItemInUse().isNull()` (0x19e20d0: +2928, then the
+// ItemStack at +8 of it). 1.26 inlined it into Player::getItemUseStartupProgress, which opens with
+// `lea 1840(%rcx)` and the table's ItemStackBase::isNull -- PlayerItemInUse +1832, its item +1840.
+const PLAYER_ITEM_IN_USE_2024 = 2928;
+Player.prototype.isUsingItem = derived(
+    "?isUsingItem@Player@@QEBA_NXZ",
+    function isUsingItem(this: Player): boolean {
+        const off = (pdbcache.layouts.Player?.itemInUse ?? PLAYER_ITEM_IN_USE_2024) + 8;
+        return !(this as unknown as StaticPointer).addAs(ItemStack, off).isNull();
+    },
+    () => procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
+Player.prototype.hasDimension = derived(
+    "?hasDimension@Actor@@QEBA_NXZ",
+    function hasDimension(this: Player): boolean {
+        return actorHasDimension(this);
+    },
+    () => procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player }),
+);
 Player.prototype.getAbilities = procHacker.js("?getAbilities@Player@@QEAAAEAVLayeredAbilities@@XZ", LayeredAbilities, { this: Player });
 Player.prototype.getSelectedItem = procHacker.js("?getSelectedItem@Player@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Player });
 Player.prototype.getName = procHacker.js("?getName@Player@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Player });
