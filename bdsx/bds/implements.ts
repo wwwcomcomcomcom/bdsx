@@ -2682,25 +2682,11 @@ Player.prototype.isFlying = derived(
 );
 Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
 Player.prototype.isInRaid = procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player });
-// 2024's `?isUsingItem@Player@@` is `!item_in_use_.getItemInUse().isNull()` (0x19e20d0: +2928, then the
-// ItemStack at +8 of it). 1.26 inlined it into Player::getItemUseStartupProgress, which opens with
-// `lea 1840(%rcx)` and the table's ItemStackBase::isNull -- PlayerItemInUse +1832, its item +1840.
-const PLAYER_ITEM_IN_USE_2024 = 2928;
-Player.prototype.isUsingItem = derived(
-    "?isUsingItem@Player@@QEBA_NXZ",
-    function isUsingItem(this: Player): boolean {
-        const off = (pdbcache.layouts.Player?.itemInUse ?? PLAYER_ITEM_IN_USE_2024) + 8;
-        return !(this as unknown as StaticPointer).addAs(ItemStack, off).isNull();
-    },
-    () => procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player }),
-);
-Player.prototype.hasDimension = derived(
-    "?hasDimension@Actor@@QEBA_NXZ",
-    function hasDimension(this: Player): boolean {
-        return actorHasDimension(this);
-    },
-    () => procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player }),
-);
+// `?isUsingItem@Player@@` and `?hasDimension@Actor@@` have no address on 1.26 and are deliberately not
+// derived yet: each has a layout candidate whose check so far saw only one side (docs/findings-layouts.md,
+// "Candidates held back"). isInWorld below uses the same dimension test internally.
+Player.prototype.isUsingItem = procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player });
+Player.prototype.hasDimension = procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.getAbilities = procHacker.js("?getAbilities@Player@@QEAAAEAVLayeredAbilities@@XZ", LayeredAbilities, { this: Player });
 Player.prototype.getSelectedItem = procHacker.js("?getSelectedItem@Player@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Player });
 Player.prototype.getName = procHacker.js("?getName@Player@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Player });
