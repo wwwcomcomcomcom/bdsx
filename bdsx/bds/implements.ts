@@ -2307,11 +2307,19 @@ asmcode.removeActor = makefunc.np(_removeActor, void_t, null, VoidPointer);
 procHacker.hookingRawWithCallOriginal("??1Actor@@UEAA@XZ", asmcode.actorDestructorHook, [Register.rcx], []);
 
 // player.ts
-Player.abstract({
-    enderChestContainer: [EnderChestContainer.ref(), 0xc60], // accessed in Player::Player+1231 (the line between two if-else statements, the first if statement calls EnderChestContainer::EnderChestContainer)
-    playerUIContainer: [PlayerUIContainer, 0xd18], // accessed in Player::readAdditionalSaveData+1263 when calling PlayerUIContainer::load
-    deviceId: [CxxString, 0x1d80], // accessed in AddPlayerPacket::AddPlayerPacket(const Player &)+187 (the string assignment between LayeredAbilities::LayeredAbilities and Player::getPlatform)
-});
+// All three moved in 1.26, so they come from symbols.json `layouts.Player`; the literals are the 2024
+// offsets. 1.26: ender chest +2064 and the UI container +2232 are what Player::readAdditionalSaveData
+// loads after looking up "EnderChestInventory" / "PlayerUIItems" (2024: +3168 / +3352), and the device
+// id +3208 is the string the Player constructor fills from its argument right after last_emote_played_,
+// a time_t and an int (2024: +7552). docs/findings-containers.md, 13.
+{
+    const l = pdbcache.layouts.Player ?? {};
+    Player.abstract({
+        enderChestContainer: [EnderChestContainer.ref(), l.enderChestContainer ?? 0xc60],
+        playerUIContainer: [PlayerUIContainer, l.playerUIContainer ?? 0xd18],
+        deviceId: [CxxString, l.deviceId ?? 0x1d80],
+    });
+}
 (Player.prototype as any)._setName = procHacker.js(
     "?setName@Player@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     void_t,
@@ -2539,18 +2547,48 @@ Player.prototype.getXpNeededForNextLevel = derived(
     },
     () => procHacker.js("?getXpNeededForNextLevel@Player@@QEBAHXZ", int32_t, { this: Player }),
 );
-Player.prototype.setCursorSelectedItem = procHacker.js("?setCursorSelectedItem@Player@@QEAAXAEBVItemStack@@@Z", void_t, { this: Player }, ItemStack);
+// The player UI container (cursor, anvil, crafting grid ...). 2024's getPlayerUIItem (0x19df800) is
+// `addq $0xd18,%rcx` and a tail jump to the container's vft slot 7 (getItem), and setCursorSelectedItem
+// (0x19e86a0) is setPlayerUIItem(CursorSelected, item); 1.26 kept no copy of either. setPlayerUIItem
+// itself survives with one more argument, passed straight on to InventoryTransactionManager::addAction
+// where 2024 passed a constant 0 -- so it ships as `bdsx:Player::setPlayerUIItem` and bdsx passes 0.
+// Without that address bdsx does the write alone through the container's setItem (slot 12), which skips
+// the InventoryAction the function records. docs/findings-containers.md, 13.
+const SimpleContainer$setItem = procHacker.jsv(
+    "??_7SimpleContainer@@6B@",
+    "?setItem@SimpleContainer@@UEAAXHAEBVItemStack@@@Z",
+    void_t,
+    { this: Container },
+    int32_t,
+    ItemStack,
+);
+const Player$setPlayerUIItem =
+    "bdsx:Player::setPlayerUIItem" in proc ? procHacker.js("bdsx:Player::setPlayerUIItem", void_t, { this: Player }, int32_t, ItemStack, int32_t) : null;
+Player.prototype.getPlayerUIItem = derived(
+    "?getPlayerUIItem@Player@@QEAAAEBVItemStack@@W4PlayerUISlot@@@Z",
+    function getPlayerUIItem(this: Player, slot: PlayerUISlot): ItemStack {
+        return this.playerUIContainer.getItem(slot);
+    },
+    () => procHacker.js("?getPlayerUIItem@Player@@QEAAAEBVItemStack@@W4PlayerUISlot@@@Z", ItemStack.ref(), { this: Player }, int32_t),
+);
+Player.prototype.setPlayerUIItem = derived(
+    "?setPlayerUIItem@Player@@QEAAXW4PlayerUISlot@@AEBVItemStack@@@Z",
+    function setPlayerUIItem(this: Player, slot: PlayerUISlot, itemStack: ItemStack): void {
+        if (Player$setPlayerUIItem !== null) Player$setPlayerUIItem.call(this, slot, itemStack, 0);
+        else SimpleContainer$setItem.call(this.playerUIContainer, slot, itemStack);
+    },
+    () => procHacker.js("?setPlayerUIItem@Player@@QEAAXW4PlayerUISlot@@AEBVItemStack@@@Z", void_t, { this: Player }, int32_t, ItemStack.ref()),
+);
+Player.prototype.setCursorSelectedItem = derived(
+    "?setCursorSelectedItem@Player@@QEAAXAEBVItemStack@@@Z",
+    function setCursorSelectedItem(this: Player, itemStack: ItemStack): void {
+        this.setPlayerUIItem(PlayerUISlot.CursorSelected, itemStack);
+    },
+    () => procHacker.js("?setCursorSelectedItem@Player@@QEAAXAEBVItemStack@@@Z", void_t, { this: Player }, ItemStack),
+);
 Player.prototype.getCursorSelectedItem = function (): ItemStack {
     return this.getPlayerUIItem(PlayerUISlot.CursorSelected);
 };
-Player.prototype.getPlayerUIItem = procHacker.js("?getPlayerUIItem@Player@@QEAAAEBVItemStack@@W4PlayerUISlot@@@Z", ItemStack.ref(), { this: Player }, int32_t);
-Player.prototype.setPlayerUIItem = procHacker.js(
-    "?setPlayerUIItem@Player@@QEAAXW4PlayerUISlot@@AEBVItemStack@@@Z",
-    void_t,
-    { this: Player },
-    int32_t,
-    ItemStack.ref(),
-);
 Player.prototype.getPlatform = procHacker.js("?getPlatform@Player@@QEBA?AW4BuildPlatform@@XZ", int32_t, { this: Player });
 Player.prototype.getXuid = procHacker.js("?getXuid@Player@@UEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
     this: Player,
