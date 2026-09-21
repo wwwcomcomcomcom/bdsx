@@ -5,7 +5,7 @@ import { bin } from "../bin";
 import { capi } from "../capi";
 import { commandParser } from "../commandparser";
 import { CommandResult, CommandResultType } from "../commandresult";
-import { AttributeName, VectorXYZ, abstract } from "../common";
+import { AttributeName, Direction, VectorXYZ, abstract } from "../common";
 import { AllocatedPointer, StaticPointer, VoidPointer } from "../core";
 import { CxxPair } from "../cxxpair";
 import { CxxVector, CxxVectorToArray } from "../cxxvector";
@@ -1164,7 +1164,6 @@ Actor.fromUniqueIdBin = function (bin, getRemovedActor = true) {
     return bedrockServer.level.fetchEntity(bin, getRemovedActor);
 };
 
-Actor.prototype.setHurtTime = procHacker.js("?setHurtTime@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t);
 Actor.prototype.addEffect = procHacker.js("?addEffect@Actor@@QEAAXAEBVMobEffectInstance@@@Z", void_t, { this: Actor }, MobEffectInstance);
 Actor.prototype.removeEffect = procHacker.js("?removeEffect@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t);
 // 1.26 keeps no out-of-line hasEffect: the 2024 build's was a 20-byte thunk (call getEffect; test; setne)
@@ -1754,6 +1753,29 @@ SynchedActorDataEntityWrapper.prototype.getInt = procHacker.js(
             ),
     );
 
+    // Actor::setHurtTime moved out of SynchedActorData. 2024's body (0x19c5fb0) is four instructions
+    // around set<int>(entity_data, 11, time); in 1.26 there is no Int item at id 11 at all -- a sweep of
+    // getInt over ids 0..63 on a mob one tick after it was hurt finds only ids 1 and 55 non-zero and
+    // nothing moving over the next four ticks, on both builds. The countdown lives in a
+    // MobHurtTimeComponent the Mob holds by pointer (Endstone mob.h: BuiltInMobComponents
+    // { death_ticking, mob_animation, mob_hurt_time }), which is what the live scan found: following
+    // every pointer-shaped word in a hurt mob, exactly one leads to a dword that reads 10 one tick after
+    // the hit and 6 four ticks later, at Mob+0x428 [+0] on both builds. The binary says the same thing
+    // where 2024 called setHurtTime(10): both builds carry `mov rax,[reg+0x428]; movl $10,(%rax)`.
+    // Only a Mob has the component, so a non-mob actor is left alone, which is also what BDS does.
+    const MOB_HURT_TIME_COMPONENT = pdbcache.layouts.Mob?.hurtTimeComponent ?? 0x428;
+    const MOB_HURT_TIME = pdbcache.layouts.Mob?.hurtTime ?? 0;
+    Actor.prototype.setHurtTime = derived(
+        "?setHurtTime@Actor@@QEAAXH@Z",
+        function (this: Actor, time: number): void {
+            if ((this.getEntityTypeId() & ActorType.Mob) === 0) return;
+            const c = (this as any as StaticPointer).getPointer(MOB_HURT_TIME_COMPONENT);
+            if (c.isNull()) return;
+            c.setInt32(time, MOB_HURT_TIME);
+        },
+        () => procHacker.js("?setHurtTime@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t),
+    );
+
     // Actor::getBlockTarget is getPosition(entity_data, 47) and nothing else
     // (2024 0x19b0d90: `movl $47,%r8d; addq $400,%rcx; jmp`).
     const SynchedActorDataEntityWrapper$getPosition = procHacker.js(
@@ -2228,7 +2250,29 @@ Player.prototype.setSpawnBlockRespawnPosition = procHacker.js(
     int32_t,
 );
 Player.prototype.setSelectedSlot = procHacker.js("?setSelectedSlot@Player@@QEAAAEBVItemStack@@H@Z", ItemStack, { this: Player }, int32_t);
-Player.prototype.getDirection = procHacker.js("?getDirection@Player@@QEBAHXZ", int32_t, { this: Player });
+/** float32 of pi/180, the constant 2024's Player::getDirection multiplies the yaw by (0x2be5568) */
+const DEG_TO_RAD = 0.01745329238474369;
+// Player::getDirection is Direction::getDirection(sin(yaw), -cos(yaw)) over the actor's own rotation.
+// The 2024 body (0x19de6f0) calls Actor::getRotation, multiplies rotation.y by float32(pi/180) twice,
+// calls mce::Math::cos then mce::Math::sin, and tail-calls the static
+// ?getDirection@Direction@@SA?AW4Type@1@MM@Z (0x17f8190) with xmm0 = sin, xmm1 = -cos. That static is a
+// nine-instruction leaf and pure arithmetic: `|x| > |z| ? (x > 0 ? 1 : 3) : (z > 0 ? 2 : 0)`, which is
+// bdsx's Direction.Type in its own order (South 0, West 1, North 2, East 3) -- the same quadrant
+// convention Facing.convertYRotationToFacingDirection already carries. getRotation is a field accessor
+// on both 1.26 builds, so nothing here needs an address. One caveat kept in the open: BDS's sin/cos are
+// a 65,536-entry table (mce::Math::cos is `mulss; addss; cvttss2si; movzwl; movss (table,rcx,4)`), so on
+// a yaw that sits exactly on a quadrant boundary (45, 135, ...) their rounding and ours may disagree.
+Player.prototype.getDirection = derived(
+    "?getDirection@Player@@QEBAHXZ",
+    function getDirection(this: Player): Direction.Type {
+        const rad = Math.fround(Math.fround(this.getRotation().y) * DEG_TO_RAD);
+        const x = Math.fround(Math.sin(rad));
+        const z = Math.fround(-Math.cos(rad));
+        if (Math.abs(x) > Math.abs(z)) return x > 0 ? Direction.Type.West : Direction.Type.East;
+        return z > 0 ? Direction.Type.North : Direction.Type.South;
+    },
+    () => procHacker.js("?getDirection@Player@@QEBAHXZ", int32_t, { this: Player }),
+);
 // 2024: try_get<AbilitiesComponent> then a tail jump into LayeredAbilities::getBool with index 9.
 // getAbilities resolves on both 1.26 builds and getBool is bdsx's own body, so this is the two of them.
 Player.prototype.isFlying = derived(
