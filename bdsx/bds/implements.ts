@@ -3960,17 +3960,66 @@ LayeredAbilities.prototype.isFlying = function () {
     return this.getBool(AbilitiesIndex.Flying);
 };
 
-const Abilities$getAbilityName = procHacker.js("?getAbilityName@Abilities@@SAPEBDW4AbilitiesIndex@@@Z", StaticPointer, null, uint16_t);
+// The two ability-name functions were leaves over one table -- `const char*` in AbilitiesIndex
+// order -- and 1.26 inlined both of them away. The table did not go anywhere: it is one entry
+// longer (verticalFlySpeed) and it still carries the engine's own spelling, capitals and all, so
+// bdsx reads it through its address and does the indexing and the search itself. The count is
+// `abilityCount`, the same bound the binary checks before it indexes a layer.
+// docs/findings-abilities.md, "The name table".
+const ABILITY_NAMES_KEY = "bdsx:Abilities::ABILITY_NAMES";
+let abilityNames: string[] | null = null;
+function abilityNameTable(): string[] {
+    if (abilityNames === null) {
+        if (!(ABILITY_NAMES_KEY in proc)) throw Error(`${ABILITY_NAMES_KEY}: no ability name table in this build's symbols.json`);
+        const table = proc[ABILITY_NAMES_KEY];
+        const names: string[] = [];
+        for (let i = 0; i < abilityCount; i++) {
+            const name = table.getNullablePointer(i * 8);
+            names.push(name === null ? "" : name.getString());
+        }
+        abilityNames = names;
+    }
+    return abilityNames;
+}
+const getAbilityNameKey = "?getAbilityName@Abilities@@SAPEBDW4AbilitiesIndex@@@Z";
+const Abilities$getAbilityName = derived(
+    getAbilityNameKey,
+    function getAbilityName(abilityIndex: uint16_t): string {
+        // the engine indexes the array without a bounds check; bdsx stops at the end of it instead
+        const names = abilityNameTable();
+        return abilityIndex >= 0 && abilityIndex < names.length ? names[abilityIndex] : "";
+    },
+    () => {
+        const bound = procHacker.js(getAbilityNameKey, StaticPointer, null, uint16_t);
+        return function getAbilityName(abilityIndex: uint16_t): string {
+            return bound(abilityIndex).getString();
+        };
+    },
+);
 Abilities.getAbilityName = function (abilityIndex: uint16_t): string {
-    const name = Abilities$getAbilityName(abilityIndex);
-    return name.getString();
+    return Abilities$getAbilityName(abilityIndex);
 };
-const Abilities$nameToAbilityIndex = procHacker.js(
-    "?nameToAbilityIndex@Abilities@@SA?AW4AbilitiesIndex@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    int16_t,
-    null,
-    CxxString,
-); // Will return -1 if not found, so int16 instead of uint16
+const nameToAbilityIndexKey = "?nameToAbilityIndex@Abilities@@SA?AW4AbilitiesIndex@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z";
+const Abilities$nameToAbilityIndex = derived(
+    nameToAbilityIndexKey,
+    function nameToAbilityIndex(name: string): int16_t {
+        // the engine compares the bytes, so a name whose case differs is no ability at all --
+        // which is why `flySpeed`, `walkSpeed`, `verticalFlySpeed` and `privilegedBuilder` never
+        // match through the caller below. That is 2024's behaviour, kept.
+        const names = abilityNameTable();
+        for (let i = 0; i < names.length; i++) {
+            if (names[i] === name) return i;
+        }
+        return -1;
+    },
+    () => {
+        // Will return -1 if not found, so int16 instead of uint16
+        const bound = procHacker.js(nameToAbilityIndexKey, int16_t, null, CxxString);
+        return function nameToAbilityIndex(name: string): int16_t {
+            return bound(name);
+        };
+    },
+);
 Abilities.nameToAbilityIndex = function (name: string): int16_t {
     return Abilities$nameToAbilityIndex(name.toLowerCase());
 };
