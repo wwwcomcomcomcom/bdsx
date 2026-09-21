@@ -1203,8 +1203,15 @@ function enttStorage(registry: StaticPointer, hash: number): StaticPointer | nul
     return null;
 }
 
-/** the component an actor holds, by the component's type hash, or null when it holds none */
-function enttComponent(actor: Actor, hash: number, size: number): StaticPointer | null {
+/**
+ * The slot an actor occupies in one component's sparse set, or null when it holds none.
+ *
+ * This is the whole of `ctx.hasComponent<T>()`: 1.26's inlined copies stop right here, and for a
+ * flag component -- an empty type, which entt stores with no payload at all -- there is nothing
+ * after it to read. `enttComponent` below goes on to the payload for the component types that
+ * have one.
+ */
+function enttSlot(actor: Actor, hash: number): number | null {
     const self = actor as unknown as StaticPointer;
     const registry = self.getNullablePointer(ACTOR_ENTT_REGISTRY);
     if (registry === null) return null;
@@ -1220,6 +1227,24 @@ function enttComponent(actor: Actor, hash: number, size: number): StaticPointer 
     const entry = sparse.getUint32((index & ((1 << ENTT_SPARSE_PAGE_BITS) - 1)) * 4);
     if (((entry ^ entity) & ~ENTT_ENTITY_MASK) !== 0) return null; // a stale version is not this entity
     if ((entry & ENTT_ENTITY_MASK) === ENTT_ENTITY_MASK) return null; // entt::null
+    return entry & ENTT_ENTITY_MASK;
+}
+
+/** whether an actor holds a component at all -- the only thing a flag component can be asked */
+function enttHas(actor: Actor, hash: number): boolean {
+    return enttSlot(actor, hash) !== null;
+}
+
+/** the component an actor holds, by the component's type hash, or null when it holds none */
+function enttComponent(actor: Actor, hash: number, size: number): StaticPointer | null {
+    const self = actor as unknown as StaticPointer;
+    const registry = self.getNullablePointer(ACTOR_ENTT_REGISTRY);
+    if (registry === null) return null;
+    const slot = enttSlot(actor, hash);
+    if (slot === null) return null;
+    const storage = enttStorage(registry, hash);
+    if (storage === null) return null;
+    const entry = slot;
     const packed = storage.getPointer(ENTT_PACKED).getNullablePointer(((entry & ENTT_ENTITY_MASK) >>> ENTT_PACKED_PAGE_BITS) * 8);
     if (packed === null) return null;
     return packed.add((entry & ((1 << ENTT_PACKED_PAGE_BITS) - 1)) * size);
@@ -1294,7 +1319,20 @@ Actor.prototype.getVehicle = derived(
     () => procHacker.js("?isPassenger@Actor@@QEBA_NAEBV1@@Z", bool_t, { this: Actor }, Actor),
 );
 Actor.prototype.setVelocity = procHacker.js("?setVelocity@Actor@@QEAAXAEBVVec3@@@Z", void_t, { this: Actor }, Vec3);
-Actor.prototype.isInWater = procHacker.js("?isInWater@Actor@@QEBA_NXZ", bool_t, { this: Actor });
+// 2024's Actor::isInWater is two instructions -- `add rcx,8; jmp ActorEnvironment::getIsInWater` --
+// and that callee is `ctx.hasComponent<WasInWaterFlagComponent>()`. 1.26 has neither out of line,
+// but it left the lookup inlined in Actor::isInWaterOrRain, where fnv1a("WasInWaterFlagComponent")
+// = 0x78e89f39 is the immediate in front of the rain test that function ends with -- so the name of
+// the component is read out of the binary (tools/entt-typenames.mjs) and then confirmed at the one
+// place 1.26 still spells the whole thing out (docs/findings-weather.md).
+const WAS_IN_WATER_COMPONENT_HASH = enttTypeHash("WasInWaterFlagComponent");
+Actor.prototype.isInWater = derived(
+    "?isInWater@Actor@@QEBA_NXZ",
+    function isInWater(this: Actor): boolean {
+        return enttHas(this, WAS_IN_WATER_COMPONENT_HASH);
+    },
+    () => procHacker.js("?isInWater@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 
 namespace ActorEquipment {
     export function getArmorContainer(context: EntityContext): SimpleContainer {
@@ -2258,7 +2296,18 @@ Player.prototype.setPermissions = derived(
 );
 Player.prototype.setSleeping = procHacker.js("?setSleeping@Player@@UEAAX_N@Z", void_t, { this: Player }, bool_t);
 Player.prototype.isSleeping = procHacker.js("?isSleeping@Player@@UEBA_NXZ", bool_t, { this: Player });
-Player.prototype.isJumping = procHacker.js("?isJumping@Actor@@QEBA_NXZ", bool_t, { this: Player });
+// the same shape as isInWater: 2024's Actor::isJumping is `add rcx,8; jmp MobJump::isJumping`, and
+// that is `ctx.hasComponent<MobIsJumpingFlagComponent>()`. 2024 spells the type
+// FlagComponent<MobIsJumpingFlag>, whose hash no 1.26 function contains; the name this build uses
+// comes from its own entt::type_info descriptors (docs/findings-components.md).
+const MOB_IS_JUMPING_COMPONENT_HASH = enttTypeHash("MobIsJumpingFlagComponent");
+Player.prototype.isJumping = derived(
+    "?isJumping@Actor@@QEBA_NXZ",
+    function isJumping(this: Player): boolean {
+        return enttHas(this, MOB_IS_JUMPING_COMPONENT_HASH);
+    },
+    () => procHacker.js("?isJumping@Actor@@QEBA_NXZ", bool_t, { this: Player }),
+);
 
 const UpdateAbilitiesPacket$UpdateAbilitiesPacket = procHacker.js(
     "??0UpdateAbilitiesPacket@@QEAA@UActorUniqueID@@AEBVLayeredAbilities@@@Z",
