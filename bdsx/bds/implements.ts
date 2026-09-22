@@ -760,7 +760,16 @@ Actor.prototype.setNameTag = procHacker.js(
     { this: Actor },
     CxxString,
 );
-Actor.prototype.setNameTagVisible = procHacker.js("?setNameTagVisible@Actor@@QEAAX_N@Z", void_t, { this: Actor }, bool_t);
+// 2024's body (0x19c6ba0) is one line: Actor vftable slot 1, setStatusFlag(CanShowName = 14, value).
+// 1.26 has no out-of-line copy (every setActorFlag call that passes 14 sits inside a larger function),
+// and setStatusFlag is itself derived() below, so this needs no address (docs/findings-synched.md).
+Actor.prototype.setNameTagVisible = derived(
+    "?setNameTagVisible@Actor@@QEAAX_N@Z",
+    function setNameTagVisible(this: Actor, visible: boolean): void {
+        this.setStatusFlag(ActorFlags.CanShowName, visible);
+    },
+    () => procHacker.js("?setNameTagVisible@Actor@@QEAAX_N@Z", void_t, { this: Actor }, bool_t),
+);
 Actor.prototype.addTag = procHacker.js(
     "?addTag@Actor@@QEAA_NAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     bool_t,
