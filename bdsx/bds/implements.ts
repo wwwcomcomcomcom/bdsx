@@ -4195,7 +4195,8 @@ FillingContainer.prototype.canAdd = procHacker.jsv(
     ItemStack,
 );
 
-Inventory.prototype.dropSlot = procHacker.js("?dropSlot@Inventory@@QEAAXH_N00@Z", void_t, { this: Inventory }, int32_t, bool_t, bool_t, bool_t);
+// `Inventory.prototype.dropSlot` is defined below, next to `PlayerInventory.prototype.
+// dropAllOnDeath`, which shares its core (`doDropSlot`) -- next-steps Q1-B-3.
 
 // PlayerInventory (next-steps Q1-B-3, docs/findings-containers.md 11). Every one of these is a
 // forwarder into `inventory_`, and 1.26 keeps no out-of-line copy of any of them; what each one
@@ -4386,7 +4387,144 @@ PlayerInventory.prototype.canAdd = derived(
     },
     () => procHacker.js("?canAdd@PlayerInventory@@QEBA_NAEBVItemStack@@@Z", bool_t, { this: PlayerInventory }, ItemStack),
 );
-PlayerInventory.prototype.dropAllOnDeath = procHacker.js("?dropAllOnDeath@PlayerInventory@@QEAAX_N@Z", void_t, { this: PlayerInventory }, bool_t);
+// `Inventory::player_` (`FillingContainer::player_`), +432 on both 1.26 builds -- confirmed by
+// reading it directly out of two independent, executed bodies: 1.26.40.8's own out-of-line
+// `Inventory::dropSlot` (`0x207ba0`, `movq 0x1b0(%rdi), %rdx` before the drop call) and
+// 1.26.51.1's `Player::die` (`0x2adbb0`, `movq 0x1b0(%r12), %rcx` twice, r12 = `PlayerInventory::
+// container`, since 1.26.51.1 keeps no out-of-line `dropSlot` at all -- see `doDropSlot` below).
+// 2024 keeps the same field at +376. next-steps Q1-B-3, docs/findings-containers.md 12.
+const FillingContainer$player = 432;
+
+// `?drop@Player@@UEAA_NAEBVItemStack@@_N@Z` did not change and is already a required symbol
+// (docs/findings-slots.md "Changed signatures" end, 2026-09-22) that `event_impl/entityevent.ts`
+// already hooks lazily for `events.playerDropItem`. Binding it again here resolves the same
+// address, not a second hook -- a call through it goes through whatever that hook may have
+// installed, exactly like BDS's own `Inventory::dropSlot` and `Player::die` do below: both builds'
+// death-drop reaches the entity spawn by calling straight through this same virtual, on the
+// dropping item's owner's own vftable (slot 116 on 1.26.40.8, slot 115 on 1.26.51.1 -- never the
+// same index between builds, confirmed against both vftables directly, which is why this is read
+// by name and not by slot, the same rule `FillingContainer::removeResource`/`swapSlots` above follow).
+const Player$drop = procHacker.js("?drop@Player@@UEAA_NAEBVItemStack@@_N@Z", bool_t, { this: Player }, ItemStack, bool_t);
+
+/**
+ * `ItemLockHelper::shouldKeepOnDeath`'s gate, next-steps Q1-B-3 / docs/findings-containers.md 12.
+ * 2024's `?shouldKeepOnDeath@ItemLockHelper@@SA_NAEBVItemStackBase@@@Z` (`0x1b6e400`) is
+ * `userData->contains("minecraft:keep_on_death") && userData->getByte("minecraft:keep_on_death") != 0`
+ * over the item's own tag (`userData`, +0x10). Neither `?contains@CompoundTag@@...` nor
+ * `?getByte@CompoundTag@@...` nor `shouldKeepOnDeath` itself are required or (on 1.26.40.8) resolved
+ * at all; 1.26.51.1 carries only `contains` (propagation, unused elsewhere) and neither build keeps
+ * `shouldKeepOnDeath` out of line -- both inline the identical two-lookup sequence directly into
+ * their own `dropAllOnDeath`/`Player::die`, reading the same string ("minecraft:keep_on_death", 23
+ * bytes) and ending on the same `cmpb $0, 8(%rax)` this project already knows is `ByteTag::data` at
+ * +8 (`getDamageValue` above reads the identical field for the identical reason). Like
+ * `getDamageValue`, this is not BDS code translated by address -- `userData` is already a
+ * `CompoundTag`, and `CxxMap.get()` is bdsx's own walk over the exact memory `std::map::find` would
+ * walk, so it needs no address on either build.
+ */
+function shouldKeepOnDeath(item: ItemStackBase): boolean {
+    const self = item as unknown as StaticPointer;
+    const userData = self.getNullablePointerAs(CompoundTag, 0x10);
+    if (userData === null) return false;
+    const variant = userData.data.get("minecraft:keep_on_death");
+    if (variant === null) return false;
+    const tag = variant.get();
+    return tag instanceof ByteTag && tag.data !== 0;
+}
+
+/** The WeakPtr/valid/isNull/count guard every sibling in this family opens with (`getDamageValue`,
+ * `getSlotWithItem`, and both builds' own `dropSlot`/`dropAllOnDeath` bodies). */
+function isDroppableSlot(item: ItemStackBase): boolean {
+    if (!item.valid) return false;
+    const self = item as unknown as StaticPointer;
+    const weak = self.getNullablePointer(8);
+    if (weak === null) return false;
+    if (weak.getNullablePointer(0) === null) return false;
+    if (item.isNull()) return false;
+    if (item.amount === 0) return false;
+    return true;
+}
+
+/**
+ * The shared core of `Inventory::dropSlot` and `PlayerInventory::dropAllOnDeath`, next-steps
+ * Q1-B-3 / docs/findings-containers.md 12. 1.26.40.8 still has `dropSlot` out of line (`0x207ba0`,
+ * the 2024 body at `0x1792e50`): bail on the guard above, then -- unless `onlyClearContainer` --
+ * call through to the item's owner (`FillingContainer::player_`, +432) with `dropAll ? item.amount
+ * : 1` items, and clear the slot once nothing is left. 1.26.51.1 has no out-of-line `dropSlot` at
+ * all (both it and `dropAllOnDeath`'s own loop are inlined into `Player::die`, `0x2adbb0`), but the
+ * inlined copy does the identical thing an instruction at a time, down to reading `player_` at the
+ * same +432 and calling the drop through the identical vftable shape.
+ */
+function doDropSlot(container: Inventory, slot: number, onlyClearContainer: boolean, dropAll: boolean, randomly: boolean): void {
+    const size = FillingContainer$getContainerSize.call(container);
+    if (slot < 0 || slot >= size) return;
+    const item = Container.prototype.getItem.call(container, slot);
+    if (!isDroppableSlot(item)) return;
+
+    const dropAmount = dropAll ? item.amount : 1;
+    if (!onlyClearContainer) {
+        // Both builds' own bodies call through to `Player::drop` and then unwind the slot
+        // regardless of what it returned (40's `0x207ba0` never tests AL after the call at
+        // `0x207cad`, and 2024's `FillingContainer::_doDrop` cannot even report failure -- it is
+        // `void`) -- but a caller that returns `false` is refusing to spawn the entity at all, and
+        // shipping that as "then destroy the item anyway" would be handing bdsx plugins an item
+        // sink. Unlike the binary, bdsx checks it: a refused drop leaves the slot untouched rather
+        // than clearing an item nothing was done with. (This surfaced on this project's headless
+        // probe bot, whose Abilities all read false pre-respawn -- the same loading-screen-layer
+        // state already blocking `playerAttack`/`attackMobs`, docs/findings-slots.md -- so
+        // `Player::drop`'s own `ability[2] || dead` gate refuses every call the bot makes while
+        // alive; a real client or an already-dead player does not hit this.)
+        const player = (container as unknown as StaticPointer).getNullablePointerAs(Player, FillingContainer$player);
+        if (player === null) {
+            console.error(`[bdsx] Inventory::dropSlot: no owning player at +${FillingContainer$player} for slot ${slot}, leaving the item in place`);
+            return;
+        }
+        const dropped = Player$drop.call(player, item, randomly);
+        if (!dropped) {
+            console.error(`[bdsx] Inventory::dropSlot: Player::drop refused slot ${slot}, leaving the item in place`);
+            return;
+        }
+    }
+    const remaining = item.amount - dropAmount;
+    if (remaining <= 0) {
+        FillingContainer$clearSlot.call(container, slot);
+    } else {
+        // Only reachable with dropAll=false, which neither of bdsx's own callers uses --
+        // dropAllOnDeath always passes dropAll=true, so this branch is untested by this session.
+        item.amount = remaining;
+    }
+}
+
+Inventory.prototype.dropSlot = derived(
+    "?dropSlot@Inventory@@QEAAXH_N00@Z",
+    function dropSlot(this: Inventory, slot: number, onlyClearContainer: boolean, dropAll: boolean, randomly: boolean): void {
+        doDropSlot(this, slot, onlyClearContainer, dropAll, randomly);
+    },
+    () => procHacker.js("?dropSlot@Inventory@@QEAAXH_N00@Z", void_t, { this: Inventory }, int32_t, bool_t, bool_t, bool_t),
+);
+
+/**
+ * next-steps Q1-B-3 / docs/findings-containers.md 12. 1.26.40.8's out-of-line `dropAllOnDeath`
+ * (`0x1247850`) walks the container by index (`vft[20]` for the size, `vft[7]` per slot), skips
+ * invalid/null/empty slots and anything `shouldKeepOnDeath` keeps, and calls `dropSlot(slot,
+ * onlyClearContainer=silentDrops, dropAll=true, randomly=true)` for the rest -- traced end to end
+ * in this session (`docs/findings-containers.md` 12). 1.26.51.1 has no out-of-line copy at all: the
+ * same loop, the same two-step "minecraft:keep_on_death" lookup and the same drop call are written
+ * out inside `Player::die` (`0x2adbb0`), read in full this session to confirm the two builds agree.
+ */
+PlayerInventory.prototype.dropAllOnDeath = derived(
+    "?dropAllOnDeath@PlayerInventory@@QEAAX_N@Z",
+    function dropAllOnDeath(this: PlayerInventory, silentDrops: boolean = false): void {
+        const container = this.container;
+        const size = FillingContainer$getContainerSize.call(container);
+        for (let slot = 0; slot < size; slot++) {
+            const item = Container.prototype.getItem.call(container, slot);
+            if (!isDroppableSlot(item)) continue;
+            if (shouldKeepOnDeath(item)) continue;
+            doDropSlot(container, slot, silentDrops, true, true);
+        }
+    },
+    () => procHacker.js("?dropAllOnDeath@PlayerInventory@@QEAAX_N@Z", void_t, { this: PlayerInventory }, bool_t),
+);
 
 ItemDescriptor.prototype[NativeType.ctor] = procHacker.js("??0ItemDescriptor@@QEAA@XZ", void_t, { this: ItemDescriptor });
 ItemDescriptor.prototype[NativeType.dtor] = procHacker.js("??1ItemDescriptor@@UEAA@XZ", void_t, { this: ItemDescriptor });
