@@ -10,10 +10,12 @@ import { AllocatedPointer, StaticPointer, VoidPointer } from "../core";
 import { CxxPair } from "../cxxpair";
 import { CxxVector, CxxVectorToArray } from "../cxxvector";
 import { decay } from "../decay";
+import { dll } from "../dll";
 import { events } from "../event";
 import { bedrockServer } from "../launcher";
 import { makefunc } from "../makefunc";
 import { mce } from "../mce";
+import { msAlloc } from "../msalloc";
 import { AbstractClass, NativeClass, NativeClassType, nativeClass, nativeField, vectorDeletingDestructor } from "../nativeclass";
 import {
     CxxString,
@@ -1938,7 +1940,37 @@ Mob.prototype.shouldDropDeathLoot = procHacker.jsv("??_7Mob@@6B@", "?shouldDropD
 OwnerStorageEntity.prototype._getStackRef = procHacker.js("?_getStackRef@OwnerStorageEntity@@IEBAAEAVEntityContext@@XZ", EntityContext, {
     this: OwnerStorageEntity,
 });
-Actor.tryGetFromEntity = procHacker.js("?tryGetFromEntity@Actor@@SAPEAV1@AEAVEntityContext@@_N@Z", Actor, null, EntityContext, bool_t);
+// Actor / Player / ServerPlayer ::tryGetFromEntity (docs/findings-components.md, "tryGetFromEntity").
+// 1.26 keeps no out-of-line copy of any of them. The 2024 bodies (0x19ca400, 0x19ece30, 0xcd8660) are
+// try_get<ActorOwnerComponent> -> the unique_ptr<Actor> it holds -> null if removed unless asked, and
+// the two player ones put one flag test in front (PlayerComponent, ServerPlayerComponent). Endstone
+// (Apache-2.0) writes Actor::tryGetFromEntity and Player::tryGetFromEntity the same way for 1.26.
+// An EntityContext is the registry at +8 and the entity id at +16 -- the same two words an Actor holds
+// at +16/+24, since the Actor's own context sits at +8 -- so the actor-keyed EnTT helpers read a context
+// through a pointer 8 bytes before it.
+const ACTOR_OWNER_COMPONENT_HASH = enttTypeHash("ActorOwnerComponent");
+const PLAYER_COMPONENT_HASH = enttTypeHash("PlayerComponent");
+const SERVER_PLAYER_COMPONENT_HASH = enttTypeHash("ServerPlayerComponent");
+const ACTOR_CTXBASE = Actor.offsetOf("ctxbase");
+function contextHolder(ctx: EntityContext): Actor {
+    return (ctx as unknown as StaticPointer).add(-ACTOR_CTXBASE) as unknown as Actor;
+}
+function actorFromEntity(ctx: EntityContext, includeRemoved: boolean): StaticPointer | null {
+    const owner = enttComponent(contextHolder(ctx), ACTOR_OWNER_COMPONENT_HASH, 8);
+    if (owner === null) return null;
+    const actor = owner.getNullablePointer(0);
+    if (actor === null) return null;
+    if (!includeRemoved && actor.getUint8(pdbcache.layouts.Actor?.removed ?? ACTOR_WORLD_2024.removed) !== 0) return null;
+    return actor;
+}
+Actor.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) => Actor | null>(
+    "?tryGetFromEntity@Actor@@SAPEAV1@AEAVEntityContext@@_N@Z",
+    function tryGetFromEntity(entity: EntityContext, getRemoved: boolean = false): Actor | null {
+        const p = actorFromEntity(entity, getRemoved);
+        return p === null ? null : Actor.from(p);
+    },
+    () => procHacker.js("?tryGetFromEntity@Actor@@SAPEAV1@AEAVEntityContext@@_N@Z", Actor, null, EntityContext, bool_t),
+);
 
 SynchedActorDataEntityWrapper.prototype.getFloat = procHacker.js(
     "?getFloat@SynchedActorDataEntityWrapper@@QEBAMG@Z",
@@ -2335,7 +2367,66 @@ procHacker.hookingRawWithCallOriginal("??1Actor@@UEAA@XZ", asmcode.actorDestruct
     { this: Player },
     CxxString,
 );
-const PlayerListPacket$emplace = procHacker.js("?emplace@PlayerListPacket@@QEAAX$$QEAVPlayerListEntry@@@Z", void_t, null, PlayerListPacket, PlayerListEntry);
+// PlayerListPacket::emplace (docs/findings-containers.md, 14). 2024's (0xa274b0) was a vector
+// emplace_back of the entry itself. 1.26 has no copy, and the packet no longer holds PlayerListEntry:
+// its vector (+48) holds 184-byte variants -- alternative 0 is a removal {action 1, uuid}, alternative 1
+// an addition {action 0, uuid, id, the three strings, platform, skin, the three bools, color}, index
+// byte +176 -- and the one byte `action` at +72 that 2024 had became a constant 5 every constructor
+// writes. ServerLevel's gameplay-user-added path (40 0x2e27020 / 51 0x8664c0) builds alternative 1 from
+// an entry by moving each member; this does the same, and moves the entry's members out as it does.
+const PlayerListPacket$emplace = derived<(pk: PlayerListPacket, entry: PlayerListEntry) => void>(
+    "?emplace@PlayerListPacket@@QEAAX$$QEAVPlayerListEntry@@@Z",
+    function emplace(pk: PlayerListPacket, entry: PlayerListEntry): void {
+        const E = pdbcache.layouts.PlayerListEntry;
+        const P = pdbcache.layouts.PlayerListPacket;
+        const A = pdbcache.layouts.PlayerListPacketAddEntry;
+        if (E === undefined || P === undefined || A === undefined) throw Error("PlayerListPacket::emplace: this build's symbols.json has no PlayerList layouts");
+        const vec = (pk as unknown as StaticPointer).add(P.entries);
+        const size = P.elementSize;
+        let begin = vec.getPointer(0),
+            end = vec.getPointer(8);
+        const cap = vec.getPointer(16);
+        const used = end.subptr(begin);
+        if (end.equalsptr(cap)) {
+            // grow: the elements are a byte, PODs, MSVC strings and a shared_ptr -- all relocatable by
+            // memcpy, which is what the engine's own push does -- in storage the packet's destructor frees
+            const oldCapBytes = cap.subptr(begin);
+            const newCapBytes = Math.max(size, oldCapBytes * 2);
+            const fresh = msAlloc.allocate(newCapBytes);
+            if (used !== 0) {
+                dll.vcruntime140.memcpy(fresh, begin, used);
+                msAlloc.deallocate(begin, oldCapBytes);
+            }
+            begin = fresh;
+            end = fresh.add(used);
+            vec.setPointer(fresh, 0);
+            vec.setPointer(fresh.add(newCapBytes), 16);
+        }
+        const src = entry as unknown as StaticPointer;
+        dll.vcruntime140.memset(end, 0, size);
+        end.setUint8(0, A.action); // Add
+        end.copyFrom(src, 16, A.uuid, E.uuid);
+        end.copyFrom(src, 8, A.id, E.id);
+        for (const k of ["name", "xuid", "platformOnlineId"] as const) {
+            end.copyFrom(src, 32, A[k], E[k]);
+            // leave the source an empty small string: size 0, capacity 15
+            src.setInt64WithFloat(0, E[k] + 16);
+            src.setInt64WithFloat(15, E[k] + 24);
+            src.setUint8(0, E[k]);
+        }
+        end.setInt32(src.getInt32(E.buildPlatform), A.buildPlatform);
+        end.copyFrom(src, 16, A.skin, E.skin); // shared_ptr: pointer and control block
+        src.setPointer(null, E.skin);
+        src.setPointer(null, E.skin + 8);
+        end.setUint8(src.getUint8(E.isTeacher), A.isTeacher);
+        end.setUint8(src.getUint8(E.isHost), A.isHost);
+        end.setUint8(src.getUint8(E.isSubClient), A.isSubClient);
+        end.copyFrom(src, 16, A.color, E.color);
+        end.setUint8(1, P.elementIndex); // alternative 1
+        vec.setPointer(end.add(size), 8);
+    },
+    () => procHacker.js("?emplace@PlayerListPacket@@QEAAX$$QEAVPlayerListEntry@@@Z", void_t, null, PlayerListPacket, PlayerListEntry),
+);
 Player.prototype.setName = function (name: string): void {
     (this as any)._setName(name);
     this.updatePlayerList();
@@ -2738,7 +2829,15 @@ Player.prototype.getAbilities = procHacker.js("?getAbilities@Player@@QEAAAEAVLay
 Player.prototype.getSelectedItem = procHacker.js("?getSelectedItem@Player@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Player });
 Player.prototype.getName = procHacker.js("?getName@Player@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Player });
 
-Player.tryGetFromEntity = procHacker.js("?tryGetFromEntity@Player@@SAPEAV1@AEAVEntityContext@@_N@Z", Player, null, EntityContext, bool_t);
+Player.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) => Player | null>(
+    "?tryGetFromEntity@Player@@SAPEAV1@AEAVEntityContext@@_N@Z",
+    function tryGetFromEntity(entity: EntityContext, getRemoved: boolean = false): Player | null {
+        if (!enttHas(contextHolder(entity), PLAYER_COMPONENT_HASH)) return null;
+        const p = actorFromEntity(entity, getRemoved);
+        return p === null ? null : (Actor.from(p) as Player | null);
+    },
+    () => procHacker.js("?tryGetFromEntity@Player@@SAPEAV1@AEAVEntityContext@@_N@Z", Player, null, EntityContext, bool_t),
+);
 
 ServerPlayer.prototype.nextContainerCounter = procHacker.js("?_nextContainerCounter@ServerPlayer@@AEAA?AW4ContainerID@@XZ", int8_t, { this: ServerPlayer });
 ServerPlayer.prototype.openInventory = procHacker.js("?openInventory@ServerPlayer@@UEAAXXZ", void_t, { this: ServerPlayer });
@@ -2758,7 +2857,15 @@ ServerPlayer.prototype.getInputMode = function () {
 };
 ServerPlayer.prototype.setOffhandSlot = procHacker.js("?setOffhandSlot@ServerPlayer@@UEAAXAEBVItemStack@@@Z", void_t, { this: ServerPlayer }, ItemStack);
 (ServerPlayer.prototype as any)._sendInventory = procHacker.js("?sendInventory@ServerPlayer@@UEAAX_N@Z", void_t, { this: ServerPlayer }, bool_t);
-ServerPlayer.tryGetFromEntity = procHacker.js("?tryGetFromEntity@ServerPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z", ServerPlayer, null, EntityContext, bool_t);
+ServerPlayer.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) => ServerPlayer | null>(
+    "?tryGetFromEntity@ServerPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z",
+    function tryGetFromEntity(entity: EntityContext, getRemoved: boolean = false): ServerPlayer | null {
+        if (!enttHas(contextHolder(entity), SERVER_PLAYER_COMPONENT_HASH)) return null;
+        const p = actorFromEntity(entity, getRemoved);
+        return p === null ? null : (Actor.from(p) as ServerPlayer | null);
+    },
+    () => procHacker.js("?tryGetFromEntity@ServerPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z", ServerPlayer, null, EntityContext, bool_t),
+);
 
 const ServerNetworkHandlerNonOwnerPointer = Bedrock.NonOwnerPointer.make(ServerNetworkHandler);
 SimulatedPlayer.abstract({});
@@ -2943,6 +3050,16 @@ PlayerListEntry.constructWith = function (player: Player): PlayerListEntry {
     return PlayerListEntry$PlayerListEntry(entry, player);
 };
 PlayerListEntry.prototype[NativeType.dtor] = procHacker.js("??1PlayerListEntry@@QEAA@XZ", void_t, { this: PlayerListEntry });
+// 1.26's entry holds the skin by shared_ptr (+128, taken from the Player's SerializedSkinRef at +2736)
+// where 2024 held a SerializedSkin by value at 0x80; the pointed-to object has 2024's members in order.
+if (pdbcache.layouts.PlayerListEntry?.skin !== undefined) {
+    const off = pdbcache.layouts.PlayerListEntry.skin;
+    Object.defineProperty(PlayerListEntry.prototype, "skin", {
+        get(this: PlayerListEntry): SerializedSkin {
+            return (this as unknown as StaticPointer).getPointerAs(SerializedSkin, off);
+        },
+    });
+}
 
 // networkidentifier.ts
 NetworkIdentifier.prototype.getActor = function (): ServerPlayer | null {
