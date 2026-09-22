@@ -462,22 +462,48 @@ events.entityCreated.setInstaller(() => {
 });
 
 events.playerAttack.setInstaller(() => {
-    function onPlayerAttack(player: Player, victim: Actor, cause: Wrapper<ActorDamageCause>): boolean {
+    // 1.26: Actor::attack(Actor&, ActorDamageCause const&) became a pure virtual on Actor returning
+    // ActorHurtResult through a hidden pointer (docs/findings-audit.md "attack"; the same shift already
+    // recorded above for Actor::hurt / Mob::_hurt -- a struct return inserts the hidden pointer right
+    // after `this`, so every later argument moves up one register). The decorated 2024 name still
+    // names a real vftable slot 52 target on Player, but it is a 34-byte ABI shim -- forwards
+    // this/result/victim/cause untouched, adds one more (unnamed) argument on the stack, and falls
+    // into the real ~3.4KB combat body -- not combat logic itself; two routes had agreed on the
+    // *slot*, not the *prototype* (docs/HANDOFF.md rule 3, `data/candidates-instances-<v>.json`
+    // `retracted`). Hooking the shim is enough: original() replays its own untouched bytes, so the
+    // extra argument never has to be known. ActorHurtResult is variant<bool, float> (payload at +0,
+    // tag at +4) then a bool at +8, the same layout Mob::_hurt returns; "not hurt" is all-zero.
+    if ("bdsx:Actor::attack" in proc) {
+        function onPlayerAttack(player: Player, result: StaticPointer, victim: Actor, cause: Wrapper<ActorDamageCause>): StaticPointer {
+            const event = new PlayerAttackEvent(player, victim);
+            const canceled = events.playerAttack.fire(event) === CANCEL;
+            if (canceled) {
+                result.fill(0, 12);
+                return result;
+            }
+            return _onPlayerAttack(event.player, result, event.victim, cause);
+        }
+        const _onPlayerAttack = procHacker.hooking("bdsx:Actor::attack", StaticPointer, null, Player, StaticPointer, Actor, Wrapper.make(int32_t))(
+            onPlayerAttack,
+        );
+        return;
+    }
+    function onPlayerAttackOld(player: Player, victim: Actor, cause: Wrapper<ActorDamageCause>): boolean {
         const event = new PlayerAttackEvent(player, victim);
         const canceled = events.playerAttack.fire(event) === CANCEL;
         if (canceled) {
             return false;
         }
-        return _onPlayerAttack(event.player, event.victim, cause);
+        return _onPlayerAttackOld(event.player, event.victim, cause);
     }
-    const _onPlayerAttack = procHacker.hooking(
+    const _onPlayerAttackOld = procHacker.hooking(
         "?attack@Player@@UEAA_NAEAVActor@@AEBW4ActorDamageCause@@@Z",
         bool_t,
         null,
         Player,
         Actor,
         Wrapper.make(int32_t),
-    )(onPlayerAttack);
+    )(onPlayerAttackOld);
 });
 
 events.playerInteract.setInstaller(() => {
