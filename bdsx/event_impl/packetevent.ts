@@ -270,7 +270,7 @@ function hook2024Receive(): void {
  * hook (runtime/bedrock_hooks/packet.cpp). Here each dispatcher's vptr is
  * pointed at a two-slot table of our own whose `handle` tests the id's
  * enabledPacket byte and goes to JS only when a before/after listener is on,
- * so a packet type nobody listens to costs four instructions. No code in the
+ * so a packet type nobody listens to costs six instructions (load, test, jz, load, jmp). No code in the
  * binary is patched; nothing here has a per-build offset.
  */
 const PACKET_HANDLER_OFFSET = 0x20;
@@ -396,8 +396,7 @@ const NC_ID = NetworkConnection$layout.id ?? 0;
 const DATA_STATUS_HAS_DATA = 0;
 /** receives that did not come from the node thread (read by tools/packet-probe.ts) */
 export const packetRawOffThread = new AllocatedPointer(8);
-packetRawOffThread.setInt32(0, 0);
-packetRawOffThread.setInt32(0, 4);
+packetRawOffThread.fill(0, 8);
 let originalReceive: ((peer: StaticPointer, out: StaticPointer, timepoint: StaticPointer) => number) | null = null;
 
 function connectionIdOfPeer(peer: StaticPointer): NetworkIdentifier | null {
