@@ -5582,29 +5582,55 @@ ItemComponent.prototype.initializeFromNetwork = function (tag, u = new cereal.Re
     return ItemComponent$initializeFromNetwork.call(this, tag, u);
 };
 
-CooldownItemComponent.getIdentifier = procHacker.js("?getIdentifier@CooldownItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-ArmorItemComponent.getIdentifier = procHacker.js("?getIdentifier@ArmorItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-DurabilityItemComponent.getIdentifier = procHacker.js("?getIdentifier@DurabilityItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-DiggerItemComponent.getIdentifier = procHacker.js("?getIdentifier@DiggerItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-DisplayNameItemComponent.getIdentifier = procHacker.js("?getIdentifier@DisplayNameItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
+// `<X>ItemComponent::getIdentifier()` is a zero-argument magic-statics accessor on every build:
+// thread-safe once-init of a function-local `HashedString` built from the component's own
+// compile-time-fixed literal, then the same reference forever after (2024's shape for all
+// nineteen, read with disas-exact -- e.g. FuelItemComponent's is 0x1e01d80, ~60B:
+// `_Init_thread_header` guard, `lea` of the string literal, `HashedString::HashedString(char
+// const*)`, `atexit`). None of the nineteen has an out-of-line copy on either 1.26 build --
+// every call site inlines the literal instead (e.g. "minecraft:fuel" is `lea`'d straight into
+// CoalItem's constructor) -- but every one of the nineteen literals still exists exactly once
+// in each 1.26 image at the same file offset disas-exact reads it at in 2024 (`tools/disas-
+// exact.mjs 1.21.3.01 0x<rva>` against all nineteen, then a plain byte search of both
+// work/bin/<v>/bedrock_server.exe images), which is the second, independent route: the 2024
+// body says what string a class returns, the 1.26 binary says that exact string is still
+// there. `HashedString.set()` -> `computeHash()` is itself already `derived()` and checked
+// (6/6 FNV-1 test vectors + HashedString.set on both builds, data/derived.json), so no address
+// is needed for the hash either -- constructing one is pure JS over a layout bdsx already owns
+// (docs/findings-utils.md). One name reads differently from its class and would have been a
+// guess if not read: `PlanterItemComponent::getIdentifier()` returns "minecraft:block_placer",
+// not "minecraft:planter". docs/findings-audit.md ("getIdentifier@FuelItemComponent"),
+// docs/next-steps.md Q3 "다음에 할 것" (1).
+function itemComponentIdentifier(sym: string, literal: string): () => HashedString {
+    return derived(sym, (() => {
+        const hs = HashedString.construct();
+        hs.set(literal);
+        return () => hs;
+    })(), () => procHacker.js(sym, HashedString, null));
+}
+CooldownItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@CooldownItemComponent@@SAAEBVHashedString@@XZ", "minecraft:cooldown");
+ArmorItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@ArmorItemComponent@@SAAEBVHashedString@@XZ", "minecraft:armor");
+DurabilityItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DurabilityItemComponent@@SAAEBVHashedString@@XZ", "minecraft:durability");
+DiggerItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DiggerItemComponent@@SAAEBVHashedString@@XZ", "minecraft:digger");
+DisplayNameItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DisplayNameItemComponent@@SAAEBVHashedString@@XZ", "minecraft:display_name");
 // XXX: removed
 // DyePowderItemComponent.getIdentifier = procHacker.js("?getIdentifier@DyePowderItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-EntityPlacerItemComponent.getIdentifier = procHacker.js("?getIdentifier@EntityPlacerItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-FoodItemComponent.getIdentifier = procHacker.js("?getIdentifier@FoodItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-FuelItemComponent.getIdentifier = procHacker.js("?getIdentifier@FuelItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-IconItemComponent.getIdentifier = procHacker.js("?getIdentifier@IconItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
+EntityPlacerItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@EntityPlacerItemComponent@@SAAEBVHashedString@@XZ", "minecraft:entity_placer");
+FoodItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@FoodItemComponent@@SAAEBVHashedString@@XZ", "minecraft:food");
+FuelItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@FuelItemComponent@@SAAEBVHashedString@@XZ", "minecraft:fuel");
+IconItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@IconItemComponent@@SAAEBVHashedString@@XZ", "minecraft:icon");
 // XXX: removed
 // KnockbackResistanceItemComponent.getIdentifier = procHacker.js("?getIdentifier@KnockbackResistanceItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-OnUseItemComponent.getIdentifier = procHacker.js("?getIdentifier@OnUseItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-PlanterItemComponent.getIdentifier = procHacker.js("?getIdentifier@PlanterItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-ProjectileItemComponent.getIdentifier = procHacker.js("?getIdentifier@ProjectileItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-RecordItemComponent.getIdentifier = procHacker.js("?getIdentifier@RecordItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-RenderOffsetsItemComponent.getIdentifier = procHacker.js("?getIdentifier@RenderOffsetsItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-RepairableItemComponent.getIdentifier = procHacker.js("?getIdentifier@RepairableItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-ShooterItemComponent.getIdentifier = procHacker.js("?getIdentifier@ShooterItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-ThrowableItemComponent.getIdentifier = procHacker.js("?getIdentifier@ThrowableItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-WeaponItemComponent.getIdentifier = procHacker.js("?getIdentifier@WeaponItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
-WearableItemComponent.getIdentifier = procHacker.js("?getIdentifier@WearableItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
+OnUseItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@OnUseItemComponent@@SAAEBVHashedString@@XZ", "minecraft:on_use");
+PlanterItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@PlanterItemComponent@@SAAEBVHashedString@@XZ", "minecraft:block_placer");
+ProjectileItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@ProjectileItemComponent@@SAAEBVHashedString@@XZ", "minecraft:projectile");
+RecordItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@RecordItemComponent@@SAAEBVHashedString@@XZ", "minecraft:record");
+RenderOffsetsItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@RenderOffsetsItemComponent@@SAAEBVHashedString@@XZ", "minecraft:render_offsets");
+RepairableItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@RepairableItemComponent@@SAAEBVHashedString@@XZ", "minecraft:repairable");
+ShooterItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@ShooterItemComponent@@SAAEBVHashedString@@XZ", "minecraft:shooter");
+ThrowableItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@ThrowableItemComponent@@SAAEBVHashedString@@XZ", "minecraft:throwable");
+WeaponItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@WeaponItemComponent@@SAAEBVHashedString@@XZ", "minecraft:weapon");
+WearableItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@WearableItemComponent@@SAAEBVHashedString@@XZ", "minecraft:wearable");
 
 // XXX: removed
 // DiggerItemComponent.prototype.mineBlock = procHacker.js(
