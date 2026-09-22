@@ -484,6 +484,116 @@ function installRawReceive(): void {
     });
 }
 
+/**
+ * The 1.26 packetSendRaw: BatchedNetworkPeer::sendPacket is the point downstream of both a
+ * single-target NetworkSystem::send and any broadcast fan-out where the fully serialized bytes
+ * (header varint + payload) are handed to the connection for transmission -- the send-side mirror of
+ * _receivePacket, and this build's successor to 2024's NetworkSystem::_sendInternal (also gone, also
+ * inlined; docs/findings-packets.md 3, 7). The hook sits at the function's entry: on the node thread it
+ * asks JS whether to proceed, and CANCEL skips the call to the original entirely (the bytes never reach
+ * the wire) -- the send-side equivalent of _receivePacket's "ask for the next one" on cancel. A call
+ * from off the node thread is counted and passed straight through unread, exactly installRawReceive's
+ * rule (V8 cannot be entered from another OS thread). connectionIdOfPeer works unchanged: sendPacket's
+ * `this` is the same BatchedNetworkPeer* that _receivePacket's is.
+ */
+const SEND_RAW_SYMBOL =
+    "?sendPacket@BatchedNetworkPeer@@UEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@W4Reliability@NetworkPeer@@W4Compressibility@@@Z";
+/** sends that did not come from the node thread (read by tools/packet-send-probe.ts) */
+export const packetSendRawOffThread = new AllocatedPointer(8);
+packetSendRawOffThread.fill(0, 8);
+
+function onSendPacketRaw(peer: StaticPointer, dataPtr: StaticPointer, reliability: number, compressibility: number): number {
+    try {
+        const data = dataPtr.as(CxxStringWrapper);
+        const ptr = data.valueptr;
+        const length = data.length;
+        let header = 0;
+        for (let i = 0, shift = 0; i < 5 && i < length; i++, shift += 7) {
+            const b = ptr.getUint8(i);
+            header |= (b & 0x7f) << shift;
+            if ((b & 0x80) === 0) break;
+        }
+        const packetId = header & 0x3ff;
+        if (packetId >= PACKET_ID_COUNT) return 0;
+        if (!(enabledPacket.getUint8(packetId) & (1 << events.PacketEventType.SendRaw))) return 0;
+        const ni = connectionIdOfPeer(peer);
+        if (ni === null) return 0;
+        nethook.lastSender = ni;
+        for (const listener of events.packetSendRaw(packetId).allListeners()) {
+            const p = ptr.add();
+            try {
+                if (listener(p, length, ni, packetId) === CANCEL) {
+                    return 1;
+                }
+            } catch (err) {
+                events.errorFire(err);
+            } finally {
+                decay(p);
+            }
+        }
+    } catch (err) {
+        remapAndPrintError(err);
+    }
+    return 0;
+}
+
+/**
+ * Same push/call/pop shape as installRawReceive's thread check, run twice: once to read the thread id,
+ * once (only on the node thread) to call JS. sendPacket takes four register args (rcx/rdx/r8/r9), an
+ * even count -- unlike _receivePacket's three, which land on a 16-aligned rsp by themselves -- so an
+ * unused fifth push (r10) pads each block to an odd push count before the `sub rsp,0x20`/call.
+ */
+function installSendRaw(): void {
+    if (!(SEND_RAW_SYMBOL in proc)) return;
+    const js = makefunc.np(onSendPacketRaw, int32_t, { name: "onSendPacketRaw" }, StaticPointer, StaticPointer, int32_t, int32_t);
+    dispatcherKeepAlive.push(js);
+    procHacker.hookingRaw(SEND_RAW_SYMBOL, original => {
+        return asm()
+            .push_r(Register.rcx)
+            .push_r(Register.rdx)
+            .push_r(Register.r8)
+            .push_r(Register.r9)
+            .push_r(Register.r10) // parity pad, see doc comment above
+            .sub_r_c(Register.rsp, 0x20)
+            .mov_r_c(Register.rax, dllraw.kernel32.GetCurrentThreadId)
+            .call_r(Register.rax)
+            .add_r_c(Register.rsp, 0x20)
+            .pop_r(Register.r10)
+            .pop_r(Register.r9)
+            .pop_r(Register.r8)
+            .pop_r(Register.rdx)
+            .pop_r(Register.rcx)
+            .cmp_r_c(Register.rax, capi.nodeThreadId, OperationSize.dword)
+            .jne_label("offthread")
+            .push_r(Register.rcx)
+            .push_r(Register.rdx)
+            .push_r(Register.r8)
+            .push_r(Register.r9)
+            .push_r(Register.r10) // parity pad
+            .sub_r_c(Register.rsp, 0x20)
+            .mov_r_c(Register.rax, js)
+            .call_r(Register.rax)
+            .add_r_c(Register.rsp, 0x20)
+            .pop_r(Register.r10)
+            .pop_r(Register.r9)
+            .pop_r(Register.r8)
+            .pop_r(Register.rdx)
+            .pop_r(Register.rcx)
+            .cmp_r_c(Register.rax, 0, OperationSize.dword)
+            .jne_label("cancelled")
+            .mov_r_c(Register.rax, original)
+            .jmp_r(Register.rax)
+            .label("offthread")
+            .mov_r_c(Register.rax, packetSendRawOffThread)
+            .inc_rp(Register.rax, 1, 0)
+            .mov_r_c(Register.rax, original)
+            .jmp_r(Register.rax)
+            .label("cancelled")
+            .ret()
+            .alloc("hook of BatchedNetworkPeer::sendPacket");
+    });
+}
+
 bedrockServer.withLoading().then(() => {
     const sendToClientsSymbol =
         "?sendToClients@LoopbackPacketSender@@UEAAXAEBV?$vector@UNetworkIdentifierWithSubId@@V?$allocator@UNetworkIdentifierWithSubId@@@std@@@std@@AEBVPacket@@@Z";
@@ -492,6 +602,7 @@ bedrockServer.withLoading().then(() => {
     else if (process.env.BDSX_NO_PACKET_DISPATCH !== "1") {
         installPacketDispatchers();
         installRawReceive();
+        installSendRaw();
     }
 
     // hook send
