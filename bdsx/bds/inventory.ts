@@ -898,7 +898,12 @@ export class InventoryTransaction extends AbstractClass {
 export class ComplexInventoryTransaction extends AbstractClass {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
-    @nativeField(uint8_t)
+    // Endstone's complex_inventory_transaction.h declares `enum class Type : std::uint32_t` at +8 (both
+    // 1.26.40.8 and 1.26.51.1, no diff between the two Endstone releases here) -- widened from uint8_t,
+    // which read the same low byte for the five in-range values but not the field's real width. `data`'s
+    // auto-computed offset does not move: InventoryTransaction needs 8-byte alignment either way, so it
+    // lands at +0x10 whether `type` is declared 1 or 4 bytes wide. docs/findings-packets.md 11.
+    @nativeField(uint32_t)
     type: ComplexInventoryTransaction.Type;
     @nativeField(InventoryTransaction)
     data: InventoryTransaction;

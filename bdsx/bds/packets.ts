@@ -38,6 +38,7 @@ import { CompoundTag } from "./nbt";
 import { Packet } from "./packet";
 import { MinecraftPacketIds } from "./packetids";
 import type { GameType, Player } from "./player";
+import { pdbcache } from "../pdbcache";
 import { DisplaySlot, ObjectiveSortOrder, ScoreboardId } from "./scoreboard";
 import { SerializedSkin } from "./skin";
 
@@ -724,11 +725,34 @@ export class UpdateAttributesPacket extends Packet {
     serializationMode: uint32_t;
 }
 
+// 1.26's InventoryTransactionPacketPayload (Endstone inventory_transaction_packet.h, offsets relative to
+// payload@+0x30) wraps the old `unique_ptr<ComplexInventoryTransaction> transaction` in a new
+// `std::variant<NormalTransactionData, InventoryMismatchData, ItemUse..., ItemUseOnActor..., ItemRelease...>
+// variant_transaction` placed BEFORE it: variant_transaction is at payload+0x28 (packet+0x58, where 2024's
+// flat struct kept the unique_ptr -- reading it as a ComplexInventoryTransaction* is reading the variant's
+// tag+union bytes as a pointer), and the real `transaction` unique_ptr moved to payload+0x138/packet+0x168
+// on 1.26.40.8 (Endstone v0.11.7: `transaction; // +312`) and payload+0x140/packet+0x170 on 1.26.51.1
+// (Endstone HEAD: `+320`, 8 bytes later because HEAD's ItemUseInventoryTransaction alternative carries an
+// extra `HandSlot hand_` field). Confirmed on both exes: InventoryTransactionPacketPayload's own destructor
+// (40 0x241a80 / 51 0x2da460) does `movq 0x138(%rcx),%rcx` / `0x140(%rcx),%rcx` then the standard
+// unique_ptr null-check + vft[0](1) delete, and the packet's own scalar-deleting destructor (40 0x241af0 /
+// 51 0x2da4d0) sized-deletes `movl $0x180,%edx` / `$0x188,%edx` -- both match Endstone's
+// BEDROCK_STATIC_ASSERT_SIZE(InventoryTransactionPacket, 384, ...) / (392, ...) exactly. Static only: no
+// live packet has been read through this offset (the bot cannot synthesize InventoryTransactionPacket
+// without disconnecting -- docs/findings-packets.md 7, Q7). The inner ComplexInventoryTransaction/
+// InventoryTransaction/InventoryAction/InventorySource shapes below this pointer are unchanged from 2024
+// (Endstone 0.11.7 and HEAD are byte-identical for those headers) except `ComplexInventoryTransaction.type`,
+// which the C++ enum declares as `std::uint32_t` (was read here as `uint8_t`; harmless for values 0-4, but
+// the field width is now correct, and it does not move `data`'s auto-computed offset either way since
+// InventoryTransaction is 8-byte aligned and the vtable already ends 8-byte aligned).
+// docs/findings-packets.md 11.
+const InventoryTransactionPacket$layout = pdbcache.layouts.InventoryTransactionPacket ?? {};
+
 @nativeClass(null)
 export class InventoryTransactionPacket extends Packet {
     @nativeField(uint32_t)
     legacyRequestId: uint32_t; // 0x30
-    @nativeField(ComplexInventoryTransaction.ref(), 0x58)
+    @nativeField(ComplexInventoryTransaction.ref(), InventoryTransactionPacket$layout.transaction ?? 0x58)
     transaction: ComplexInventoryTransaction | null;
 }
 

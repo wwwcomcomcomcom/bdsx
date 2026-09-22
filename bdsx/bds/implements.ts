@@ -3364,11 +3364,31 @@ Packet.prototype.getId = derived<(this: Packet) => number>(
     ),
     () => procHacker.jsv("??_7SetTitlePacket@@6B@", "?getId@SetTitlePacket@@UEBA?AW4MinecraftPacketIds@@XZ", int32_t, { this: Packet }),
 );
-Packet.prototype.getName = procHacker.jsv(
-    "??_7LoginPacket@@6B@",
+// Packet::getName is slot 2 of every packet table (right after getId, Endstone packet.h), and like getId
+// 1.26 keeps no out-of-line LoginPacket::getName to name the slot by -- the whole packet family's
+// getId/getName pair got inlined away identically (docs/findings-packets.md). What changed is the return
+// type: 1.26's override returns `std::string_view` (a 16-byte {data,size} pair), not `std::string`, so
+// CxxStringView reads the sret buffer as {data@0, size@8} instead of a real std::string object -- but the
+// calling convention is unchanged from getId's: makefunc.ts's own JS->native codegen pushes `this` before
+// `retVar` for a `structureReturn` call (bdsx/makefunc.ts, `paramPairs`), i.e. `this` is rcx and the hidden
+// return pointer is rdx, exactly the MSVC member-function ABI -- so the vtable is still read off rcx, only
+// the tail-jump offset changes (slot 2 = +16). (A first version of this trampoline read the vtable off rdx
+// instead, on the wrong assumption that structureReturn shifts `this` to the second slot; it crashed the
+// server 0xC0000005 on the first `getName()` call -- docs/findings-packets.md 12, "틀린 판".)
+Packet.prototype.getName = derived<(this: Packet) => CxxStringView>(
     "?getName@LoginPacket@@UEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-    CxxString,
-    { this: Packet, structureReturn: true },
+    makefunc.js(
+        asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 16).alloc("Packet::getName via vft[2]"),
+        CxxStringView,
+        { this: Packet, structureReturn: true },
+    ),
+    () =>
+        procHacker.jsv(
+            "??_7LoginPacket@@6B@",
+            "?getName@LoginPacket@@UEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+            CxxString,
+            { this: Packet, structureReturn: true },
+        ),
 );
 Packet.prototype.write = procHacker.jsv("??_7LoginPacket@@6B@", "?write@LoginPacket@@UEBAXAEAVBinaryStream@@@Z", void_t, { this: Packet }, BinaryStream);
 Packet.prototype.read = procHacker.jsv(
