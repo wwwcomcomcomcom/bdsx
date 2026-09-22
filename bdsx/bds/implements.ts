@@ -157,7 +157,7 @@ import {
     WearableItemComponent,
     cereal,
 } from "./item_component";
-import { ActorFactory, AdventureSettings, BlockPalette, JsonUtil, Level, LevelData, ServerLevel, Spawner, TagRegistry } from "./level";
+import { ActorFactory, AdventureSettings, BlockPalette, Difficulty, JsonUtil, Level, LevelData, ServerLevel, Spawner, TagRegistry } from "./level";
 import {
     ByteArrayTag,
     ByteTag,
@@ -2710,7 +2710,19 @@ Player.prototype.getXuid = procHacker.js("?getXuid@Player@@UEBA?AV?$basic_string
 Player.prototype.getUuid = function () {
     return TryGetUserEntityIdComponent(this).uuid;
 };
-Player.prototype.forceAllowEating = procHacker.js("?forceAllowEating@Player@@QEBA_NXZ", bool_t, { this: Player });
+// 2024's body (0x19dd740, 68B) is `isCreative() || getILevel().vft[32]() == 0`, and ILevel slot 32 in the 2024
+// table (0x2dc3ef8) is ?getDifficulty@Level@@ -- Difficulty::Peaceful is 0. 1.26 keeps no copy: none of the 27
+// callers of the out-of-line isCreative (40 0xe1d650 / 51 0xd5d940) is a function of that shape, and no
+// function under 900B holds both the ActorGameTypeComponent hash and a Level slot-36 call (the 2024
+// callers, FoodItemComponent::use and CakeBlock::use, inlined it). Both pieces are BDS's own: isCreative is
+// an address on both builds and getDifficulty is Level slot 36, executed (docs/findings-slots.md, route 9).
+Player.prototype.forceAllowEating = derived(
+    "?forceAllowEating@Player@@QEBA_NXZ",
+    function forceAllowEating(this: Player): boolean {
+        return this.isCreative() || this.getLevel().getDifficulty() === Difficulty.Peaceful;
+    },
+    () => procHacker.js("?forceAllowEating@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 Player.prototype.getSpeed = procHacker.js("?getSpeed@Player@@UEBAMXZ", float32_t, { this: Player });
 // `?hasOpenContainer@Player@@` is `cmpq $0, <the container manager>; setne` and 1.26 kept no copy of it.
 // The member is Player+1440 here (2024: +1872) -- ?setContainerManager@Player@@ stores there on both
