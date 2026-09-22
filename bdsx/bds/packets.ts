@@ -1994,6 +1994,14 @@ export class PlayerAuthInputPacket extends Packet {
     moveZ: float32_t;
     @nativeField(Vec3)
     readonly vrGazeDirection: Vec3;
+    /**
+     * Unverified, unused (nothing in bdsx reads `.inputFlags` -- `getInput()` below reads the real
+     * bitset through its own hardcoded offset instead). The 2024 offset this 0x70 was meant to
+     * describe is actually 0x78 (`BinaryStream::writeUnsignedVarInt64` in the baseline's `write()`
+     * labels the read at packet+0x78 "Input Data"), and 1.26 moves the field again, to 0x88 -- see
+     * `getInput()`. Left as-is; fixing it would also require re-deriving `inputMode`/`playMode`/`tick`
+     * below (auto-laid-out from here), which is out of scope for this pass (docs/findings-packets.md 10절).
+     */
     @nativeField(uint64_as_float_t, 0x70)
     inputFlags: uint64_as_float_t; // bitset, InputData
     @nativeField(int32_t)

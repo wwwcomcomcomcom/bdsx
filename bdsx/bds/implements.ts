@@ -3376,11 +3376,30 @@ ItemStackRequestData.prototype.tryFindAction = procHacker.js(
     uint8_t,
 );
 
-PlayerAuthInputPacket.prototype.getInput = procHacker.js(
+// 1.26 keeps no out-of-line getInput. Endstone's player_auth_input_packet.h (v0.11.7 for 1.26.40.8,
+// HEAD for 1.26.51.1 -- byte-identical between the two) has `write()`/`_read()` literally throw
+// "Not implemented": this packet is serialized through the cereal reflection path, not the manual
+// write/_read overrides the rest of the packets use, so there is no inlined bit-test body anywhere
+// to find by disassembly (confirmed -- an exact-byte search and a masked-immediate search for the
+// 2024 body's `shrq $6/andb $0x3f/btq` shape both return 0 hits in both 1.26 builds). The bitset
+// itself is still exactly where the header says: `std::bitset<INPUT_NUM> input_data` at
+// PlayerAuthInputPacketPayload+88, and the payload starts at Packet+48
+// (BEDROCK_STATIC_ASSERT_SIZE(Packet, 48, 48)), so the field is at packet+0x88. INPUT_NUM grew from
+// 49 (2024) to 66 (1.26 appends HorizontalCollision..InternalUpdate after BlockBreakingDelayEnabled),
+// which needs two 64-bit words (16 bytes), but every value bdsx's own InputData enum still declares
+// (0..48) sits in the low word at its 2024 bit position -- StartSneaking=27/StopSneaking=28 unchanged
+// in both Endstone headers, and confirmed a third way by minecraft-data's bedrock 1.26.40/1.26.45
+// protocol.json (its InputData mapper matches Endstone's enum name-for-name, id-for-id), which is
+// what `events.entitySneak` actually reads. docs/findings-packets.md 10절.
+const PLAYER_AUTH_INPUT_DATA_OFFSET = 0x88;
+PlayerAuthInputPacket.prototype.getInput = derived(
     "?getInput@PlayerAuthInputPacket@@QEBA_NW4InputData@1@@Z",
-    bool_t,
-    { this: PlayerAuthInputPacket },
-    int32_t,
+    function getInput(this: PlayerAuthInputPacket, inputData: PlayerAuthInputPacket.InputData): boolean {
+        const dword = this.getUint32(PLAYER_AUTH_INPUT_DATA_OFFSET + (inputData >>> 5) * 4);
+        return ((dword >>> (inputData & 31)) & 1) !== 0;
+    },
+    () =>
+        procHacker.js("?getInput@PlayerAuthInputPacket@@QEBA_NW4InputData@1@@Z", bool_t, { this: PlayerAuthInputPacket }, int32_t),
 );
 
 // networkidentifier.ts
