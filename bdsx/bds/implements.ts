@@ -3728,7 +3728,35 @@ ItemStackBase.prototype.isDamageableItem = procHacker.js("?isDamageableItem@Item
 ItemStackBase.prototype.isArmorItem = procHacker.js("?isArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.getComponentItem = procHacker.js("?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ", ComponentItem, { this: ItemStackBase });
 ItemStackBase.prototype.getMaxDamage = procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase });
-ItemStackBase.prototype.getDamageValue = procHacker.js("?getDamageValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase });
+// next-steps Q1-B-2. 2024's ItemStackBase::getDamageValue (0x1b5fa50) is ten bytes: the same
+// item_ (+8, double pointer -- see getAuxValue/getId just above) null-check as its siblings, then
+// a tail jump into Item::getDamageValue(CompoundTag const* userData) (0x1cab820). That inner
+// function never reads `this` at all -- it is purely `!userData ? 0 : userData->contains("Damage")
+// ? userData->getInt("Damage") : 0` (TAG_DAMAGE, 0x840080 CompoundTag::getInt: _Find the key,
+// return 0 unless the found node's variant is Tag::Type::Int). Neither
+// `?contains@CompoundTag@@...` nor `?getInt@CompoundTag@@...` nor `?getDamageValue@Item@@...` are
+// required by bdsx or resolved on either 1.26 build, and none need to be: `userData` (+0x10) is
+// already a `CompoundTag`, and CxxMap.get() is bdsx's own red-black-tree walk over the exact same
+// memory std::map::find would walk (nbt.ts's `CompoundTag.data`), with `CompoundTagVariant.get()`
+// (Tag.setResolver, already vtable-based) giving the typed IntTag back. The whole function is
+// already carried -- nothing here is BDS code, so nothing here needs an address.
+ItemStackBase.prototype.getDamageValue = derived(
+    "?getDamageValue@ItemStackBase@@QEBAFXZ",
+    function getDamageValue(this: ItemStackBase): number {
+        const self = this as unknown as StaticPointer;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return 0;
+        const item = weak.getNullablePointer(0);
+        if (item === null) return 0;
+        const userData = self.getNullablePointerAs(CompoundTag, 0x10);
+        if (userData === null) return 0;
+        const variant = userData.data.get("Damage");
+        if (variant === null) return 0;
+        const tag = variant.get();
+        return tag instanceof IntTag ? tag.data : 0;
+    },
+    () => procHacker.js("?getDamageValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.getAttackDamage = procHacker.js("?getAttackDamage@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
 ItemStackBase.prototype.isHumanoidWearableItem = procHacker.js("?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isHumanoidWearableBlockItem = procHacker.js("?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
