@@ -20,6 +20,7 @@ import {
     uint32_t,
     uint64_as_float_t,
     uint8_t,
+    void_t,
 } from "../nativetype";
 import { procHacker } from "../prochacker";
 import { ActorDefinitionIdentifier, ActorLink, ActorRuntimeID, ActorUniqueID } from "./actor";
@@ -187,43 +188,172 @@ export class ResourcePackClientResponsePacket extends Packet {
     // response: ResourcePackResponse;
 }
 
-@nativeClass(null)
+// 1.26's TextPacket is still 0x30 (Packet) + payload, but the payload (Endstone text_packet.h,
+// TextPacketPayload -- present verbatim, filtered_message included, in both 0.11.7 and HEAD) replaced
+// the flat 2024 struct with a std::variant<MessageOnly, AuthorAndMessage, MessageAndParams> for the
+// name/message/params triple. sizeof(TextPacket) is 0xf8 (248), confirmed by the deleting destructor's
+// `movl $0xf8,%edx` (40 0x6a49d0 / 51 0x2e3370, identical) and Endstone's
+// BEDROCK_STATIC_ASSERT_SIZE(TextPacket, 248, 208) (0.11.7 and HEAD, identical).
+//
+// Offsets come from the payload destructor (40 0x6a4890 / 51 0x2e3230, byte-identical instruction
+// offsets on both builds) and the variant-alternative cleanup helper it calls through a jump table
+// keyed on the index byte (40 0x6a4a10 / 51 0x2e33b0, also byte-identical): localize +0x30 (bool,
+// never touched by the dtor -- default-initialized, no destruction needed), xuid +0x38 (string),
+// platform_id +0x58 (string), filtered_message +0x78 (optional<string>: string +0x78, has_value bool
+// +0x98, destroyed conditionally on that bool -- confirmed present and used identically on both
+// builds, not a 1.26.51.1-only field), body +0xa0 (variant: the TextPacketType byte is at +0xa0 in
+// every alternative; the first string is at +0xa8 -- `message` for MessageOnly/MessageAndParams,
+// `author` for AuthorAndMessage; AuthorAndMessage's `message` or MessageAndParams' `params` vector,
+// when present, is at +0xc8 -- the jump-table helper destroys +0xc8 as a plain string in one case and
+// as a `std::vector<std::string>` (a `leaq +0x28(%rsi); callq <vector dtor>`) in another, both
+// branches falling through to a shared destroy of +0xa8; the index byte is at +0xe8: -1 valueless, 0
+// MessageOnly, 1 AuthorAndMessage, 2 MessageAndParams), serialization_mode +0xf0.
+// docs/findings-packets.md, Q5-3.
+@nativeClass(0xf8, 0x8)
 export class TextPacket extends Packet {
-    @nativeField(uint8_t)
+    @nativeField(bool_t, 0x30)
+    localize: bool_t;
+    @nativeField(CxxString, 0x38)
+    xboxUserId: CxxString; // 1.26's `xuid`
+    @nativeField(CxxString, 0x58)
+    platformChatId: CxxString; // 1.26's `platform_id`
+    @nativeField(uint8_t, 0xa0)
     type: TextPacket.Types;
-    @nativeField(CxxString)
-    name: CxxString;
-    @nativeField(CxxString)
-    message: CxxString;
-    @nativeField(CxxVector$string, 0xa0)
-    params: CxxVector<CxxString>;
-    @nativeField(bool_t)
-    needsTranslation: bool_t;
-    @nativeField(CxxString)
-    xboxUserId: CxxString;
-    @nativeField(CxxString)
-    platformChatId: CxxString;
+    /** variant<MessageOnly, AuthorAndMessage, MessageAndParams> discriminant: -1 valueless, 0/1/2 */
+    @nativeField(int8_t, 0xe8)
+    _bodyIndex: int8_t;
+    /** the MessageAndParams(2) alternative's `params` vector; do not read this field directly --
+     *  only valid when `_bodyIndex === 2`. Use the `params` getter below, which gets there. */
+    @nativeField(CxxVector$string, 0xc8)
+    readonly _params: CxxVector<CxxString>;
+
+    get name(): CxxString {
+        return this._bodyIndex === 1 ? this.getCxxString(0xa8) : "";
+    }
+    set name(v: CxxString) {
+        TextPacket$setAuthor(this, v);
+    }
+    get message(): CxxString {
+        return this.getCxxString(this._bodyIndex === 1 ? 0xc8 : 0xa8);
+    }
+    set message(v: CxxString) {
+        this.setCxxString(v, this._bodyIndex === 1 ? 0xc8 : 0xa8);
+    }
+    /**
+     * the MessageAndParams(2) alternative's translation params, preserving `message`. Reading this
+     * (even just to push) switches the packet's body to that alternative if it is not there already
+     * -- the same move `name`'s setter does for 0/1 -- so it matches the pre-1.26 flat-struct API
+     * every existing call site (Player.sendJukeboxPopup/sendPopup/sendTip/sendTranslatedMessage,
+     * bds/player.ts) already uses: `pk.message = ...; pk.params.push(...)` on a packet it just
+     * allocated. Q5-3, docs/findings-packets.md.
+     */
+    get params(): CxxVector<CxxString> {
+        return TextPacket$ensureParams(this);
+    }
+    get needsTranslation(): bool_t {
+        return this.localize;
+    }
+    set needsTranslation(v: bool_t) {
+        this.localize = v;
+    }
+    /** optional<string>, present on both builds (Endstone text_packet.h, both releases). BDS fills
+     *  it when profanity/chat filtering rewrites a message; not exercised by the packet probe. */
+    get filteredMessage(): CxxString | null {
+        return this.getUint8(0x98) === 1 ? this.getCxxString(0x78) : null;
+    }
 }
 export namespace TextPacket {
     export enum Types {
-        Raw,
-        Chat,
-        Translate,
+        Raw = 0,
+        Chat = 1,
+        Translate = 2,
         /** @deprecated **/
         Translated = 2,
-        Popup,
-        JukeboxPopup,
-        Tip,
-        SystemMessage,
+        Popup = 3,
+        JukeboxPopup = 4,
+        Tip = 5,
+        SystemMessage = 6,
         /** @deprecated **/
         Sytem = 6,
-        Whisper,
+        Whisper = 7,
         // /say command
-        Announcement,
-        TextObject,
-        /** @deprecated **/
+        Announcement = 8,
+        TextObjectWhisper = 9,
+        TextObject = 10,
+        TextObjectAnnouncement = 11,
+        /** @deprecated renumbered in 1.26 -- use TextObjectWhisper **/
         ObjectWhisper = 9,
     }
+}
+
+// TextPacket's variant body: bdsx constructs/destroys the union's strings itself (re-resolving
+// CxxString's own ctor/dtor symbols locally, the same pattern nativetype.ts uses internally) when
+// switching alternatives -- `name`'s setter moves between MessageOnly(0)/AuthorAndMessage(1), and
+// `params`'s getter (TextPacket$ensureParams, below TextPacket$setAuthor) moves into
+// MessageAndParams(2), needed for the four existing player.ts call sites
+// (sendJukeboxPopup/sendPopup/sendTip/sendTranslatedMessage) that read `pk.params` unconditionally on
+// a packet they just allocated. `message` survives every one of these switches. Switching a packet
+// bdsx *received* into a different alternative (as opposed to one it just allocated) has not been
+// exercised -- nothing in bdsx reads `.name`/`.params` on an incoming packet today.
+const TextPacket$stringCtor = procHacker.js(
+    "??0?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QEAA@XZ",
+    void_t,
+    null,
+    VoidPointer,
+);
+const TextPacket$stringDtor = procHacker.js(
+    "??1?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QEAA@XZ",
+    void_t,
+    null,
+    VoidPointer,
+);
+/** move the packet's body to a MessageOnly(0)/AuthorAndMessage(1) alternative, preserving `message`.
+ *  the index-2 (MessageAndParams) branch reuses CxxVector's own [NativeType.dtor] on `_params` --
+ *  the same element-walk + msAlloc.deallocate every CxxVector field's teardown already uses -- rather
+ *  than re-deriving it here. */
+function TextPacket$ensureIndex01(pk: TextPacket, target: 0 | 1): void {
+    const p = pk as unknown as StaticPointer;
+    const idx = p.getInt8(0xe8);
+    if (idx === target) return;
+    const savedMessage = pk.message; // copies out as a JS string before any native dtor runs
+    if (idx === 0) {
+        TextPacket$stringDtor(p.add(0xa8));
+    } else if (idx === 1) {
+        TextPacket$stringDtor(p.add(0xa8));
+        TextPacket$stringDtor(p.add(0xc8));
+    } else if (idx === 2) {
+        TextPacket$stringDtor(p.add(0xa8));
+        pk._params[NativeType.dtor]();
+    }
+    TextPacket$stringCtor(p.add(0xa8));
+    if (target === 1) TextPacket$stringCtor(p.add(0xc8));
+    p.setInt8(target, 0xe8);
+    pk.message = savedMessage;
+}
+function TextPacket$setAuthor(pk: TextPacket, name: string): void {
+    TextPacket$ensureIndex01(pk, name === "" ? 0 : 1);
+    if (name !== "") pk.setCxxString(name, 0xa8);
+}
+/** move the packet's body to the MessageAndParams(2) alternative, preserving `message`, and hand
+ *  back its (possibly freshly constructed, empty) `_params` vector. From MessageOnly(0), `message`
+ *  is already at +0xa8 -- the same slot MessageAndParams uses -- so nothing needs to move; from
+ *  AuthorAndMessage(1), it has to move from +0xc8 to +0xa8, same as `TextPacket$ensureIndex01`. */
+function TextPacket$ensureParams(pk: TextPacket): CxxVector<CxxString> {
+    const p = pk as unknown as StaticPointer;
+    const idx = p.getInt8(0xe8);
+    if (idx === 2) return pk._params;
+    if (idx === 1) {
+        const savedMessage = pk.message; // reads +0xc8 while _bodyIndex is still 1
+        TextPacket$stringDtor(p.add(0xa8)); // author
+        TextPacket$stringDtor(p.add(0xc8)); // message
+        TextPacket$stringCtor(p.add(0xa8));
+        pk.setCxxString(savedMessage, 0xa8);
+    }
+    // idx === 0: message is already at +0xa8; +0xc8 was never a live object there (MessageOnly's own
+    // storage ends at +0xc8), so it needs construction, not destruction.
+    pk._params[NativeType.ctor]();
+    p.setInt8(2, 0xe8);
+    return pk._params;
 }
 
 @nativeClass(null)
