@@ -3788,7 +3788,70 @@ ItemStackBase.prototype.getAuxValue = derived(
     () => procHacker.js("?getAuxValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
 );
 ItemStackBase.prototype.isValidAuxValue = procHacker.js("?isValidAuxValue@ItemStackBase@@QEBA_NH@Z", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.getMaxStackSize = procHacker.js("?getMaxStackSize@ItemStackBase@@QEBAEXZ", int32_t, { this: ItemStackBase });
+// next-steps Q1-B-4, docs/findings-containers.md 10 ("Q1-B-4: two addresses the audit disproved"):
+// the propagation candidates for isDamageableItem/getMaxStackSize (40 0xed330/0x1bc1d60) were real
+// ItemStackBase members but the wrong ones -- no 1.26 out-of-line copy of either 2024 shape
+// (item_+8, double deref, an Item vtable call) exists on either build, the inliner took them the
+// same way it took getComponentItem above. The fix is the same move: dispatch the Item vtable slot
+// directly, from the item_ chase already duplicated in getComponentItem/getId/getDamageValue.
+//
+// 2024's `?isDamageable@Item@@UEBA_NXZ` sits at ??_7Item@@6B@ slot 13 (0x1cb1a80, read with
+// tools/vftable-slots.mjs against the baseline); `?getMaxStackSize@Item@@UEBAEAEBVItemDescriptor@@@Z`
+// at slot 87 (0x1cadab0). Endstone's HEAD item.h (targets 1.26.51.1) and its v0.11.7 copy (targets
+// 1.26.40.8) count the same two virtuals identically from the destructor at slot 0: slot 14
+// isDamageable (a plain +1, the same shift already on record for isComponentBased 8->9 and
+// isHumanoidArmor 9->10 above), slot 100 getMaxStackSize (+13, from the rarity/sound/hover-text
+// virtuals 1.26 inserted in between -- not a uniform shift, so the header has to be counted, not
+// extrapolated). A second, independent route confirms both slots from bodies, not the header alone:
+// `?getAvailableSetCount@ContainerValidationBase@@` (already resolved both builds, 40 0x8f47020 /
+// 51 0x8b82e90) inlines 2024's whole getMaxStackSize@ItemStackBase body verbatim -- isNull, a call
+// to build a local ItemDescriptor, then `movq (%rsi),%rax ; movq 0x320(%rax),%rax` (0x320=100*8)
+// before the vtable dispatch, byte-identical on both builds (disas-exact). `?dropEquipmentOnDeath@Mob@@`
+// (also already resolved both builds, 40 0x2408a20 / 51 0x29f0460) inlines isDamageableItem the same
+// way: item_+8, double deref, `movq (%rcx),%rax ; movq 0x70(%rax),%rax` (0x70=14*8), a bool vtable
+// call, also byte-identical on both builds.
+//
+// getMaxStackSize needs one more step 2024 takes: build an ItemDescriptor first
+// (`?getDescriptor@ItemStackBase@@QEBA?AVItemDescriptor@@XZ`, this=rcx, sret ItemDescriptor*=rdx --
+// MSVC's member-function ABI) and pass it to the Item vtable call. That function is the very one
+// `getAvailableSetCount` above calls, and it is the same address section 10 above recorded as a
+// mislabelled candidate for getMaxStackSize itself (40 0x1bc1d60 / 51 0x1a544e0 -- "it *is* an
+// ItemStackBase member... but it takes a second pointer in rdx"): that rdx is the sret buffer, and
+// partway through its own ~120-byte body it dispatches Item vtable slot 14 itself (a third,
+// independent confirmation of that slot, from inside the very function retracted under the wrong
+// name). Not required by bdsx before this change; shipped as a small new resolved address purely to
+// support getMaxStackSize's derived() below, the same way `resendAllChunks` calls the resolved but
+// previously-unrequired `clearRegion@NetworkChunkPublisher` -- reimplementing getDescriptor's own
+// item-registry/block-item body in JS would not be safe or correct.
+const Item$isDamageable = makefunc.js(
+    asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x70).alloc("Item::isDamageable via vft[14]"),
+    bool_t,
+    { this: Item },
+);
+const ItemStackBase$getDescriptor = procHacker.js(
+    "?getDescriptor@ItemStackBase@@QEBA?AVItemDescriptor@@XZ",
+    ItemDescriptor,
+    { this: ItemStackBase, structureReturn: true },
+);
+const Item$getMaxStackSize = makefunc.js(
+    asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x320).alloc("Item::getMaxStackSize via vft[100]"),
+    uint8_t,
+    { this: Item },
+    ItemDescriptor,
+);
+ItemStackBase.prototype.getMaxStackSize = derived(
+    "?getMaxStackSize@ItemStackBase@@QEBAEXZ",
+    function getMaxStackSize(this: ItemStackBase): number {
+        const self = this as unknown as StaticPointer;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return 0xff;
+        const item = weak.getNullablePointerAs(Item, 0);
+        if (item === null) return 0xff;
+        const descriptor = ItemStackBase$getDescriptor.call(this);
+        return Item$getMaxStackSize.call(item, descriptor);
+    },
+    () => procHacker.js("?getMaxStackSize@ItemStackBase@@QEBAEXZ", uint8_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.getId = derived(
     "?getId@ItemStackBase@@QEBAFXZ",
     // 2024 0x1b61150: `!valid_ ? -1 : (item_ && *item_ ? Item::getId(*item_) : 0)`, and
@@ -3860,7 +3923,22 @@ ItemStackBase.prototype.isFullStack = procHacker.js("?isFullStack@ItemStackBase@
 ItemStackBase.prototype.isFireResistant = procHacker.js("?isFireResistant@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isExplodable = procHacker.js("?isExplodable@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isDamaged = procHacker.js("?isDamaged@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isDamageableItem = procHacker.js("?isDamageableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// Q1-B-4, docs/findings-containers.md 10 (see the getMaxStackSize comment above
+// isValidAuxValue for the full route): 2024's isDamageableItem is item_+8, double deref, Item
+// vtable slot 13 (1.26 slot 14, 0x70). No 1.26 out-of-line copy on either build; ships as
+// derived() reusing the same Item$isDamageable dispatch getMaxStackSize above also uses.
+ItemStackBase.prototype.isDamageableItem = derived(
+    "?isDamageableItem@ItemStackBase@@QEBA_NXZ",
+    function isDamageableItem(this: ItemStackBase): boolean {
+        const self = this as unknown as StaticPointer;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return false;
+        const item = weak.getNullablePointerAs(Item, 0);
+        if (item === null) return false;
+        return Item$isDamageable.call(item);
+    },
+    () => procHacker.js("?isDamageableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isArmorItem = procHacker.js("?isArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 // Q3 follow-up (4), docs/findings-audit.md: 2024's getComponentItem (0x1b5f670, 70B) is
 // `A = item_ (+8); B = *A; return B && Item::vft[9]/isComponentBased(B) ? B : null;` -- the same
