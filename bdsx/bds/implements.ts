@@ -2916,7 +2916,32 @@ Player.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) 
 
 ServerPlayer.prototype.nextContainerCounter = procHacker.js("?_nextContainerCounter@ServerPlayer@@AEAA?AW4ContainerID@@XZ", int8_t, { this: ServerPlayer });
 ServerPlayer.prototype.openInventory = procHacker.js("?openInventory@ServerPlayer@@UEAAXXZ", void_t, { this: ServerPlayer });
-ServerPlayer.prototype.resendAllChunks = procHacker.js("?resendAllChunks@Player@@QEAAXXZ", void_t, { this: ServerPlayer });
+// `?resendAllChunks@Player@@QEAAXXZ` is a 17-byte leaf outside `.pdata` that 1.26 inlines into its
+// callers (docs/next-steps.md Q1 0 C-2, `tools/leaf-funcs.mjs --at=0x19e6dd0`). The 2024 body is three
+// instructions: read `this+0xc38` (a `NetworkChunkPublisher*`) and, if it is non-null, call
+// `NetworkChunkPublisher::clearRegion()`. That exact three-instruction prefix is also how
+// `?suspendRegion@Player@@` (0x19eb840) opens -- and its 1.26 successor, already shipping via
+// vftable-walk (40) / carry (51), opens the same way at `this+0x7e8`, calling 40 0x661350 /
+// 51 0x720ec0. Both targets match the 2024 `clearRegion` body step for step (the same ChunkViewSource
+// vtable dispatch, the same `ChunkPos::INVALID` `BlockPos` reset, the same generation-request virtual
+// call, the same trailing vector-walk destructor loop) at a consistent +0x10 struct-offset shift, 266B
+// against 2024's 291B. `layouts.Player.networkChunkPublisher` carries the pointer offset (0x7e8 on
+// both builds; the 2024 fallback below is 0xc38).
+const PLAYER_NETWORK_CHUNK_PUBLISHER_2024 = 3128; // 0xc38
+let NetworkChunkPublisher$clearRegion: ((this: StaticPointer) => void) | null = null;
+ServerPlayer.prototype.resendAllChunks = derived(
+    "?resendAllChunks@Player@@QEAAXXZ",
+    function resendAllChunks(this: ServerPlayer): void {
+        const off = pdbcache.layouts.Player?.networkChunkPublisher ?? PLAYER_NETWORK_CHUNK_PUBLISHER_2024;
+        const ncp = (this as unknown as StaticPointer).getNullablePointer(off);
+        if (ncp === null) return;
+        if (NetworkChunkPublisher$clearRegion === null) {
+            NetworkChunkPublisher$clearRegion = procHacker.js("?clearRegion@NetworkChunkPublisher@@QEAAXXZ", void_t, { this: StaticPointer });
+        }
+        NetworkChunkPublisher$clearRegion.call(ncp);
+    },
+    () => procHacker.js("?resendAllChunks@Player@@QEAAXXZ", void_t, { this: ServerPlayer }),
+);
 ServerPlayer.prototype.sendNetworkPacket = procHacker.js("?sendNetworkPacket@ServerPlayer@@UEBAXAEAVPacket@@@Z", void_t, { this: ServerPlayer }, Packet);
 /**
  * ~1.20.50 implementing part of ServerPlayer::sendNetworkPacket
