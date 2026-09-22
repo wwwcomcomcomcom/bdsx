@@ -255,9 +255,11 @@ export class Player extends Mob implements HasStorage {
     }
 
     /**
-     * Returns the player's certificate
+     * Returns the player's certificate.
+     * 1.26: BDS no longer stores a Certificate object behind a player (Q5-5,
+     * docs/findings-packets.md) -- returns null on those builds. Prefer getXuid().
      */
-    getCertificate(): Certificate {
+    getCertificate(): Certificate | null {
         abstract();
     }
 

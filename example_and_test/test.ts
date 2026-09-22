@@ -1104,7 +1104,9 @@ Tester.concurrency(
                                 this.equals(actor.getPermissionLevel(), playerlevel, "Invalid player permission level");
 
                                 if (!(actor instanceof SimulatedPlayer)) {
-                                    this.equals(actor.getCertificate().getXuid(), connectedXuid, "xuid mismatch");
+                                    // 1.26 (Q5-5): getCertificate() is null there (no Certificate object behind
+                                    // a player any more); getXuid() is the address that still works.
+                                    this.equals(actor.getXuid(), connectedXuid, "xuid mismatch");
                                 }
 
                                 const pos = actor.getSpawnPosition();

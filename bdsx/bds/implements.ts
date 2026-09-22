@@ -2682,14 +2682,29 @@ Player.prototype.consumeTotem = procHacker.js("?consumeTotem@Player@@UEAA_NXZ", 
 Player.prototype.setSpeed = procHacker.js("?setSpeed@Player@@UEAAXM@Z", void_t, { this: Player }, float32_t);
 (Player.prototype as any)._sendInventory = procHacker.js("?sendInventory@Player@@UEAAX_N@Z", void_t, { this: Player }, bool_t);
 
+// uuid/certificate re-derived for 1.26 (Q5-5, docs/findings-packets.md "UserEntityIdentifierComponent").
+// Endstone's user_entity_identifier_component.h (0.11.7 and HEAD, byte-identical) gives the member
+// order: NetworkIdentifier network_id_ (176B, align 8) / SubClientId client_sub_id_ (uint8_t, 1B) /
+// mce::UUID client_uuid_ (16B, align 8 -> +184) / PlayerAuthenticationType authentication_type_ (int
+// enum, 4B -> +200) / PlayerAuthenticationInfo trusted_player_info_ (align 8 -> +208). That arithmetic
+// independently lands on the component's confirmed stride (592B, from
+// ?getSourceId@PlayerCommandOrigin@@'s `imulq $0x250`): 208 + sizeof(PlayerAuthenticationInfo) 384
+// (ten 32B std::strings, an 8B int64 permissions field, a string, a UUID, two bools, padded to a
+// multiple of 8) = 592. The uuid offset (184) also matches what ??0PlayerListEntry@@QEAA@AEBVPlayer@@@Z
+// reads and what the bot decodes off the wire (docs/findings-containers.md 14, candidates-instances
+// offsets.PlayerListEntry.uuid) -- two independent routes, the second already execution-confirmed there.
+//
+// There is no `Certificate*` at +0xd8 (2024's offset) any more -- that address now falls inside
+// network_id_'s own bytes. 1.26 replaced the certificate-object indirection with `trusted_player_info_`
+// held *by value*; no 1.26 build keeps a Certificate object here to point at, so `certificate` is gone.
+// `Player.getXuid()` reaches the same XUID string through a resolved native call
+// (`?getXuid@Player@@`, an address on both builds) -- prefer that over reconstructing this field.
 @nativeClass(null)
 class UserEntityIdentifierComponent extends NativeClass {
     @nativeField(NetworkIdentifier)
     networkIdentifier: NetworkIdentifier;
-    @nativeField(mce.UUID, 0xa8) // accessed in PlayerListEntry::PlayerListEntry after calling entt::basic_registry<EntityId>::try_get<UserEntityIdentifierComponent>
+    @nativeField(mce.UUID, 184)
     uuid: mce.UUID;
-    @nativeField(Certificate.ref(), 0xd8) // accessed in ServerNetworkHandler::_displayGameMessage before calling ExtendedCertificate::getXuid
-    certificate: Certificate; // it's ExtendedCertificate actually
 }
 
 EntityContext.prototype.isValid = procHacker.js("?isValid@EntityContext@@QEBA_NXZ", bool_t, {
@@ -2705,7 +2720,7 @@ EntityContext.prototype._getEntityId = procHacker.js("?_getEntityId@EntityContex
 
 // 1.26 has no out-of-line try_get for it; the component is 592 bytes with the NetworkIdentifier first
 // (data/candidates-instances-<v>.json offsets.UserEntityIdentifierComponent, docs/findings-packets.md).
-// Only networkIdentifier is re-derived: uuid and certificate are still the 2024 offsets.
+// uuid re-derived to +184 and certificate removed (Q5-5, see the class above).
 const USER_ENTITY_ID_HASH = enttTypeHash("UserEntityIdentifierComponent");
 const USER_ENTITY_ID_SIZE = (pdbcache.layouts.UserEntityIdentifierComponent ?? {}).size ?? 0x250;
 const TryGetUserEntityIdComponent = derived<(actor: Actor) => UserEntityIdentifierComponent>(
@@ -2726,10 +2741,13 @@ const TryGetUserEntityIdComponent = derived<(actor: Actor) => UserEntityIdentifi
 /**
  * ~1.20.50 implementing part of ServerNetworkHandler::_displayGameMessage
  * 1.20.50~ aspiring from existing, get components manually
+ * 1.26 (Q5-5): there is no Certificate object behind a player any more (see
+ * UserEntityIdentifierComponent above) -- the embedded auth info holds the XUID string directly and
+ * Player.getXuid() already reaches it through a resolved native call. Returns null rather than the
+ * garbage pointer 2024's now-wrong offset would read.
  */
-Player.prototype.getCertificate = function () {
-    // part of ServerNetworkHandler::_displayGameMessage
-    return TryGetUserEntityIdComponent(this).certificate;
+Player.prototype.getCertificate = function (): Certificate | null {
+    return null;
 };
 Player.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref());
 Player.prototype.canDestroy = procHacker.js("?canDestroy@Player@@QEBA_NAEBVBlock@@@Z", bool_t, { this: Player }, Block.ref());
