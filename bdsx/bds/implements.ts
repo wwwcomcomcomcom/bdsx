@@ -1888,6 +1888,33 @@ Mob.prototype.getSpeed = procHacker.js("?getSpeed@Mob@@UEBAMXZ", float32_t, {
     this: Mob,
 });
 Mob.prototype.setSpeed = procHacker.js("?setSpeed@Mob@@UEAAXM@Z", void_t, { this: Mob }, float32_t);
+// Q3 follow-up (5), docs/findings-audit.md: the candidate this name carried (40 0x23eb40 / 51
+// 0x2d7470) is retracted -- its jump table is indexed by a tag+1 and its case bodies read `r8`, a
+// local ~0x180B buffer on the CALLER's stack, never `this`; it is some kind of per-alternative
+// cleanup dispatcher for a local event-payload variant, not `Mob::sendArmorSlot`. The real body
+// LOOKS inlined into `ServerPlayer::setArmor` right after its call to `Player::setArmor` (40
+// 0x695620, 51 0x758d10, both 835B, byte-identical up to this point -- read with disas-exact on
+// both): `cmpl $5,%edi; jae _Xran; movl $1,%edx; movl %edi,%ecx; shll %cl,%edx; movq (%rsi),%rax;
+// movq <off>(%rax),%rax; movq %rsi,%rcx; call *rax` (40 off=0x4f0, 51 off=0x4e8 -- the same kind
+// of one-slot vtable drift this project has already seen elsewhere, `_hurt`: 134 -> 133) -- but a
+// `derived()` reproducing that exact dispatch (raw asm tail-jump through `this`'s own vtable, a
+// second arg carrying the bitmask, layouts.Mob.sendArmorSlotVftableOffset already staged in
+// candidates-instances-<v>.json's offsets.Mob for both builds) crashed the server with 0xC0000005
+// on both builds within ~2s of a player joining, before any console command ran, with NO
+// `[ Fault Capture ]` block in either .err -- the "no report at all" failure mode
+// docs/host-runbook.md documents for a crash under a stub with no unwind info, called from JS via
+// makefunc, that lands outside bdsx-core's own __except. Isolating ruled out the offset value
+// (fixed once, crashed again identically) and ruled out the raw-asm-stub technique in general
+// (`Item::isComponentBased` below uses the identical `mov_r_rp`+`jmp_rp`+`alloc()` trick with a
+// literal offset and survives fine on both builds) -- the difference is the extra `uint32_t`
+// bitmask argument threaded through `makefunc.js(asmStub, void_t, {this:Mob}, uint32_t)`, or
+// something about the specific vtable slot/object this reaches at player-join time that a static
+// read cannot distinguish from a wrong slot. Given CLAUDE.md's own rule ("a counter probe proves
+// an address, never a prototype, and not always the address" -- read the body, then fire the hook
+// itself before calling it done), a body match this project cannot execute cleanly is not shipped
+// as `derived()`. Left `procHacker.js` (throws "Symbol not found" at call time, same as before --
+// never crashes) until the dispatch is debugged further; the reasoning above and the two builds'
+// vtable offsets are kept in candidates-instances-<v>.json for whoever picks this up next.
 Mob.prototype.sendArmorSlot = procHacker.js("?sendArmorSlot@Mob@@QEAAXW4ArmorSlot@@@Z", void_t, { this: Mob }, uint32_t);
 Mob.prototype.setSprinting = procHacker.js("?setSprinting@Mob@@UEAAX_N@Z", void_t, { this: Mob }, bool_t);
 Mob.prototype.isAlive = procHacker.js("?isAlive@Mob@@UEBA_NXZ", bool_t, {
@@ -3726,7 +3753,39 @@ ItemStackBase.prototype.isExplodable = procHacker.js("?isExplodable@ItemStackBas
 ItemStackBase.prototype.isDamaged = procHacker.js("?isDamaged@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isDamageableItem = procHacker.js("?isDamageableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isArmorItem = procHacker.js("?isArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.getComponentItem = procHacker.js("?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ", ComponentItem, { this: ItemStackBase });
+// Q3 follow-up (4), docs/findings-audit.md: 2024's getComponentItem (0x1b5f670, 70B) is
+// `A = item_ (+8); B = *A; return B && Item::vft[9]/isComponentBased(B) ? B : null;` -- the same
+// item_ chase as getId/getDamageValue/_getItem elsewhere in this file, gated by an Item vtable
+// call at slot 9 (0x48). 1.26 has no out-of-line copy on either build (a generic-shape scan for a
+// standalone 45-100B function with this shape finds zero candidates); both builds inline it
+// verbatim inside `Mob::getArmorMaterialTypeInSlot` (40 0x2406d20 / 51 0x29ee760, byte-identical at
+// the relevant span -- read directly with disas-exact: same item_+8 double deref, same null gates,
+// vtable call at +0x48). Endstone's HEAD item.h independently counts slot 9 (from the destructor at
+// 0) as `virtual bool isComponentBased() const = 0` -- a second, independent route confirming both
+// the slot and its meaning. `derived()`: the item_ chase is duplicated here (not calling
+// `_getItem`, which is `protected`) and the vtable-slot-9 dispatch reuses `Packet::getId`'s
+// raw-asm-stub trick above in this file (vft[1] there, vft[9]/0x48 here -- the same slot on
+// both builds, and confirmed not to crash on either -- the attempt at the same trick for
+// `Mob::sendArmorSlot` above did crash, with an extra argument and a per-build slot; see that
+// comment for what was ruled out and what was not).
+const Item$isComponentBased = makefunc.js(
+    asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x48).alloc("Item::isComponentBased via vft[9]"),
+    bool_t,
+    { this: Item },
+);
+ItemStackBase.prototype.getComponentItem = derived<(this: ItemStackBase) => ComponentItem | null>(
+    "?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ",
+    function getComponentItem(this: ItemStackBase): ComponentItem | null {
+        const self = this as unknown as StaticPointer;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return null;
+        const item = weak.getNullablePointerAs(Item, 0);
+        if (item === null) return null;
+        if (!Item$isComponentBased.call(item)) return null;
+        return item as unknown as ComponentItem;
+    },
+    () => procHacker.js("?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ", ComponentItem, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.getMaxDamage = procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase });
 // next-steps Q1-B-2. 2024's ItemStackBase::getDamageValue (0x1b5fa50) is ten bytes: the same
 // item_ (+8, double pointer -- see getAuxValue/getId just above) null-check as its siblings, then
