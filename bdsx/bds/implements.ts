@@ -323,7 +323,30 @@ Level.prototype.getTagRegistry = procHacker.js(
 );
 Level.prototype.hasCommandsEnabled = procHacker.js("?hasCommandsEnabled@Level@@UEBA_NXZ", bool_t, { this: Level });
 Level.prototype.setCommandsEnabled = procHacker.js("?setCommandsEnabled@ServerLevel@@UEAAX_N@Z", void_t, { this: ServerLevel }, bool_t);
-Level.prototype.setShouldSendSleepMessage = procHacker.js("?setShouldSendSleepMessage@ServerLevel@@QEAAX_N@Z", void_t, { this: ServerLevel }, bool_t);
+// docs/findings-slots.md "Q4". 1.26 keeps no out-of-line copy of the wrapper itself (the 2024 body,
+// 0xcaee80, is a two-line assert-then-store), so this ships as layouts, not an address.
+// ServerLevel::mServerPlayerSleepManager moved 2024 +0x22b0 -> +0x880 on both builds (found from the
+// getPlayerSleepManager() virtual accessor pair, confirmed a second way by the ServerLevel
+// constructor's own store of the manager's raw pointer there). The manager's own
+// send_sleep_message_ bool moved 2024 +0x201 -> +0x1a9 on both builds: the same idiom -- four
+// zeroed member slots immediately followed by a `movw $0x100,` at the byte pair, matching 2024's
+// `movw $0x100, 0x200(%rdi)` exactly -- appears in the manager's own out-of-line constructor on
+// 1.26.40.8 (0x12cd920+0x258) and inlined into ServerLevel::ServerLevel itself on 1.26.51.1
+// (0x76ab70+0x18a2), so the two builds are two independently-shaped confirmations of the same
+// offset, not one route copy-pasted. Static only, no execution: BDS cannot be made to send this
+// message from a console session (Q7 -- sleeping needs a real client), and the wrapper itself has
+// no address left to call as a witness.
+Level.prototype.setShouldSendSleepMessage = derived(
+    "?setShouldSendSleepMessage@ServerLevel@@QEAAX_N@Z",
+    function setShouldSendSleepMessage(this: ServerLevel, value: boolean): void {
+        const L = pdbcache.layouts.ServerLevel ?? {};
+        const M = pdbcache.layouts.ServerPlayerSleepManager ?? {};
+        const mgr = (this as unknown as StaticPointer).getPointer(L.mServerPlayerSleepManager ?? 0x880);
+        if (mgr === null) return;
+        mgr.setUint8(value ? 1 : 0, M.sendSleepMessage ?? 0x1a9);
+    },
+    () => procHacker.js("?setShouldSendSleepMessage@ServerLevel@@QEAAX_N@Z", void_t, { this: ServerLevel }, bool_t),
+);
 Level.prototype.getPlayerByXuid = procHacker.js(
     "?getPlayerByXuid@Level@@UEBAPEAVPlayer@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     Player,
