@@ -1,5 +1,5 @@
 import { asmcode } from "../asm/asmcode";
-import { Register } from "../assembler";
+import { OperationSize, Register, asm } from "../assembler";
 import { Bedrock } from "../bds/bedrock";
 import { NetworkConnection, NetworkIdentifier, NetworkSystem } from "../bds/networkidentifier";
 import { Packet, PacketSharedPtr, createPacketRaw } from "../bds/packet";
@@ -8,10 +8,13 @@ import { PacketIdToType } from "../bds/packets";
 import { proc } from "../bds/symbols";
 import { CANCEL, abstract } from "../common";
 import { PACKET_ID_COUNT } from "../const";
-import { StaticPointer, VoidPointer } from "../core";
+import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
+import { capi } from "../capi";
+import { dllraw } from "../dllraw";
 import { bedrockServer } from "../launcher";
+import { pdbcache } from "../pdbcache";
 import { makefunc } from "../makefunc";
 import { AbstractClass, nativeClass, nativeField } from "../nativeclass";
 import { int32_t, int64_as_float_t, void_t } from "../nativetype";
@@ -185,11 +188,10 @@ function onPacketSendInternal(handler: NetworkSystem, ni: NetworkIdentifier, pac
     return 0;
 }
 
-bedrockServer.withLoading().then(() => {
-    const packetHandleSymbol = "?handle@Packet@@QEAAXAEBVNetworkIdentifier@@AEAVNetEventCallback@@AEAV?$shared_ptr@VPacket@@@std@@@Z";
-    const sendToClientsSymbol =
-        "?sendToClients@LoopbackPacketSender@@UEAAXAEBV?$vector@UNetworkIdentifierWithSubId@@V?$allocator@UNetworkIdentifierWithSubId@@@std@@@std@@AEBVPacket@@@Z";
+const packetHandleSymbol = "?handle@Packet@@QEAAXAEBVNetworkIdentifier@@AEAVNetEventCallback@@AEAV?$shared_ptr@VPacket@@@std@@@Z";
 
+/** the 2024 receive side: three patches inside NetworkSystem::_sortAndPacketizeEvents */
+function hook2024Receive(): void {
     // hook raw
     asmcode.onPacketRaw = makefunc.np(onPacketRaw, PacketSharedPtr, null, OnPacketRBP, NetworkConnection);
     procHacker.patching(
@@ -253,6 +255,245 @@ bedrockServer.withLoading().then(() => {
             0xFF, 0x15, null, null, null, null,        // call qword ptr ds:[<__guard_dispatch_icall_fptr>]
         ],
     );
+
+}
+
+
+/**
+ * The 1.26 receive side. `_sortAndPacketizeEvents` and `Packet::handle` are
+ * gone -- the loop inlined the one line `Packet::handle` was (2024 0x8205e0:
+ * `handler_->vft[1](ni, callback, packet)`, handler_ at Packet+0x20) -- but the
+ * dispatch itself survived: every packet carries `handler_`, an
+ * `IPacketHandlerDispatcher*` to one static object per packet type in .data,
+ * and slot 1 of that object's table is where a parsed packet is handed to
+ * ServerNetworkHandler. Endstone wraps the same pointer from a createPacket
+ * hook (runtime/bedrock_hooks/packet.cpp). Here each dispatcher's vptr is
+ * pointed at a two-slot table of our own whose `handle` tests the id's
+ * enabledPacket byte and goes to JS only when a before/after listener is on,
+ * so a packet type nobody listens to costs four instructions. No code in the
+ * binary is patched; nothing here has a per-build offset.
+ */
+const PACKET_HANDLER_OFFSET = 0x20;
+const enabledPacket = asmcode.addressof_enabledPacket;
+type DispatchFn = (self: StaticPointer, ni: StaticPointer, callback: StaticPointer, packet: StaticPointer) => void;
+const dispatcherOriginals = new Map<number, DispatchFn>();
+const dispatcherKeepAlive: unknown[] = [];
+
+function onPacketDispatch(self: StaticPointer, niptr: StaticPointer, callback: StaticPointer, sharedptr: StaticPointer): void {
+    const original = dispatcherOriginals.get(self.getAddressAsFloat())!;
+    // BDS's own handling must happen whatever bdsx does: an exception on our side before the
+    // original ran swallowed SetLocalPlayerAsInitialized once, and the player never joined
+    let packetId = -1;
+    let ni: NetworkIdentifier | null = null;
+    let typedPacket: Packet | null = null;
+    let flags = 0;
+    try {
+        const packet = sharedptr.getPointerAs(Packet, 0);
+        packetId = packet.getId();
+        // the shared instance, as the 2024 path handed out: form.ts compares identifiers by identity
+        ni = NetworkIdentifier.from(niptr)!;
+        nethook.lastSender = ni;
+        flags = packetId >>> 0 < PACKET_ID_COUNT ? enabledPacket.getUint8(packetId) : 0;
+        const TypedPacket = (PacketIdToType as { [id: number]: typeof Packet | undefined })[packetId] || Packet;
+        typedPacket = packet.as(TypedPacket);
+        if (flags & (1 << events.PacketEventType.Before)) {
+            for (const listener of events.packetBefore(packetId).allListeners()) {
+                try {
+                    if (listener(typedPacket as any, ni, packetId) === CANCEL) {
+                        decay(typedPacket);
+                        return;
+                    }
+                } catch (err) {
+                    events.errorFire(err);
+                }
+            }
+        }
+    } catch (err) {
+        remapAndPrintError(err);
+        flags = 0;
+    }
+    original(self, niptr, callback, sharedptr);
+    if (typedPacket === null) return;
+    try {
+        if (flags & (1 << events.PacketEventType.After)) {
+            for (const listener of events.packetAfter(packetId).allListeners()) {
+                try {
+                    if (listener(typedPacket as any, ni!, packetId) === CANCEL) break;
+                } catch (err) {
+                    events.errorFire(err);
+                }
+            }
+        }
+    } catch (err) {
+        remapAndPrintError(err);
+    } finally {
+        decay(typedPacket);
+    }
+}
+
+function installPacketDispatchers(): void {
+    const dispatch = makefunc.np(onPacketDispatch, void_t, { name: "onPacketDispatch" }, StaticPointer, StaticPointer, StaticPointer, StaticPointer);
+    dispatcherKeepAlive.push(dispatch);
+    // one createPacket per id tells which static dispatcher each type uses
+    const idsOf = new Map<number, { dispatcher: NativePointer; ids: number[] }>();
+    for (let id = 0; id < PACKET_ID_COUNT; id++) {
+        const sp = new PacketSharedPtr(true);
+        createPacketRaw(sp, id);
+        const packet = sp.p;
+        if (packet !== null) {
+            const dispatcher = packet.getPointer(PACKET_HANDLER_OFFSET);
+            if (!dispatcher.isNull()) {
+                const key = dispatcher.getAddressAsFloat();
+                let entry = idsOf.get(key);
+                if (entry === undefined) idsOf.set(key, (entry = { dispatcher, ids: [] }));
+                entry.ids.push(id);
+            }
+        }
+        sp.dispose();
+    }
+    let hooked = 0;
+    for (const [key, { dispatcher, ids }] of idsOf) {
+        const vftable = dispatcher.getPointer(0);
+        const originalHandle = vftable.getPointer(8);
+        dispatcherOriginals.set(key, makefunc.js(originalHandle, void_t, null, StaticPointer, StaticPointer, StaticPointer, StaticPointer));
+        const code = asm();
+        if (ids.length === 1) {
+            // a type with one id: skip JS unless that id has a before/after listener
+            code.mov_r_c(Register.rax, enabledPacket.add(ids[0]))
+                .movzx_r_rp(Register.rax, Register.rax, 1, 0, OperationSize.dword, OperationSize.byte)
+                .test_r_c(Register.rax, (1 << events.PacketEventType.Before) | (1 << events.PacketEventType.After), OperationSize.dword)
+                .jz_label("original");
+        }
+        code.mov_r_c(Register.rax, dispatch).jmp_r(Register.rax);
+        code.label("original").mov_r_c(Register.rax, originalHandle).jmp_r(Register.rax);
+        const stub = code.alloc("packet dispatch " + ids[0]);
+        const table = new AllocatedPointer(16);
+        table.setPointer(vftable.getPointer(0), 0); // the destructor, as it was
+        table.setPointer(stub, 8);
+        dispatcherKeepAlive.push(stub, table);
+        dispatcher.setPointer(table, 0);
+        hooked++;
+    }
+    console.error(`[bdsx] packet dispatch: ${hooked} dispatchers for ${[...idsOf.values()].reduce((n, e) => n + e.ids.length, 0)} packet ids`);
+}
+
+
+/**
+ * The 1.26 packetRaw: BatchedNetworkPeer::_receivePacket hands one decoded packet (header varint +
+ * payload) per call to the connection above it -- the bytes 2024's patch read out of the stream in
+ * _sortAndPacketizeEvents. Endstone hooks the same function for PacketReceiveEvent and, as here,
+ * drops a cancelled packet by asking for the next one. The stub goes to JS only on the node thread
+ * (which runs the game loop): a call from anywhere else goes straight to the original and is counted,
+ * so a receive that moved off-thread costs raw events, never the process.
+ */
+const RECEIVE_SYMBOL =
+    "?_receivePacket@BatchedNetworkPeer@@MEAA?AW4DataStatus@NetworkPeer@@AEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$shared_ptr@V?$time_point@Usteady_clock@chrono@std@@V?$duration@_JU?$ratio@$00$0DLJKMKAA@@std@@@23@@chrono@std@@@5@@Z";
+const NetworkSystem$layout = pdbcache.layouts.NetworkSystem ?? {};
+const NetworkConnection$layout = pdbcache.layouts.NetworkConnection ?? {};
+const NS_CONNECTIONS = NetworkSystem$layout.connections ?? 0xa0;
+const NC_BATCHED_PEER = NetworkConnection$layout.batchedPeer ?? 0xe8;
+const NC_ID = NetworkConnection$layout.id ?? 0;
+const DATA_STATUS_HAS_DATA = 0;
+/** receives that did not come from the node thread (read by tools/packet-probe.ts) */
+export const packetRawOffThread = new AllocatedPointer(8);
+packetRawOffThread.setInt32(0, 0);
+packetRawOffThread.setInt32(0, 4);
+let originalReceive: ((peer: StaticPointer, out: StaticPointer, timepoint: StaticPointer) => number) | null = null;
+
+function connectionIdOfPeer(peer: StaticPointer): NetworkIdentifier | null {
+    const system = bedrockServer.networkSystem as unknown as StaticPointer;
+    const begin = system.getPointer(NS_CONNECTIONS);
+    const count = system.getPointer(NS_CONNECTIONS + 8).subptr(begin) / 8;
+    for (let i = 0; i < count; i++) {
+        const connection = begin.getNullablePointer(i * 8);
+        if (connection === null) continue;
+        const batched = connection.getNullablePointer(NC_BATCHED_PEER);
+        if (batched !== null && batched.equalsptr(peer)) return NetworkIdentifier.from(connection.add(NC_ID))!;
+    }
+    return null;
+}
+
+function onReceiveRaw(peer: StaticPointer, out: StaticPointer, timepoint: StaticPointer): number {
+    for (;;) {
+        const status = originalReceive!(peer, out, timepoint);
+        if (status !== DATA_STATUS_HAS_DATA) return status;
+        let cancelled = false;
+        try {
+            const data = out.as(CxxStringWrapper);
+            const ptr = data.valueptr;
+            const length = data.length;
+            let header = 0;
+            for (let i = 0, shift = 0; i < 5 && i < length; i++, shift += 7) {
+                const b = ptr.getUint8(i);
+                header |= (b & 0x7f) << shift;
+                if ((b & 0x80) === 0) break;
+            }
+            const packetId = header & 0x3ff;
+            if (packetId < PACKET_ID_COUNT && enabledPacket.getUint8(packetId) & (1 << events.PacketEventType.Raw)) {
+                const ni = connectionIdOfPeer(peer);
+                if (ni !== null) {
+                    nethook.lastSender = ni;
+                    for (const listener of events.packetRaw(packetId).allListeners()) {
+                        const p = ptr.add();
+                        try {
+                            if (listener(p, length, ni, packetId) === CANCEL) {
+                                cancelled = true;
+                                break;
+                            }
+                        } catch (err) {
+                            events.errorFire(err);
+                        } finally {
+                            decay(p);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            remapAndPrintError(err);
+        }
+        if (!cancelled) return status;
+    }
+}
+
+function installRawReceive(): void {
+    if (!(RECEIVE_SYMBOL in proc)) return;
+    const js = makefunc.np(onReceiveRaw, int32_t, { name: "onReceiveRaw" }, StaticPointer, StaticPointer, StaticPointer);
+    dispatcherKeepAlive.push(js);
+    procHacker.hookingRaw(RECEIVE_SYMBOL, original => {
+        originalReceive = makefunc.js(original, int32_t, null, StaticPointer, StaticPointer, StaticPointer);
+        return asm()
+            .push_r(Register.rcx)
+            .push_r(Register.rdx)
+            .push_r(Register.r8) // entry rsp was 8 mod 16; three pushes make it 16-aligned
+            .sub_r_c(Register.rsp, 0x20)
+            .mov_r_c(Register.rax, dllraw.kernel32.GetCurrentThreadId)
+            .call_r(Register.rax)
+            .add_r_c(Register.rsp, 0x20)
+            .pop_r(Register.r8)
+            .pop_r(Register.rdx)
+            .pop_r(Register.rcx)
+            .cmp_r_c(Register.rax, capi.nodeThreadId, OperationSize.dword)
+            .jne_label("offthread")
+            .mov_r_c(Register.rax, js)
+            .jmp_r(Register.rax)
+            .label("offthread")
+            .mov_r_c(Register.rax, packetRawOffThread)
+            .inc_rp(Register.rax, 1, 0)
+            .mov_r_c(Register.rax, original)
+            .jmp_r(Register.rax)
+            .alloc("hook of BatchedNetworkPeer::_receivePacket");
+    });
+}
+
+bedrockServer.withLoading().then(() => {
+    const sendToClientsSymbol =
+        "?sendToClients@LoopbackPacketSender@@UEAAXAEBV?$vector@UNetworkIdentifierWithSubId@@V?$allocator@UNetworkIdentifierWithSubId@@@std@@@std@@AEBVPacket@@@Z";
+
+    if (packetizeSymbol in proc) hook2024Receive();
+    else if (process.env.BDSX_NO_PACKET_DISPATCH !== "1") {
+        installPacketDispatchers();
+        installRawReceive();
+    }
 
     // hook send
     asmcode.onPacketSend = makefunc.np(onPacketSend, int32_t, null, int32_t, NetworkIdentifier, Packet);

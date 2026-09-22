@@ -1,6 +1,6 @@
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
-import { Register } from "../assembler";
+import { Register, asm } from "../assembler";
 import { bin } from "../bin";
 import { capi } from "../capi";
 import { commandParser } from "../commandparser";
@@ -2611,11 +2611,24 @@ EntityContext.prototype._getEntityId = procHacker.js("?_getEntityId@EntityContex
     structureReturn: true,
 });
 
-const TryGetUserEntityIdComponent = procHacker.js(
+// 1.26 has no out-of-line try_get for it; the component is 592 bytes with the NetworkIdentifier first
+// (data/candidates-instances-<v>.json offsets.UserEntityIdentifierComponent, docs/findings-packets.md).
+// Only networkIdentifier is re-derived: uuid and certificate are still the 2024 offsets.
+const USER_ENTITY_ID_HASH = enttTypeHash("UserEntityIdentifierComponent");
+const USER_ENTITY_ID_SIZE = (pdbcache.layouts.UserEntityIdentifierComponent ?? {}).size ?? 0x250;
+const TryGetUserEntityIdComponent = derived<(actor: Actor) => UserEntityIdentifierComponent>(
     "??$tryGetComponent@VUserEntityIdentifierComponent@@@Actor@@QEAAPEAVUserEntityIdentifierComponent@@XZ",
-    UserEntityIdentifierComponent,
-    null,
-    Actor,
+    function tryGetUserEntityIdComponent(actor: Actor): UserEntityIdentifierComponent {
+        const component = enttComponent(actor, USER_ENTITY_ID_HASH, USER_ENTITY_ID_SIZE);
+        return component === null ? (null as any) : component.as(UserEntityIdentifierComponent);
+    },
+    () =>
+        procHacker.js(
+            "??$tryGetComponent@VUserEntityIdentifierComponent@@@Actor@@QEAAPEAVUserEntityIdentifierComponent@@XZ",
+            UserEntityIdentifierComponent,
+            null,
+            Actor,
+        ),
 );
 
 /**
@@ -3191,7 +3204,19 @@ Packet.prototype[NativeType.dtor] = vectorDeletingDestructor;
 Packet.prototype.sendTo = function (target: NetworkIdentifier, senderSubClientId: number = 0): void {
     bedrockServer.networkSystem.send(target, this, senderSubClientId);
 };
-Packet.prototype.getId = procHacker.jsv("??_7SetTitlePacket@@6B@", "?getId@SetTitlePacket@@UEBA?AW4MinecraftPacketIds@@XZ", int32_t, { this: Packet });
+// Packet::getId is slot 1 of every packet table, in 2024 and in 1.26 (Endstone packet.h:
+// ~Packet, getId, getName, ...); 1.26 has no SetTitlePacket::getId to name the slot by, so the
+// call goes through the object's own table (docs/findings-packets.md). Every received packet
+// passes through this in packetevent.ts.
+Packet.prototype.getId = derived<(this: Packet) => number>(
+    "?getId@SetTitlePacket@@UEBA?AW4MinecraftPacketIds@@XZ",
+    makefunc.js(
+        asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 8).alloc("Packet::getId via vft[1]"),
+        int32_t,
+        { this: Packet },
+    ),
+    () => procHacker.jsv("??_7SetTitlePacket@@6B@", "?getId@SetTitlePacket@@UEBA?AW4MinecraftPacketIds@@XZ", int32_t, { this: Packet }),
+);
 Packet.prototype.getName = procHacker.jsv(
     "??_7LoginPacket@@6B@",
     "?getName@LoginPacket@@UEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
