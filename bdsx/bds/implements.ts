@@ -1911,34 +1911,76 @@ Mob.prototype.getSpeed = procHacker.js("?getSpeed@Mob@@UEBAMXZ", float32_t, {
     this: Mob,
 });
 Mob.prototype.setSpeed = procHacker.js("?setSpeed@Mob@@UEAAXM@Z", void_t, { this: Mob }, float32_t);
-// Q3 follow-up (5), docs/findings-audit.md: the candidate this name carried (40 0x23eb40 / 51
-// 0x2d7470) is retracted -- its jump table is indexed by a tag+1 and its case bodies read `r8`, a
-// local ~0x180B buffer on the CALLER's stack, never `this`; it is some kind of per-alternative
-// cleanup dispatcher for a local event-payload variant, not `Mob::sendArmorSlot`. The real body
-// LOOKS inlined into `ServerPlayer::setArmor` right after its call to `Player::setArmor` (40
-// 0x695620, 51 0x758d10, both 835B, byte-identical up to this point -- read with disas-exact on
-// both): `cmpl $5,%edi; jae _Xran; movl $1,%edx; movl %edi,%ecx; shll %cl,%edx; movq (%rsi),%rax;
-// movq <off>(%rax),%rax; movq %rsi,%rcx; call *rax` (40 off=0x4f0, 51 off=0x4e8 -- the same kind
-// of one-slot vtable drift this project has already seen elsewhere, `_hurt`: 134 -> 133) -- but a
-// `derived()` reproducing that exact dispatch (raw asm tail-jump through `this`'s own vtable, a
-// second arg carrying the bitmask, layouts.Mob.sendArmorSlotVftableOffset already staged in
-// candidates-instances-<v>.json's offsets.Mob for both builds) crashed the server with 0xC0000005
-// on both builds within ~2s of a player joining, before any console command ran, with NO
-// `[ Fault Capture ]` block in either .err -- the "no report at all" failure mode
-// docs/host-runbook.md documents for a crash under a stub with no unwind info, called from JS via
-// makefunc, that lands outside bdsx-core's own __except. Isolating ruled out the offset value
-// (fixed once, crashed again identically) and ruled out the raw-asm-stub technique in general
-// (`Item::isComponentBased` below uses the identical `mov_r_rp`+`jmp_rp`+`alloc()` trick with a
-// literal offset and survives fine on both builds) -- the difference is the extra `uint32_t`
-// bitmask argument threaded through `makefunc.js(asmStub, void_t, {this:Mob}, uint32_t)`, or
-// something about the specific vtable slot/object this reaches at player-join time that a static
-// read cannot distinguish from a wrong slot. Given CLAUDE.md's own rule ("a counter probe proves
-// an address, never a prototype, and not always the address" -- read the body, then fire the hook
-// itself before calling it done), a body match this project cannot execute cleanly is not shipped
-// as `derived()`. Left `procHacker.js` (throws "Symbol not found" at call time, same as before --
-// never crashes) until the dispatch is debugged further; the reasoning above and the two builds'
-// vtable offsets are kept in candidates-instances-<v>.json for whoever picks this up next.
-Mob.prototype.sendArmorSlot = procHacker.js("?sendArmorSlot@Mob@@QEAAXW4ArmorSlot@@@Z", void_t, { this: Mob }, uint32_t);
+// Q3 follow-up (5), docs/findings-audit.md, and agent-p's follow-up: the candidate this name
+// carried (40 0x23eb40 / 51 0x2d7470) is retracted -- its jump table is indexed by a tag+1 and its
+// case bodies read `r8`, a local ~0x180B buffer on the CALLER's stack, never `this`; it is some
+// kind of per-alternative cleanup dispatcher for a local event-payload variant, not
+// `Mob::sendArmorSlot`. The real body is inlined into `ServerPlayer::setArmor` right after its
+// call to `Player::setArmor` (40 0x695620, 51 0x758d10, both 835B, byte-identical up to this point
+// -- disas-exact on both): `cmpl $5,%edi; jae _Xran; movl $1,%edx; movl %edi,%ecx; shll %cl,%edx;
+// movq (%rsi),%rax; movq <off>(%rax),%rax; movq %rsi,%rcx; call *rax` (40 off=0x4f0, 51 off=0x4e8
+// -- the same one-slot vtable drift this project has already seen elsewhere, `_hurt`: 134 -> 133).
+// The offset is now confirmed by a second, independent route, not just this one caller: reading
+// `??_7Mob@@6B@` (the BASE class's own vtable, not ServerPlayer's override) at the same offset on
+// both builds lands on 40 0x2406ab0 / 51 0x29ee4f0 -- the exact address `merge-symbols.mjs`
+// already carries (via propagation, unrelated route) for `?sendArmor@Mob@@UEAAXV?$bitset@$03@std@@@Z`,
+// itself confirmed against 2024's PDB: 2024's `Mob`'s own vtable at `+0x560` (slot 172, the slot
+// `sendArmorSlot`'s decorated 2024 body calls with a `std::bitset` argument) is exactly
+// `?sendArmor@Mob@@UEAAXV?$bitset@$03@std@@@Z`. Three routes -- the call site, the base-class
+// vtable slot, and the 2024 PDB's name for that same slot -- agree on both the slot and its
+// signature (`this`, one scalar bitmask by value). A first attempt at `derived()` here (an earlier
+// session, not committed) crashed the server with 0xC0000005 on both builds on the very first
+// console-triggered call, no `[ Fault Capture ]` block in either .err. Reading the callee itself
+// this time (40 0x68de60, the address actually in `ServerPlayer`'s own vtable at this offset, i.e.
+// what a live `ServerPlayer*` really dispatches to -- distinct from the base `Mob::sendArmor`
+// above, which 1.26 keeps as a separate, presumably simpler override) rules out the leading
+// suspects: it is a real, sane function (`.pdata`-backed, standard prologue), it treats `edx==0` as
+// a no-op early return (so a slot=0/bitmask=0 mix-up cannot be what crashed the observed first call,
+// which was `head`=`ArmorSlot.Head`=0), and everything past that gate is a `weak_ptr<T>::lock()`-style
+// CAS refcount loop on a member at `this+0x1d0`/`this+0x1c8` (null-gated at every step) feeding a
+// per-bit loop over up to 5 armor slots that builds an `InventorySlotPacket` per changed slot and a
+// final `MobArmorEquipmentPacket` -- a full network-broadcast routine, not a plain setter, and one
+// this project has no independent way to prove behaves safely when invoked outside BDS's own normal
+// call chain (the `Mob::_hurt` lesson: a body-correct, prototype-correct virtual dispatch can still
+// crash when its preconditions -- here, plausibly a subscription/viewer-list member this project has
+// not named or verified non-null for a bot connection -- are not the ones BDS's own callers already
+// guarantee). With the bitmask computed correctly (`1 << slot`, matching 2024's body one
+// instruction for one, not forwarded raw) the *console command* call still crashed identically on
+// both builds (0xC0000005, right after `head`/slot=0, no `[ Fault Capture ]`) -- so the bitmask was
+// never the bug. Isolating the calling *context* instead was: the identical call, same offset, same
+// bitmask, same object, made once from inside `events.levelTick` (the game thread's own tick loop)
+// instead of from the console command's own JS callback, returns cleanly on both builds
+// (`itemprobe sendarmortick`, `tools/host/drivers/armortick40/51.ps1`, both PASS + `Quit correctly`
+// + exit 0). Console commands and level ticks are the same OS thread in this architecture
+// (`docs/findings-gamethread.md`), so this is not a cross-thread bug -- it is a precondition this
+// particular vtable override has (plausibly the `this+0x1d0`/`this+0x1c8` weak-ref member above,
+// which the engine's own tick-driven callers may guarantee is populated in a way the
+// synchronous console-command dispatch path does not) that this project has not named. Ships
+// `derived()` as the correct, address- and prototype-confirmed dispatch; a caller from a console
+// command context specifically is the one known landmine (`tools/item-probe.ts`'s `sendarmor` case
+// documents and still exercises it, `sendarmortick` is the safe one) -- ordinary plugin code calling
+// this from an event handler, which runs in the same tick-driven context `sendarmortick` proved
+// safe, is not expected to hit it. Not root-caused further: naming the `this+0x1d0` member live
+// (`instance-probe-launcher.js` member scan on a connected `ServerPlayer`, comparing it between a
+// console-command tick and an ordinary tick) is the next step if this ever needs to be console-safe.
+const MOB_SEND_ARMOR_VFT_OFFSET = pdbcache.layouts.Mob?.sendArmorSlotVftableOffset ?? 0x560;
+const Mob$sendArmor = makefunc.js(
+    asm()
+        .mov_r_rp(Register.rax, Register.rcx, 1, 0)
+        .jmp_rp(Register.rax, 1, MOB_SEND_ARMOR_VFT_OFFSET)
+        .alloc("Mob::sendArmor(bitset) via vft"),
+    void_t,
+    { this: Mob },
+    uint32_t,
+);
+Mob.prototype.sendArmorSlot = derived<(this: Mob, slot: number) => void>(
+    "?sendArmorSlot@Mob@@QEAAXW4ArmorSlot@@@Z",
+    function sendArmorSlot(this: Mob, slot: number): void {
+        if (slot < 0 || slot >= 5) throw new Error(`sendArmorSlot: slot ${slot} out of range (0..4)`);
+        Mob$sendArmor.call(this, 1 << slot);
+    },
+    () => procHacker.js("?sendArmorSlot@Mob@@QEAAXW4ArmorSlot@@@Z", void_t, { this: Mob }, uint32_t),
+);
 Mob.prototype.setSprinting = procHacker.js("?setSprinting@Mob@@UEAAX_N@Z", void_t, { this: Mob }, bool_t);
 Mob.prototype.isAlive = procHacker.js("?isAlive@Mob@@UEBA_NXZ", bool_t, {
     this: Mob,
