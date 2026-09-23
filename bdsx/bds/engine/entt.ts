@@ -8,7 +8,7 @@
  * entt::type_hash, which in these builds is FNV-1a-32 of the bare component name
  * (docs/findings-components.md): componentHash("PassengerComponent") = 0x98e40c0e on both 1.26 builds.
  */
-import { StaticPointer } from "../../core";
+import { AllocatedPointer, StaticPointer } from "../../core";
 import { componentHash, engineLayout } from "./deps";
 
 /** anything whose +enttRegistry / +entityId are an EnTT registry pointer and an entity id: an Actor */
@@ -105,4 +105,24 @@ export function enttComponent(actor: EntityOwner, hash: number, size: number): S
     const packed = storage.getPointer(ENTT_PACKED).getNullablePointer(((entry & ENTT_ENTITY_MASK) >>> ENTT_PACKED_PAGE_BITS) * 8);
     if (packed === null) return null;
     return packed.add((entry & ((1 << ENTT_PACKED_PAGE_BITS) - 1)) * size);
+}
+
+/**
+ * The actor a WeakEntityRef names, or null when it is expired or names no actor. A WeakEntityRef is
+ * { EntityRegistry* +0, its shared-count block +8, EntityId +16 } (what ProjectileComponent::onHit copies out of a
+ * HitResult); the entt registry sits inside EntityRegistry at `EntityRegistry.registry` (0x30 on both 1.26 builds:
+ * every actor holds the EntityRegistry at +8 and that registry at +16). The lookup is ActorOwnerComponent's, which
+ * holds the Actor* -- what Actor::tryGetFromEntity reads.
+ */
+const ENTITY_REGISTRY_ENTT = engineLayout("EntityRegistry", "registry", 0x30);
+const ACTOR_OWNER_COMPONENT = componentHash("ActorOwnerComponent");
+export function enttActorFromWeakRef(ref: StaticPointer): StaticPointer | null {
+    const registry = ref.getNullablePointer(0);
+    const control = ref.getNullablePointer(8);
+    if (registry === null || control === null || control.getInt32(8) <= 0) return null; // no strong owner left
+    const holder = new AllocatedPointer(Math.max(ACTOR_ENTT_REGISTRY, ACTOR_ENTITY_ID) + 8);
+    holder.setPointer(registry.add(ENTITY_REGISTRY_ENTT), ACTOR_ENTT_REGISTRY);
+    holder.setUint32(ref.getUint32(16), ACTOR_ENTITY_ID);
+    const owner = enttComponent(holder as unknown as EntityOwner, ACTOR_OWNER_COMPONENT, 8);
+    return owner === null ? null : owner.getNullablePointer(0);
 }

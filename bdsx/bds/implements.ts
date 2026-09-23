@@ -1,6 +1,6 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
-import { enttComponent, enttHas, enttTypeHash } from "./engine/entt";
+import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { engineLayout } from "./engine/deps";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -6100,7 +6100,16 @@ OnHitSubcomponent.prototype.writetoJSON = procHacker.jsv(
     this: OnHitSubcomponent,
 });
 
-HitResult.prototype.getEntity = procHacker.js("?getEntity@HitResult@@QEBAPEAVActor@@XZ", Actor, { this: HitResult });
+// 1.26 inlines it: the hit entity is the WeakEntityRef at +0x38 (what ProjectileComponent::onHit copies out),
+// resolved through ActorOwnerComponent (bds/engine/entt.ts)
+HitResult.prototype.getEntity = derived(
+    "?getEntity@HitResult@@QEBAPEAVActor@@XZ",
+    function getEntity(this: HitResult): Actor | null {
+        const p = enttActorFromWeakRef((this as any as StaticPointer).add(engineLayout("HitResult", "entity", 0x38)));
+        return p === null ? null : Actor.from(p);
+    },
+    () => procHacker.js("?getEntity@HitResult@@QEBAPEAVActor@@XZ", Actor, { this: HitResult }),
+);
 
 // chunk.ts
 LevelChunk.prototype.getBiome = procHacker.js("?getBiome@LevelChunk@@QEBAAEBVBiome@@AEBVChunkBlockPos@@@Z", Biome, { this: LevelChunk }, ChunkBlockPos);
