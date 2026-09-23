@@ -1,14 +1,16 @@
 import { Actor } from "../bds/actor";
 import { Block, BlockActor, BlockSource, ButtonBlock, ChestBlock, ChestBlockActor, PistonAction as PistonActorInBlockModule, PistonBlockActor } from "../bds/block";
 import { BlockPos, Vec3 } from "../bds/blockpos";
+import { FALLON_ACTOR, FALLON_DISTANCE, FALLON_POS, FALLON_REGION } from "../bds/engine/fallon";
 import { GameMode } from "../bds/gamemode";
 import { ItemStack } from "../bds/inventory";
 import { Player, ServerPlayer } from "../bds/player";
 import { VanillaServerGameplayEventListener } from "../bds/server";
 import { CANCEL } from "../common";
-import { StaticPointer } from "../core";
+import { StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
+import { nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, float32_t, int32_t, uint8_t, void_t } from "../nativetype";
 import { procHacker } from "../prochacker";
 
@@ -468,25 +470,32 @@ events.lightningHitBlock.setInstaller(() => {
 export class FallOnBlockEvent {
     constructor(public block: Block, public region: BlockSource, public blockPos: BlockPos, public entity: Actor, public height: number) {}
 }
+// 1.26: Block::onFallOn is inlined into Actor::checkFallDamage, which builds a BlockEntityFallOnEvent and
+// passes it to the block type's subscribers or to BlockType::onFallOnBase (docs/findings-blocks.md section 19).
+// Hooking onFallOnBase sees every plain block and the subscribers that end in it (hay, bed, slime, ...); a
+// subscriber that does not (honey, powder snow) does not fire the event.
+@nativeClass(null)
+class BlockEntityFallOnEvent extends NativeClass {
+    @nativeField(BlockPos, FALLON_POS)
+    pos: BlockPos;
+    @nativeField(BlockSource.ref(), FALLON_REGION)
+    region: BlockSource;
+    @nativeField(Actor.ref(), FALLON_ACTOR)
+    actor: Actor;
+    @nativeField(float32_t, FALLON_DISTANCE)
+    fallDistance: float32_t;
+}
 events.fallOnBlock.setInstaller(() => {
-    function onFallOn(block: Block, region: BlockSource, blockPos: BlockPos, entity: Actor, height: number): void {
-        const event = new FallOnBlockEvent(block, region, blockPos, entity, height);
+    function onFallOnBase(blockType: VoidPointer, ev: BlockEntityFallOnEvent): void {
+        const region = ev.region;
+        const event = new FallOnBlockEvent(region.getBlock(ev.pos), region, ev.pos, ev.actor, ev.fallDistance);
         events.fallOnBlock.fire(event);
-        decay(block);
+        decay(event.block);
         decay(region);
-        decay(blockPos);
-        return _onFallOn(block, region, blockPos, entity, height);
+        decay(event.blockPos);
+        return _onFallOnBase(blockType, ev);
     }
-    const _onFallOn = procHacker.hooking(
-        "?onFallOn@Block@@QEBAXAEAVBlockSource@@AEBVBlockPos@@AEAVActor@@M@Z",
-        void_t,
-        null,
-        Block,
-        BlockSource,
-        BlockPos,
-        Actor,
-        float32_t,
-    )(onFallOn);
+    const _onFallOnBase = procHacker.hooking("bdsx:BlockType::onFallOnBase", void_t, null, VoidPointer, BlockEntityFallOnEvent)(onFallOnBase);
 });
 
 export class BlockAttackEvent {
