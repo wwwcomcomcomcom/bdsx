@@ -2,6 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { engineLayout } from "./engine/deps";
+import { isHumanoidWearableBlockItemOwn } from "./engine/item";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
 import * as colors from "colors";
@@ -4088,7 +4089,15 @@ ItemStackBase.prototype.getDamageValue = derived(
 );
 ItemStackBase.prototype.getAttackDamage = procHacker.js("?getAttackDamage@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
 ItemStackBase.prototype.isHumanoidWearableItem = procHacker.js("?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isHumanoidWearableBlockItem = procHacker.js("?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 1.26.51.1 inlines this into isHumanoidWearableItem, so bdsx runs the same membership test the 1.26.40.8 body does
+// (engine/item.ts, docs/findings-audit.md "isHumanoidWearableBlockItem")
+ItemStackBase.prototype.isHumanoidWearableBlockItem = derived(
+    "?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ",
+    function isHumanoidWearableBlockItem(this: ItemStackBase): boolean {
+        return isHumanoidWearableBlockItemOwn(this as any as StaticPointer);
+    },
+    () => procHacker.js("?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isHumanoidWearableArmorItem = procHacker.js("?isHumanoidArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.allocateAndSave = procHacker.js(
     "?save@ItemStackBase@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
