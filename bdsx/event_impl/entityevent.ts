@@ -9,6 +9,7 @@ import { MinecraftPacketIds } from "../bds/packetids";
 import { CompletedUsingItemPacket, PlayerAuthInputPacket, SetLocalPlayerAsInitializedPacket } from "../bds/packets";
 import { Player, ServerPlayer, SimulatedPlayer } from "../bds/player";
 import { CANCEL } from "../common";
+import { engineLayout } from "../bds/engine/deps";
 import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
@@ -352,19 +353,24 @@ events.entityHurt.setInstaller(() => {
     )(onEntityHurt);
 });
 
+// 1.26: std::optional<float> change(float old, float new, AttributeBuff const&), returned through a hidden
+// pointer (Endstone attribute_instance_delegate.h); the owning mob moved to +0x18. The table ships it under bdsx's
+// key, read off the live delegate's vftable (docs/findings-slots.md, "HealthAttributeDelegate").
+const HealthAttributeDelegate$mob = engineLayout("HealthAttributeDelegate", "mob", 0x20);
 events.entityHealthChange.setInstaller(() => {
-    function onEntityHealthChange(attributeDelegate: NativePointer, oldHealth: number, newHealth: number, attributeBuffInfo: VoidPointer): float32_t {
-        const actor = Actor[makefunc.getFromParam](attributeDelegate, 0x20);
+    function onEntityHealthChange(attributeDelegate: NativePointer, result: StaticPointer, oldHealth: number, newHealth: number, attributeBuffInfo: VoidPointer): StaticPointer {
+        const actor = Actor[makefunc.getFromParam](attributeDelegate, HealthAttributeDelegate$mob);
         const event = new EntityHealthChangeEvent(actor, oldHealth, newHealth);
         events.entityHealthChange.fire(event);
-        attributeDelegate.setPointer(event.entity, 0x20);
-        return _onEntityHealthChange(attributeDelegate, event.oldHealth, event.newHealth, attributeBuffInfo);
+        attributeDelegate.setPointer(event.entity, HealthAttributeDelegate$mob);
+        return _onEntityHealthChange(attributeDelegate, result, event.oldHealth, event.newHealth, attributeBuffInfo);
     }
     const _onEntityHealthChange = procHacker.hooking(
-        "?change@HealthAttributeDelegate@@UEAAMMMAEBVAttributeBuff@@@Z",
-        float32_t,
+        "bdsx:HealthAttributeDelegate::change",
+        StaticPointer,
         null,
         NativePointer,
+        StaticPointer,
         float32_t,
         float32_t,
         VoidPointer,
