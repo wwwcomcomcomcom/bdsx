@@ -2,6 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { engineLayout } from "./engine/deps";
+import { dimensionCloudHeight } from "./engine/dimension";
 import { isHumanoidWearableBlockItemOwn } from "./engine/item";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -1532,7 +1533,19 @@ Actor.prototype.isInLava = function () {
     return ActorMobilityUtils.shouldApplyLava(blockSource, context);
 };
 Actor.prototype.isInContactWithWater = procHacker.js("?isInContactWithWater@Actor@@QEBA_NXZ", bool_t, { this: Actor });
-Actor.prototype.isInClouds = procHacker.js("?isInClouds@Actor@@QEBA_NXZ", bool_t, { this: Actor });
+// 1.26 has no out-of-line isInClouds; 2024's body is `cloudHeight < y < cloudHeight + 4` over the dimension's
+// getCloudHeight virtual and the actor's position (engine/dimension.ts, docs/findings-slots.md "isInClouds")
+Actor.prototype.isInClouds = derived(
+    "?isInClouds@Actor@@QEBA_NXZ",
+    function isInClouds(this: Actor): boolean {
+        const dimension = this.getDimension();
+        if (dimension === null) return false;
+        const h = dimensionCloudHeight(dimension as any as StaticPointer);
+        const y = this.getPosition().y;
+        return h < y && y < h + 4;
+    },
+    () => procHacker.js("?isInClouds@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 Actor.prototype.getEntityData = procHacker.js("?getEntityData@Actor@@QEBAAEBVSynchedActorDataEntityWrapper@@XZ", SynchedActorDataEntityWrapper, { this: Actor });
 Actor.prototype.getOwner = procHacker.js("?getOwner@Actor@@QEBAPEAVMob@@XZ", Mob, { this: Actor });
 Actor.prototype.setOwner = procHacker.js("?setOwner@Actor@@UEAAXUActorUniqueID@@@Z", void_t, { this: Actor }, ActorUniqueID);
