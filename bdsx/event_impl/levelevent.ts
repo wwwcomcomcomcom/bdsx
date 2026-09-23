@@ -13,6 +13,7 @@ import { makefunc } from "../makefunc";
 import { bool_t, float32_t, int32_t, void_t } from "../nativetype";
 import { procHacker } from "../prochacker";
 import { _tickCallback } from "../util";
+import { EXPLOSION_POS, EXPLOSION_REGION, EXPLOSION_SOURCE_ID, readExplosion, writeExplosion } from "../bds/engine/explosion";
 
 export class LevelExplodeEvent {
     constructor(
@@ -89,7 +90,29 @@ events.levelExplode.setInstaller(() => {
         float32_t,
         bool_t,
     )(onLevelExplode);
+
+    // 1.26's TNT, creepers and the like go through Level::explode(Explosion&) instead; the event is built from the
+    // Explosion's fields and what the listener changes is written back before the explosion runs (engine/explosion.ts)
+    if (!("?explode@Level@@UEAA_NAEAVExplosion@@@Z" in proc)) return;
+    const _onLevelExplodeObject = procHacker.hooking("?explode@Level@@UEAA_NAEAVExplosion@@@Z", bool_t, null, Level, StaticPointer)(
+        (level: Level, explosion: StaticPointer): boolean => {
+            const f = readExplosion(explosion);
+            const region = explosion.getNullablePointerAs(BlockSource, EXPLOSION_REGION);
+            const sourceId = explosion.getBin64(EXPLOSION_SOURCE_ID);
+            const source = sourceId === INVALID_ACTOR_UNIQUE_ID ? null : level.fetchEntity(sourceId as any, false);
+            const position = Vec3.create(explosion.getFloat32(EXPLOSION_POS), explosion.getFloat32(EXPLOSION_POS + 4), explosion.getFloat32(EXPLOSION_POS + 8));
+            const event = new LevelExplodeEvent(level, region!, source!, position, f.power, f.causesFire, f.breaksBlocks, f.maxResistance, f.allowUnderwater);
+            if (events.levelExplode.fire(event) === CANCEL) return false;
+            writeExplosion(explosion, event);
+            explosion.setFloat32(event.position.x, EXPLOSION_POS);
+            explosion.setFloat32(event.position.y, EXPLOSION_POS + 4);
+            explosion.setFloat32(event.position.z, EXPLOSION_POS + 8);
+            return _onLevelExplodeObject(level, explosion);
+        },
+    );
 });
+// ActorUniqueID -1: the source an Explosion carries when nothing caused it
+const INVALID_ACTOR_UNIQUE_ID = "\uffff\uffff\uffff\uffff";
 
 events.levelSave.setInstaller(() => {
     function onLevelSave(level: Level): void {
