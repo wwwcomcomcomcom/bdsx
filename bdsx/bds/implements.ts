@@ -1,4 +1,5 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
+import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { pistonAttachedBlocks } from "./engine/piston";
 import * as colors from "colors";
@@ -4833,8 +4834,9 @@ BlockSource.prototype.setBlock = function (blockPos: BlockPos, block: Block): bo
 };
 
 BlockSource.prototype.getBlock = procHacker.js("?getBlock@BlockSource@@UEBAAEBVBlock@@AEBVBlockPos@@@Z", Block, { this: BlockSource }, BlockPos);
+// 1.26: the IConstBlockSource virtual (slot 3); the 2024 non-virtual overload has no copy (docs/findings-blocks.md 17)
 BlockSource.prototype.getBlockEntity = procHacker.js(
-    "?getBlockEntity@BlockSource@@QEAAPEAVBlockActor@@AEBVBlockPos@@@Z",
+    "?getBlockEntity@BlockSource@@UEBAPEBVBlockActor@@AEBVBlockPos@@@Z",
     BlockActor,
     { this: BlockSource },
     BlockPos,
@@ -4934,11 +4936,24 @@ BlockActor.prototype.getCustomName = procHacker.js("?getCustomName@BlockActor@@U
     this: BlockActor,
 });
 
-ChestBlockActor.prototype.isLargeChest = procHacker.js("?isLargeChest@ChestBlockActor@@QEBA_NXZ", bool_t, { this: ChestBlockActor });
+ChestBlockActor.prototype.isLargeChest = derived(
+    "?isLargeChest@ChestBlockActor@@QEBA_NXZ",
+    function isLargeChest(this: ChestBlockActor): boolean {
+        return chestIsLarge(this);
+    },
+    () => procHacker.js("?isLargeChest@ChestBlockActor@@QEBA_NXZ", bool_t, { this: ChestBlockActor }),
+);
 ChestBlockActor.prototype.openBy = procHacker.js("?openBy@ChestBlockActor@@UEAAXAEAVPlayer@@@Z", void_t, { this: ChestBlockActor }, Player);
-ChestBlockActor.prototype.getPairedChestPosition = procHacker.js("?getPairedChestPosition@ChestBlockActor@@QEAAAEBVBlockPos@@XZ", BlockPos, {
-    this: ChestBlockActor,
-});
+ChestBlockActor.prototype.getPairedChestPosition = derived(
+    "?getPairedChestPosition@ChestBlockActor@@QEAAAEBVBlockPos@@XZ",
+    function getPairedChestPosition(this: ChestBlockActor): BlockPos {
+        return chestPairedPosition(this);
+    },
+    () =>
+        procHacker.js("?getPairedChestPosition@ChestBlockActor@@QEAAAEBVBlockPos@@XZ", BlockPos, {
+            this: ChestBlockActor,
+        }),
+);
 
 PistonBlockActor.prototype.getPosition = procHacker.js("?getPosition@BlockActor@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: PistonBlockActor });
 PistonBlockActor.prototype.getAttachedBlocks = derived(

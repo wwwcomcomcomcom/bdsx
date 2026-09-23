@@ -1,5 +1,5 @@
 import { Actor } from "../bds/actor";
-import { Block, BlockSource, ButtonBlock, ChestBlock, ChestBlockActor, PistonAction as PistonActorInBlockModule, PistonBlockActor } from "../bds/block";
+import { Block, BlockActor, BlockSource, ButtonBlock, ChestBlock, ChestBlockActor, PistonAction as PistonActorInBlockModule, PistonBlockActor } from "../bds/block";
 import { BlockPos, Vec3 } from "../bds/blockpos";
 import { GameMode } from "../bds/gamemode";
 import { ItemStack } from "../bds/inventory";
@@ -349,16 +349,56 @@ events.chestOpen.setInstaller(() => {
     )(onChestOpen);
 });
 
+// 1.26: pairWith(ChestBlockActor*, BlockSource&, bool) -- the region was added before the lead flag. Read
+// from the body and its call sites (docs/findings-blocks.md section 17); no header gives the exact decoration
+// of the new parameter, so the table ships it under bdsx's own key. A chest placed next to another pairs
+// through _tryToPairWith, which in 1.26 writes the first half (this -> other, not lead) inline and only calls
+// pairWith for the second; so the event is decided there, for both halves, before either is written, and the
+// pairWith inside it does not fire again. The tick's re-pairing still goes through pairWith for both halves.
 events.chestPair.setInstaller(() => {
-    function onChestPair(chest: ChestBlockActor, chest2: ChestBlockActor, lead: bool_t): void {
+    let inTryToPair = false;
+    function fire(chest: ChestBlockActor, chest2: ChestBlockActor, lead: boolean): boolean {
         const event = new ChestPairEvent(chest, chest2, lead);
-        const canceled = events.chestPair.fire(event) === CANCEL;
+        return events.chestPair.fire(event) === CANCEL;
+    }
+    function onChestPair(chest: ChestBlockActor, chest2: ChestBlockActor, region: BlockSource, lead: bool_t): void {
+        if (inTryToPair) return _onChestPair(chest, chest2, region, lead);
+        const canceled = fire(chest, chest2, lead);
         decay(chest);
         decay(chest2);
         if (canceled) return;
-        return _onChestPair(chest, chest2, lead);
+        return _onChestPair(chest, chest2, region, lead);
     }
-    const _onChestPair = procHacker.hooking("?pairWith@ChestBlockActor@@QEAAXPEAV1@_N@Z", void_t, null, ChestBlockActor, ChestBlockActor, bool_t)(onChestPair);
+    const _onChestPair = procHacker.hooking("bdsx:ChestBlockActor::pairWith", void_t, null, ChestBlockActor, ChestBlockActor, BlockSource, bool_t)(onChestPair);
+
+    const canPairWith = procHacker.js("?canPairWith@ChestBlockActor@@QEAA_NPEAVBlockActor@@AEAVBlockSource@@@Z", bool_t, null, ChestBlockActor, BlockActor, BlockSource);
+    function onTryToPairWith(self: ChestBlockActor, region: BlockSource, pos: BlockPos): void {
+        if (!self.isLargeChest()) {
+            const other = region.getBlockEntity(pos);
+            if (other !== null && canPairWith(self, other, region)) {
+                const chest2 = other.as(ChestBlockActor);
+                const canceled = fire(self, chest2, false) || fire(chest2, self, true);
+                decay(self);
+                decay(chest2);
+                if (canceled) return;
+                inTryToPair = true;
+                try {
+                    return _onTryToPairWith(self, region, pos);
+                } finally {
+                    inTryToPair = false;
+                }
+            }
+        }
+        return _onTryToPairWith(self, region, pos);
+    }
+    const _onTryToPairWith = procHacker.hooking(
+        "?_tryToPairWith@ChestBlockActor@@AEAAXAEAVBlockSource@@AEBVBlockPos@@@Z",
+        void_t,
+        null,
+        ChestBlockActor,
+        BlockSource,
+        BlockPos,
+    )(onTryToPairWith);
 });
 
 export class BlockInteractedWithEvent {
