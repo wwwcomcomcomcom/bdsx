@@ -1,5 +1,6 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { enttComponent, enttHas, enttTypeHash } from "./engine/entt";
+import { pistonAttachedBlocks } from "./engine/piston";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -4940,10 +4941,17 @@ ChestBlockActor.prototype.getPairedChestPosition = procHacker.js("?getPairedChes
 });
 
 PistonBlockActor.prototype.getPosition = procHacker.js("?getPosition@BlockActor@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: PistonBlockActor });
-PistonBlockActor.prototype.getAttachedBlocks = procHacker.js(
+PistonBlockActor.prototype.getAttachedBlocks = derived(
     "?getAttachedBlocks@PistonBlockActor@@QEBAAEBV?$vector@VBlockPos@@V?$allocator@VBlockPos@@@std@@@std@@XZ",
-    CxxVectorToArray.make(BlockPos),
-    { this: PistonBlockActor },
+    function getAttachedBlocks(this: PistonBlockActor): BlockPos[] {
+        return pistonAttachedBlocks(this);
+    },
+    () =>
+        procHacker.js(
+            "?getAttachedBlocks@PistonBlockActor@@QEBAAEBV?$vector@VBlockPos@@V?$allocator@VBlockPos@@@std@@@std@@XZ",
+            CxxVectorToArray.make(BlockPos),
+            { this: PistonBlockActor },
+        ),
 );
 PistonBlockActor.prototype.getFacingDir = procHacker.js(
     "?getFacingDir@PistonBlockActor@@QEBAAEBVBlockPos@@AEBVIConstBlockSource@@@Z",

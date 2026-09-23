@@ -4,6 +4,7 @@ import type { CxxVector } from "../cxxvector";
 import { nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, CxxStringWith8Bytes, int32_t, int8_t, uint16_t, uint32_t, uint8_t } from "../nativetype";
 import { pdbcache } from "../pdbcache";
+import { PISTON_STATE } from "./engine/piston";
 import type { Actor, DimensionId, ItemActor } from "./actor";
 import type { ChunkPos } from "./blockpos";
 import { BlockPos } from "./blockpos";
@@ -476,9 +477,10 @@ export enum PistonAction {
     Retract = 3,
 }
 
-@nativeClass(0xe0)
+@nativeClass(null)
 export class PistonBlockActor extends NativeClass {
-    @nativeField(int8_t, 0xd7)
+    /** state_ (engine/piston.ts): 2024 +0xd7, 1.26.40.8 +0xf7, 1.26.51.1 +0xff */
+    @nativeField(int8_t, PISTON_STATE)
     action: PistonAction;
 
     getPosition(): BlockPos {
