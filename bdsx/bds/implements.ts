@@ -1438,8 +1438,26 @@ Actor.prototype.isInvulnerableTo = procHacker.jsv(
     { this: Actor },
     ActorDamageSource,
 );
-const Actor$canSeeEntity = procHacker.js("?canSee@Actor@@QEBA_NAEBV1@@Z", bool_t, null, Actor, Actor);
-const Actor$canSeePos = procHacker.js("?canSee@Actor@@QEBA_NAEBVVec3@@@Z", bool_t, null, Actor, Vec3);
+const Actor$getAttachPos = procHacker.js("?getAttachPos@Actor@@QEBA?AVVec3@@W4ActorLocation@@M@Z", Vec3, { this: Actor, structureReturn: true }, int32_t, float32_t);
+// 1.26's canSee(Vec3 const&) takes one more bool, which goes into the BlockSource clip where 2024's passed a constant
+// true, so it ships as bdsx:Actor::canSee and bdsx passes true. canSee(Actor const&) is inlined into every caller;
+// 2024's body is "the other is no spectator, and the same clip from this actor's head to the other's head"
+// (getAttachPos with ActorLocation 3), which is what bdsx composes (docs/findings-slots.md "canSee").
+const Actor$canSeePos: (self: Actor, pos: Vec3) => boolean =
+    "bdsx:Actor::canSee" in proc
+        ? (() => {
+              const canSee = procHacker.js("bdsx:Actor::canSee", bool_t, null, Actor, Vec3, bool_t);
+              return (self: Actor, pos: Vec3): boolean => canSee(self, pos, true);
+          })()
+        : procHacker.js("?canSee@Actor@@QEBA_NAEBVVec3@@@Z", bool_t, null, Actor, Vec3);
+const Actor$canSeeEntity: (self: Actor, other: Actor) => boolean = derived(
+    "?canSee@Actor@@QEBA_NAEBV1@@Z",
+    (self: Actor, other: Actor): boolean => {
+        if (other.isSpectator()) return false;
+        return Actor$canSeePos(self, Actor$getAttachPos.call(other, 3, 0));
+    },
+    () => procHacker.js("?canSee@Actor@@QEBA_NAEBV1@@Z", bool_t, null, Actor, Actor),
+);
 Actor.prototype.canSee = function (target) {
     if (target instanceof Actor) {
         return Actor$canSeeEntity(this, target);
