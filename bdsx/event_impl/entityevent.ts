@@ -688,18 +688,29 @@ const _onSimulatedDisconnect = procHacker.hooking(
     _onSimulatedDisconnect(simulatedPlayer);
 });
 
+// 1.26: SplashPotionEffectSubcomponent is gone; ThrownPotionEffectSubcomponent::doOnHitEffect does its work and first
+// reads the thrown potion's id from synched data item 36 into the subcomponent (+8), as 2024's version did before
+// handing over to the splash one (docs/findings-slots.md "splashPotionHit"). The hook reads the same item at entry,
+// and a listener's change is written back to it before the original reads it.
+const THROWN_POTION = 0x400056; // ActorType, the constant the body compares with
+const THROWN_POTION_ID_DATA = 36;
 events.splashPotionHit.setInstaller(() => {
-    function onSplashPotionHit(splashPotionEffectSubcomponent: SplashPotionEffectSubcomponent, entity: Actor, projectileComponent: ProjectileComponent): void {
-        const event = new SplashPotionHitEvent(entity, splashPotionEffectSubcomponent.potionEffect);
+    function onSplashPotionHit(subcomponent: SplashPotionEffectSubcomponent, entity: Actor, projectileComponent: ProjectileComponent): void {
+        const thrown = entity.getEntityTypeId() === THROWN_POTION;
+        const potion = thrown ? entity.getEntityData().getShort(THROWN_POTION_ID_DATA) : subcomponent.potionEffect;
+        const event = new SplashPotionHitEvent(entity, potion);
         const canceled = events.splashPotionHit.fire(event) === CANCEL;
         if (!canceled) {
-            splashPotionEffectSubcomponent.potionEffect = event.potionEffect;
-            _onSplashPotionHit(splashPotionEffectSubcomponent, event.entity, projectileComponent);
+            if (event.potionEffect !== potion) {
+                if (thrown) entity.getEntityData().setShort(THROWN_POTION_ID_DATA, event.potionEffect);
+                subcomponent.potionEffect = event.potionEffect;
+            }
+            _onSplashPotionHit(subcomponent, event.entity, projectileComponent);
         }
-        decay(splashPotionEffectSubcomponent);
+        decay(subcomponent);
     }
     const _onSplashPotionHit = procHacker.hooking(
-        "?doOnHitEffect@SplashPotionEffectSubcomponent@@UEAAXAEAVActor@@AEAVProjectileComponent@@@Z",
+        "?doOnHitEffect@ThrownPotionEffectSubcomponent@@UEAAXAEAVActor@@AEAVProjectileComponent@@@Z",
         void_t,
         null,
         SplashPotionEffectSubcomponent,

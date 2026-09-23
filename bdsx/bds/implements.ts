@@ -2052,6 +2052,21 @@ SynchedActorDataEntityWrapper.prototype.getInt = procHacker.js(
                 float32_t.ref() /** float const & */,
             ),
     );
+    // Short items (DataItemType 1) the same way: 2024 had no bdsx binding for them. ThrownPotion keeps its
+    // potion id in item 36 (2024's getPotionId is getShort(36); 1.26 inlines that read in the splash code).
+    SynchedActorDataEntityWrapper.prototype.getShort = function (this: SynchedActorDataEntityWrapper, id: number): number {
+        const item = dataItem(this, id);
+        if (item === null || DataItem$getType.call(item) !== 1 /* DataItemType::Short */) return 0;
+        return (item as any as StaticPointer).getInt16(PAYLOAD);
+    };
+    SynchedActorDataEntityWrapper.prototype.setShort = function (this: SynchedActorDataEntityWrapper, id: number, value: number): void {
+        const item = dataItem(this, id);
+        if (item === null || DataItem$getType.call(item) !== 1 /* DataItemType::Short */) return;
+        const p = item as any as StaticPointer;
+        if (p.getInt16(PAYLOAD) === value) return;
+        p.setInt16(value, PAYLOAD);
+        markDirty(this, id);
+    };
 
     // set<std::string> has no out-of-line copy in 1.26 either, and bdsx never names it: it is only
     // reached through Actor::setScoreTag. The 2024 body (0x573da0) is the same shape as set<int> with

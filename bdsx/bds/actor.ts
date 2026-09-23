@@ -1668,6 +1668,16 @@ export class SynchedActorDataEntityWrapper extends AbstractClass {
     getInt(id: ActorDataIDs): int32_t {
         abstract();
     }
+
+    /** a Short item (DataItemType 1); 0 when the id holds no short */
+    getShort(id: ActorDataIDs | number): number {
+        abstract();
+    }
+
+    /** writes a Short item and marks it dirty; nothing when the id holds no short */
+    setShort(id: ActorDataIDs | number, value: number): void {
+        abstract();
+    }
 }
 
 export enum ActorDataIDs /** : unsigned short */ {
