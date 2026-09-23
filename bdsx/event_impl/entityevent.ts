@@ -280,7 +280,16 @@ events.itemUseOnBlock.setInstaller(() => {
     )(onItemUseOnBlock);
 });
 
+// 1.26's Player::_crit takes one more int, which it writes as a float into the AnimatePacket it sends; the hook passes
+// it through under the bdsx:Player::_crit key (docs/findings-slots.md "SimulatedPlayer actions")
 events.playerCrit.setInstaller(() => {
+    if ("bdsx:Player::_crit" in proc) {
+        const _onPlayerCrit = procHacker.hooking("bdsx:Player::_crit", void_t, null, Player, Actor, int32_t)((player: Player, victim: Actor, data: number): void => {
+            events.playerCrit.fire(new PlayerCritEvent(player, victim));
+            return _onPlayerCrit(player, victim, data);
+        });
+        return;
+    }
     function onPlayerCrit(player: Player, victim: Actor): void {
         const event = new PlayerCritEvent(player, victim);
         events.playerCrit.fire(event);
