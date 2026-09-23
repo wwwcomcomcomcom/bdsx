@@ -291,13 +291,14 @@ events.campfireLight.setInstaller(() => {
 });
 
 events.campfireDouse.setInstaller(() => {
-    function onCampfireTryDouseFire(blockSource: BlockSource, blockPos: BlockPos, actor: Actor): bool_t {
+    // the fourth parameter (a bool, r9) was missing here, so the original ran with whatever r9 held
+    function onCampfireTryDouseFire(blockSource: BlockSource, blockPos: BlockPos, actor: Actor, b: bool_t): bool_t {
         const event = new CampfireTryDouseFire(blockPos, blockSource, actor);
         const canceled = events.campfireDouse.fire(event) === CANCEL;
         decay(blockSource);
         decay(blockPos);
         if (canceled) return false;
-        else return _CampfireTryDouseFire(event.blockSource, event.blockPos, event.actor);
+        else return _CampfireTryDouseFire(event.blockSource, event.blockPos, event.actor, b);
     }
 
     const _CampfireTryDouseFire = procHacker.hooking(
@@ -307,6 +308,7 @@ events.campfireDouse.setInstaller(() => {
         BlockSource,
         BlockPos,
         Actor,
+        bool_t,
     )(onCampfireTryDouseFire);
 });
 
