@@ -2750,7 +2750,8 @@ Player.prototype.getCertificate = function (): Certificate | null {
     return null;
 };
 Player.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref());
-Player.prototype.canDestroy = procHacker.js("?canDestroy@Player@@QEBA_NAEBVBlock@@@Z", bool_t, { this: Player }, Block.ref());
+// Player.prototype.canDestroy is assigned below, after the Item$ vtable-slot helpers it needs
+// (next-steps Q1 0번 C-2, docs/findings-blocks.md 12).
 Player.prototype.addExperience = procHacker.js("?addExperience@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
 Player.prototype.addExperienceLevels = procHacker.js("?addLevels@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
 Player.prototype.resetExperienceLevels = procHacker.js("?resetPlayerLevel@Player@@QEAAXXZ", void_t, { this: Player });
@@ -2889,7 +2890,7 @@ Player.prototype.setLocalPlayerAsInitialized = derived(
     },
     () => procHacker.js("?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ", void_t, { this: Player }),
 );
-Player.prototype.getDestroyProgress = procHacker.js("?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block);
+// Player.prototype.getDestroyProgress is assigned below, next to canDestroy (same Item$ helpers).
 Player.prototype.respawn = procHacker.js("?respawn@Player@@UEAAXXZ", void_t, {
     this: Player,
 });
@@ -4010,6 +4011,87 @@ ItemStackBase.prototype.getComponentItem = derived<(this: ItemStackBase) => Comp
         return item as unknown as ComponentItem;
     },
     () => procHacker.js("?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ", ComponentItem, { this: ItemStackBase }),
+);
+// next-steps Q1 0번 C-2, docs/findings-blocks.md 12. 2024's `Player::canDestroy` (0x19d8b20, 82B)
+// and `Player::getDestroyProgress` (0x19de460, a 63B header plus the .pdata-less leaf tail
+// 0x19de49f..0x19de52c -- read the whole thing with disas-exact, both this session) share one OR:
+// `Block::getMaterial(block) -> Material::isAlwaysDestroyable()` (the baseline table mis-names this
+// address `getBroadcastAnger@AngryComponent` -- a one-byte getter the linker folded several
+// one-byte getters onto the same address) OR `ItemStackBase::canDestroySpecial(selectedItem,
+// block)`. getDestroyProgress reads hardness off Block (2024 +0x80, already-confirmed 1.26 +0xb4,
+// docs/findings-blocks.md 12's `getDestroySpeed@Player` writeup): hardness<0 -> 0, hardness==0 ->
+// 1.0, else `Player::getDestroySpeed(block) * (1/hardness) * (canDestroy ? 1/30 : 1/100)`, both
+// constants read verbatim off the 2024 leaf tail (0x2bd9bf4=1/100, 0x2da5ed4=1/30, disas-exact
+// against 1.21.3.01).
+//
+// Two sessions (this one and the one before it) read `GameMode::destroyBlock` and its 1331B
+// neighbour to their last instruction on both builds and found neither the hardness/0.1/0.3
+// division nor a Material-flag read anywhere in them -- `Player::canDestroy`,
+// `ItemStackBase::canDestroySpecial`, and `Material::isAlwaysDestroyable` are not out of line on
+// either build, and are not inlined into that pair either (docs/findings-blocks.md 12, "1.26의
+// 구조가 다르다" and "2차 세션"). What *is* still out of line, on both builds, byte-identical, is
+// `Item::canDestroySpecial(Block const&)` -- the pure virtual `item.h` declares at slot 33 counting
+// from the destructor at slot 0 (`virtual bool canDestroySpecial(Block const &) const = 0;`, the
+// 34th line after `~Item()`; the already-shipped `isComponentBased`@9 and `isDamageable`@14 above
+// count from the same destructor, so this is the same convention, not a new one -- and a second,
+// independent check: 1.26.51.1's own `?isHandEquipped@DiggerItem@@` (already resolved,
+// `0xa2880`) sits at this table's slot 39, matching `isHandEquipped`'s declared position 6 lines
+// after `canDestroySpecial` in the same header). The vtable entries `??_7PickaxeItem@@6B@` /
+// `??_7ShovelItem@@6B@` / `??_7HoeItem@@6B@` all point at one COMDAT-folded 156B function (40
+// 0x3759760, 51 0x36f1a40, byte-identical) that reads the held DiggerItem's own tag (this+0x218),
+// then up to four tier tags in sequence (the literal HashedStrings themselves live in
+// runtime-initialised .data, unreadable from the file -- but the shape is unambiguous: a block
+// matching none of the four returns true outright, one matching the Nth compares the item's own
+// tier field, this+0x210, against N). A non-tool item's slot 33 (`??_7CoalItem@@6B@`, 40
+// 0x33c4030 / 51 0x20b8b90, 235B, also byte-identical) is a completely different body -- a
+// `ComponentItem::getComponent("minecraft:digger")`-style lookup that returns false whenever the
+// held item carries no digger component at all. That means this slot alone reproduces 2024's
+// tool-tier gate (stone/ore family) but *not* the Material fast path (dirt-with-bare-hand): no
+// out-of-line `Material::isAlwaysDestroyable`, nor a block/material-level replacement for it, was
+// found on either build this session, and Endstone's own reverse-engineered `material.h` (both the
+// v0.11.7 and HEAD copies) lists `sizeof(Material) == 7` with seven named bytes and none of them
+// an "always destroyable" flag -- so it may genuinely have moved or been folded into the
+// tag-membership shape above in a way this session didn't isolate. Reusing that OR here as
+// bdsx's own copy would silently return false for tool-agnostic materials it cannot represent
+// (dirt, wood, wool -- most of the block palette), so it is not attempted: `canDestroy`/
+// `getDestroyProgress` below call *only* the confirmed half (`item.canDestroySpecial(block)` via
+// the vft[33] dispatch, the same raw-asm-stub trick `isComponentBased`/`isDamageable` above use),
+// which is enough to reproduce the tiered-block behaviour (stone/obsidian family) that
+// `digprobe`'s existing `getDestroySpeed` checks already exercise, and demonstrably incomplete for
+// material-always-destroyable blocks by bare hand -- written down here rather than shipped as
+// silently correct. Next step, not attempted here: find where 1.26 still gates that case
+// (docs/findings-blocks.md 12, "다음에 시도할 것").
+const Item$canDestroySpecial = makefunc.js(
+    asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x108).alloc("Item::canDestroySpecial via vft[33]"),
+    bool_t,
+    { this: Item },
+    Block,
+);
+Player.prototype.canDestroy = derived(
+    "?canDestroy@Player@@QEBA_NAEBVBlock@@@Z",
+    function canDestroy(this: Player, block: Block): boolean {
+        const item = this.getSupplies().getSelectedItem();
+        const self = item as unknown as StaticPointer;
+        const weak = self.getNullablePointer(8);
+        if (weak === null) return false;
+        const itemPtr = weak.getNullablePointerAs(Item, 0);
+        if (itemPtr === null) return false;
+        return Item$canDestroySpecial.call(itemPtr, block);
+    },
+    () => procHacker.js("?canDestroy@Player@@QEBA_NAEBVBlock@@@Z", bool_t, { this: Player }, Block.ref()),
+);
+Player.prototype.getDestroyProgress = derived(
+    "?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z",
+    function getDestroyProgress(this: Player, block: Block): number {
+        const blk = block as unknown as StaticPointer;
+        const hardness = blk.getFloat32(0xb4);
+        if (hardness < 0) return 0;
+        if (hardness === 0) return 1;
+        const speed = this.getDestroySpeed(block);
+        const mult = this.canDestroy(block) ? 1 / 30 : 1 / 100;
+        return speed * (1 / hardness) * mult;
+    },
+    () => procHacker.js("?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref()),
 );
 ItemStackBase.prototype.getMaxDamage = procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase });
 // next-steps Q1-B-2. 2024's ItemStackBase::getDamageValue (0x1b5fa50) is ten bytes: the same
