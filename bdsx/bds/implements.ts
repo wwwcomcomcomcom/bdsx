@@ -2939,10 +2939,20 @@ Player.prototype.isFlying = derived(
 );
 Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
 Player.prototype.isInRaid = procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player });
-// `?isUsingItem@Player@@` and `?hasDimension@Actor@@` have no address on 1.26 and are deliberately not
-// derived yet: each has a layout candidate whose check so far saw only one side (docs/findings-layouts.md,
-// "Candidates held back"). isInWorld below uses the same dimension test internally.
-Player.prototype.isUsingItem = procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player });
+// `?hasDimension@Actor@@` has no address on 1.26 and is deliberately not derived yet: its layout candidate has only
+// ever been seen true (docs/findings-layouts.md, "Candidates held back"). isInWorld below uses the same dimension test.
+// 2024's isUsingItem is `!itemInUse.isNull()`; 1.26 inlines it everywhere. The item in use is the ItemStack at
+// layouts.Player.itemInUse (+1840 on both builds): the engine fills it while a bow is drawn, in step with the USINGITEM
+// actor flag, and leaves it null otherwise (docs/findings-layouts.md "Candidates held back", sbow40/sbow51)
+Player.prototype.isUsingItem = derived(
+    "?isUsingItem@Player@@QEBA_NXZ",
+    function isUsingItem(this: Player): boolean {
+        const off = pdbcache.layouts.Player?.itemInUse;
+        if (off === undefined) throw Error("Player::isUsingItem: no layouts.Player.itemInUse in this build's symbols.json");
+        return !(this as any as StaticPointer).addAs(ItemStack, off).isNull();
+    },
+    () => procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 Player.prototype.hasDimension = procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.getAbilities = procHacker.js("?getAbilities@Player@@QEAAAEAVLayeredAbilities@@XZ", LayeredAbilities, { this: Player });
 Player.prototype.getSelectedItem = procHacker.js("?getSelectedItem@Player@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Player });
