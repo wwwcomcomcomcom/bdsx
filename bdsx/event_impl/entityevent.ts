@@ -570,6 +570,22 @@ events.playerAttack.setInstaller(() => {
 });
 
 events.playerInteract.setInstaller(() => {
+    // 1.26's Player::interact returns its InteractionResult through an sret (bit 0 of the first byte is success) where
+    // 2024's returned bool, hence bdsx:Player::interact; a cancel writes a failed result (docs/findings-slots.md
+    // "playerInteract")
+    if ("bdsx:Player::interact" in proc) {
+        const _interact = procHacker.hooking("bdsx:Player::interact", StaticPointer, null, Player, StaticPointer, Actor, Vec3)(
+            (player: Player, result: StaticPointer, victim: Actor, interactPos: Vec3): StaticPointer => {
+                const event = new PlayerInteractEvent(player, victim, interactPos);
+                if (events.playerInteract.fire(event) === CANCEL) {
+                    result.setInt32(0);
+                    return result;
+                }
+                return _interact(event.player, result, event.victim, event.interactPos);
+            },
+        );
+        return;
+    }
     function onPlayerInteract(player: Player, victim: Actor, interactPos: Vec3): boolean {
         const event = new PlayerInteractEvent(player, victim, interactPos);
         const canceled = events.playerInteract.fire(event) === CANCEL;
