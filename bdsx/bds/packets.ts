@@ -39,7 +39,7 @@ import { Packet } from "./packet";
 import { MinecraftPacketIds } from "./packetids";
 import type { GameType, Player } from "./player";
 import { pdbcache } from "../pdbcache";
-import { constructPlayerListEntry } from "./engine/playerlist";
+import { constructPlayerListEntry, PlayerListRecord, readPlayerListRecords } from "./engine/playerlist";
 import { derived } from "./symbols";
 import { DisplaySlot, ObjectiveSortOrder, ScoreboardId } from "./scoreboard";
 import { SerializedSkin } from "./skin";
@@ -1178,10 +1178,25 @@ const ConstructPlayerListEntryByUUID = derived(
 
 @nativeClass(null)
 export class PlayerListPacket extends Packet {
-    @nativeField(CxxVector.make(PlayerListEntry))
-    readonly entries: CxxVector<PlayerListEntry>;
-    @nativeField(uint8_t)
-    action: uint8_t;
+    /**
+     * 2024's field. BDS 1.26 holds a variant per record instead of PlayerListEntry, so this throws -- use getEntries()
+     * (docs/findings-containers.md section 14)
+     */
+    get entries(): CxxVector<PlayerListEntry> {
+        throw Error("PlayerListPacket.entries is 2024's layout; BDS 1.26 holds a variant per record -- use getEntries()");
+    }
+    /** 2024's per-packet action; on BDS 1.26 each record carries its own -- use getEntries() */
+    get action(): number {
+        throw Error("PlayerListPacket.action is 2024's layout; BDS 1.26 records carry their own action -- use getEntries()");
+    }
+
+    /**
+     * The packet's records. 1.26 holds a variant per record (an addition or a removal, each with its own action)
+     * instead of PlayerListEntry (engine/playerlist.ts).
+     */
+    getEntries(): PlayerListRecord[] {
+        return readPlayerListRecords(this as any as StaticPointer);
+    }
 }
 
 @nativeClass(null)
