@@ -120,7 +120,7 @@ import { MobEffect, MobEffectInstance } from "./effects";
 import { EnchantUtils, ItemEnchants } from "./enchants";
 import { GameMode } from "./gamemode";
 import { GameRule, GameRuleId, GameRules } from "./gamerules";
-import { HashedString, HashedStringToString } from "./hashedstring";
+import { computeHashOf, HashedString, HashedStringToString } from "./hashedstring";
 import {
     ComponentItem,
     Container,
@@ -2495,8 +2495,27 @@ Player.prototype.getSkin = derived(
     },
     () => procHacker.js("?getSkin@Player@@QEAAAEAVSerializedSkin@@XZ", SerializedSkin, { this: Player }),
 );
-Player.prototype.startCooldown = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item);
-Player.prototype.getItemCooldownLeft = procHacker.js("?getItemCooldownLeft@Player@@QEBAHAEBVHashedString@@@Z", int32_t, { this: Player }, HashedString);
+// The trailing bool is "send PlayerStartItemCooldownPacket" (2024 and 1.26 alike); ItemStackBase::startCoolDown passes
+// true and upstream left it unset. 1.26's body also dropped 2024's null-item check (docs/findings-slots.md "startCooldown").
+const Player$startCooldown = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item, bool_t);
+Player.prototype.startCooldown = function (this: Player, item: Item): void {
+    if (item == null) return;
+    Player$startCooldown.call(this, item, true);
+};
+// 1.26's getItemCooldownLeft takes the category's 64-bit hash, not the HashedString -- it compares the argument register
+// itself with the stored hash -- so the 2024 decoration names nothing and the function ships as a bdsx: key. 2024
+// namespaced the category first ("minecraft:" when it has none); the map keyed by that name holds the ticks left
+// (docs/findings-slots.md "startCooldown").
+Player.prototype.getItemCooldownLeft =
+    "bdsx:Player::getItemCooldownLeft" in proc
+        ? (() => {
+              const left = procHacker.js("bdsx:Player::getItemCooldownLeft", int32_t, { this: Player }, VoidPointer);
+              return function (this: Player, cooldownType: HashedString): number {
+                  const name = cooldownType.str;
+                  return left.call(this, computeHashOf(name.includes(":") ? name : `minecraft:${name}`));
+              };
+          })()
+        : procHacker.js("?getItemCooldownLeft@Player@@QEBAHAEBVHashedString@@@Z", int32_t, { this: Player }, HashedString);
 Player.prototype.setGameType = procHacker.js("?setPlayerGameType@ServerPlayer@@UEAAXW4GameType@@@Z", void_t, { this: Player }, int32_t);
 Player.prototype.setPermissions = derived(
     "?setPermissions@Player@@QEAAXW4CommandPermissionLevel@@@Z",
