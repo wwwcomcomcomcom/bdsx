@@ -34,9 +34,11 @@ class AnnounceServerData extends NativeClass {
 
 // CxxStringWrapper, CxxStringWrapper, VoidPointer, int32_t, int32_t, bool_t
 //  motd: CxxStringWrapper, levelname: CxxStringWrapper, gameType: VoidPointer, currentPlayers: number, maxPlayers: number, isJoinableThroughServerScreen: boolean
+// 1.26 inlines _announceServer into its only caller, _startAnnouncingServer (same arguments), so the hook moved there.
+// The fields read here keep their 2024 offsets; 1.26 only appends bools after +0x4d (docs/findings-slots.md "queryRegenerate").
 events.queryRegenerate.setInstaller(() => {
     const _onQueryRegenerate = procHacker.hooking(
-        "?_announceServer@RakNetServerLocator@@AEAAXAEBUAnnounceServerData@1@@Z",
+        "?_startAnnouncingServer@RakNetServerLocator@@AEAAXAEBUAnnounceServerData@1@@Z",
         void_t,
         null,
         VoidPointer,
