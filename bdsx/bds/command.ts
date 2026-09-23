@@ -121,8 +121,23 @@ export class MCRESULT extends NativeStruct {
         abstract();
     }
 }
-MCRESULT.prototype.getFullCode = procHacker.js("?getFullCode@MCRESULT@@QEBAHXZ", int32_t, { this: MCRESULT });
-MCRESULT.prototype.isSuccess = procHacker.js("?isSuccess@MCRESULT@@QEBA_NXZ", bool_t, { this: MCRESULT });
+// MCRESULT is { bool success; uint8 category; uint16 code } in both years (Endstone mc_result.h); 1.26 inlines
+// both readers. 2024's getFullCode: ((success ? 0 : 0x8000) | category) << 16 | code.
+MCRESULT.prototype.getFullCode = derived(
+    "?getFullCode@MCRESULT@@QEBAHXZ",
+    function getFullCode(this: MCRESULT): number {
+        const r = this.result;
+        return ((((r & 0xff) === 0 ? 0x8000 : 0) | ((r >>> 8) & 0xff)) << 16) | (r >>> 16);
+    },
+    () => procHacker.js("?getFullCode@MCRESULT@@QEBAHXZ", int32_t, { this: MCRESULT }),
+);
+MCRESULT.prototype.isSuccess = derived(
+    "?isSuccess@MCRESULT@@QEBA_NXZ",
+    function isSuccess(this: MCRESULT): boolean {
+        return (this.result & 0xff) !== 0;
+    },
+    () => procHacker.js("?isSuccess@MCRESULT@@QEBA_NXZ", bool_t, { this: MCRESULT }),
+);
 
 @nativeClass()
 export class CommandPosition extends NativeStruct {
@@ -671,14 +686,26 @@ export namespace CommandVersion {
 }
 
 const CommandOriginWrapper = Wrapper.make(CommandOrigin.ref());
-const CommandContext$CommandContext = procHacker.js(
+// 1.26 constructs CommandContext inline (no symbol); the layout is unchanged: std::string at +0, the
+// unique_ptr<CommandOrigin> at +32, the version at +40 (Endstone command_context.h, bdsx's own fields).
+const CommandContext$CommandContext = derived(
     "??0CommandContext@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$unique_ptr@VCommandOrigin@@U?$default_delete@VCommandOrigin@@@std@@@2@H@Z",
-    void_t,
-    null,
-    CommandContext,
-    CxxString,
-    CommandOriginWrapper,
-    int32_t,
+    (ctx: CommandContext, command: string, origin: InstanceType<typeof CommandOriginWrapper>, version: number): void => {
+        ctx.construct();
+        ctx.command = command;
+        ctx.origin = origin.value;
+        ctx.version = version;
+    },
+    () =>
+        procHacker.js(
+            "??0CommandContext@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$unique_ptr@VCommandOrigin@@U?$default_delete@VCommandOrigin@@@std@@@2@H@Z",
+            void_t,
+            null,
+            CommandContext,
+            CxxString,
+            CommandOriginWrapper,
+            int32_t,
+        ),
 );
 const CommandContextSharedPtr = CxxSharedPtr.make(CommandContext);
 

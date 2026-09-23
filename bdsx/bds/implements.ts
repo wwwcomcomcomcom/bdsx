@@ -6191,7 +6191,26 @@ bedrockServer.executeCommand = function (
     return result;
 };
 
+// 1.26 has no out-of-line CommandRegistry::Parser (MinecraftCommands::compileCommand inlines it, and
+// createCommand into CommandRegistry::createCommand): the engine runs the command itself. The output reaches the
+// origin unless muted; Data mode gets the status code, not the messages (docs/findings-scoreboard.md section 5).
+const Parser$available = "??0Parser@CommandRegistry@@QEAA@AEBV1@H@Z" in proc;
+function executeCommandByEngine(command: string, origin: CommandOrigin, mute: CommandResultType): CommandResult<CommandResult.Any> {
+    if (mute === true || mute == null) mute = CommandResultType.Mute;
+    else if (mute === false) mute = CommandResultType.Output;
+    const ctx = CommandContext.constructWith(command, origin);
+    try {
+        // through bdsx's own wrapper, so events.command fires exactly once
+        const res = bedrockServer.minecraftCommands.executeCommand(ctx, (mute & CommandResultType.Output) === 0) as CommandResult<CommandResult.Any>;
+        if ((mute & CommandResultType.Data) !== 0) res.data = { statusCode: res.getFullCode(), statusMessage: "" };
+        return res;
+    } finally {
+        ctx.destruct();
+    }
+}
+
 function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: CommandResultType = null): CommandResult<CommandResult.Any> {
+    if (!Parser$available) return executeCommandByEngine(command, origin, mute);
     // fire `events.command` manually. because it does not pass MinecraftCommands::executeCommand
     const ctx = CommandContext.constructWith(command, origin);
     const resv = events.command.fire(command, origin.getName(), ctx);
