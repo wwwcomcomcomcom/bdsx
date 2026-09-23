@@ -4,6 +4,7 @@ import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./en
 import { engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
+import { playerIsInRaid } from "./engine/village";
 import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative } from "./engine/item";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -2938,7 +2939,15 @@ Player.prototype.isFlying = derived(
     () => procHacker.js("?isFlying@Player@@QEBA_NXZ", bool_t, { this: Player }),
 );
 Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
-Player.prototype.isInRaid = procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player });
+// 1.26.51.1 inlines isInRaid into its only caller; bdsx runs 2024's steps over the engine layer (engine/village.ts)
+Player.prototype.isInRaid = derived(
+    "?isInRaid@Player@@QEBA_NXZ",
+    function isInRaid(this: Player): boolean {
+        const pos = this.getPosition();
+        return playerIsInRaid(this.getDimension() as any as StaticPointer, pos.x, pos.y, pos.z);
+    },
+    () => procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player }),
+);
 // `?hasDimension@Actor@@` has no address on 1.26 and is deliberately not derived yet: its layout candidate has only
 // ever been seen true (docs/findings-layouts.md, "Candidates held back"). isInWorld below uses the same dimension test.
 // 2024's isUsingItem is `!itemInUse.isNull()`; 1.26 inlines it everywhere. The item in use is the ItemStack at
