@@ -2749,8 +2749,12 @@ const TryGetUserEntityIdComponent = derived<(actor: Actor) => UserEntityIdentifi
 Player.prototype.getCertificate = function (): Certificate | null {
     return null;
 };
-Player.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref());
-// Player.prototype.canDestroy is assigned below, after the Item$ vtable-slot helpers it needs
+// next-steps Q1-1, docs/findings-blocks.md 12 "4th session": the address this table shipped as
+// `getDestroySpeed@Player` until 2026-09-23 (40 0x21fec0 / 51 0x2aec80) returns 0x1a61b20(ctx) /
+// 0x1e968d0(ctx) directly, and that callee divides the raw speed by hardness and by 30 or 100 -- it is
+// 2024's getDestroyProgress. getDestroySpeed is now a derived() below that inverts it.
+Player.prototype.getDestroyProgress = procHacker.js("?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref());
+// Player.prototype.canDestroy / getDestroySpeed are assigned below, after the Item$ vtable-slot helpers it needs
 // (next-steps Q1 0번 C-2, docs/findings-blocks.md 12).
 Player.prototype.addExperience = procHacker.js("?addExperience@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
 Player.prototype.addExperienceLevels = procHacker.js("?addLevels@Player@@UEAAXH@Z", void_t, { this: Player }, int32_t);
@@ -2890,7 +2894,6 @@ Player.prototype.setLocalPlayerAsInitialized = derived(
     },
     () => procHacker.js("?setLocalPlayerAsInitialized@ServerPlayer@@QEAAXXZ", void_t, { this: Player }),
 );
-// Player.prototype.getDestroyProgress is assigned below, next to canDestroy (same Item$ helpers).
 Player.prototype.respawn = procHacker.js("?respawn@Player@@UEAAXXZ", void_t, {
     this: Player,
 });
@@ -4022,7 +4025,9 @@ ItemStackBase.prototype.getComponentItem = derived<(this: ItemStackBase) => Comp
 // docs/findings-blocks.md 12's `getDestroySpeed@Player` writeup): hardness<0 -> 0, hardness==0 ->
 // 1.0, else `Player::getDestroySpeed(block) * (1/hardness) * (canDestroy ? 1/30 : 1/100)`, both
 // constants read verbatim off the 2024 leaf tail (0x2bd9bf4=1/100, 0x2da5ed4=1/30, disas-exact
-// against 1.21.3.01).
+// against 1.21.3.01). (Superseded 2026-09-23: 1.26 does that whole computation in the address the
+// table used to call getDestroySpeed, so getDestroyProgress is now that address and getDestroySpeed
+// the derived() -- see the two assignments below and the one next to getCertificate above.)
 //
 // Two sessions (this one and the one before it) read `GameMode::destroyBlock` and its 1331B
 // neighbour to their last instruction on both builds and found neither the hardness/0.1/0.3
@@ -4051,16 +4056,20 @@ ItemStackBase.prototype.getComponentItem = derived<(this: ItemStackBase) => Comp
 // found on either build this session, and Endstone's own reverse-engineered `material.h` (both the
 // v0.11.7 and HEAD copies) lists `sizeof(Material) == 7` with seven named bytes and none of them
 // an "always destroyable" flag -- so it may genuinely have moved or been folded into the
-// tag-membership shape above in a way this session didn't isolate. Reusing that OR here as
-// bdsx's own copy would silently return false for tool-agnostic materials it cannot represent
-// (dirt, wood, wool -- most of the block palette), so it is not attempted: `canDestroy`/
-// `getDestroyProgress` below call *only* the confirmed half (`item.canDestroySpecial(block)` via
-// the vft[33] dispatch, the same raw-asm-stub trick `isComponentBased`/`isDamageable` above use),
-// which is enough to reproduce the tiered-block behaviour (stone/obsidian family) that
-// `digprobe`'s existing `getDestroySpeed` checks already exercise, and demonstrably incomplete for
-// material-always-destroyable blocks by bare hand -- written down here rather than shipped as
-// silently correct. Next step, not attempted here: find where 1.26 still gates that case
-// (docs/findings-blocks.md 12, "다음에 시도할 것").
+// tag-membership shape above in a way this session didn't isolate.
+//
+// Found the next session (next-steps Q1-1, docs/findings-blocks.md 12, "4th session"): the flag moved
+// from Material to BlockLegacy and flipped meaning. Endstone's block_type.h declares
+// `bool requires_correct_tool_for_drops_ : 1` among the bitfields after render_layer_ (+354), and a
+// .text scan for `testb $imm, 0x165(reg)` finds exactly three `$0x4` sites per build. Two of them
+// spell out 2024's OR verbatim: 40 0x1a61b20 / 51 0x1e968d0 (0x2dd bytes on both -- the function
+// address the table ships as Player::getDestroyProgress ends in) caches
+// `!(block->blockLegacy[0x165] & 4) || item->vft[0x108](block)` as an optional<bool> and then divides
+// speed/hardness by 30 or 100 on it (constants 0xa52c2f4=30.0 / 0xa52c2f0=100.0 on 40), and the
+// block-break path (40 0x1f46540 / 51 0x30b5600) gates drops on the same two terms. The bit is tested
+// before the held item is even looked at, so a bare hand answers true for any block that doesn't
+// require the correct tool. Offset shipped as layouts.BlockLegacy.requiresCorrectToolForDrops.
+const BlockLegacy$requiresCorrectToolOffset = pdbcache.layouts.BlockLegacy?.requiresCorrectToolForDrops ?? 0x165;
 const Item$canDestroySpecial = makefunc.js(
     asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x108).alloc("Item::canDestroySpecial via vft[33]"),
     bool_t,
@@ -4070,6 +4079,8 @@ const Item$canDestroySpecial = makefunc.js(
 Player.prototype.canDestroy = derived(
     "?canDestroy@Player@@QEBA_NAEBVBlock@@@Z",
     function canDestroy(this: Player, block: Block): boolean {
+        const legacy = (block as unknown as StaticPointer).getPointer(Block$blockLegacyOffset);
+        if ((legacy.getUint8(BlockLegacy$requiresCorrectToolOffset) & 4) === 0) return true;
         const item = this.getSupplies().getSelectedItem();
         const self = item as unknown as StaticPointer;
         const weak = self.getNullablePointer(8);
@@ -4080,18 +4091,32 @@ Player.prototype.canDestroy = derived(
     },
     () => procHacker.js("?canDestroy@Player@@QEBA_NAEBVBlock@@@Z", bool_t, { this: Player }, Block.ref()),
 );
-Player.prototype.getDestroyProgress = derived(
-    "?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z",
-    function getDestroyProgress(this: Player, block: Block): number {
+// 1.26 keeps no (Player, Block) form of the raw speed: 0x21fec0/0x2aec80 builds a context and returns
+// progress = speed / hardness / (canDestroy ? 30 : 100) (40 0x1a61b20, 51 0x1e968d0; the speed itself is
+// the ctx-only helper 40 0x1a61e70). Hardness there is `0x1bb1110(block, item)`: when Block+0xd0 is
+// null, the float at Block+0xb4; otherwise the float at [Block+0xd0]+0, unless one of the 24-byte
+// entries of the vector at [Block+0xd0]+8/+16 matches the item (`destructible_by_mining`'s
+// item_specific_speeds -- the entry's speed at +16 wins). Every vanilla block seen so far has the
+// table with an empty vector (docs/findings-blocks.md 12, 4th session). bdsx can't reproduce the
+// entry match, so speed is recovered by undoing the division only when that is exact -- an empty or
+// absent table and hardness > 0 -- and is NaN otherwise (hardness 0 answers progress 1.0 and
+// hardness < 0 answers 0 whatever the tool, so no speed is left in them to recover).
+Player.prototype.getDestroySpeed = derived(
+    "?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z",
+    function getDestroySpeed(this: Player, block: Block): number {
         const blk = block as unknown as StaticPointer;
-        const hardness = blk.getFloat32(0xb4);
-        if (hardness < 0) return 0;
-        if (hardness === 0) return 1;
-        const speed = this.getDestroySpeed(block);
-        const mult = this.canDestroy(block) ? 1 / 30 : 1 / 100;
-        return speed * (1 / hardness) * mult;
+        const table = blk.getNullablePointer(0xd0);
+        let hardness: number;
+        if (table === null) {
+            hardness = blk.getFloat32(0xb4);
+        } else {
+            if (!table.getPointer(8).equalsptr(table.getPointer(16))) return NaN;
+            hardness = table.getFloat32(0);
+        }
+        if (!(hardness > 0)) return NaN;
+        return this.getDestroyProgress(block) * hardness * (this.canDestroy(block) ? 30 : 100);
     },
-    () => procHacker.js("?getDestroyProgress@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref()),
+    () => procHacker.js("?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref()),
 );
 ItemStackBase.prototype.getMaxDamage = procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase });
 // next-steps Q1-B-2. 2024's ItemStackBase::getDamageValue (0x1b5fa50) is ten bytes: the same
