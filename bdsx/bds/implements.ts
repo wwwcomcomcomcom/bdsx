@@ -3,6 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
+import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { isHumanoidWearableBlockItemOwn } from "./engine/item";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -3012,24 +3013,29 @@ ServerPlayer.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boo
 
 const ServerNetworkHandlerNonOwnerPointer = Bedrock.NonOwnerPointer.make(ServerNetworkHandler);
 SimulatedPlayer.abstract({});
-const SimulatedPlayer$create = procHacker.js(
-    "?create@SimulatedPlayer@@SAPEAV1@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVBlockPos@@V?$AutomaticID@VDimension@@H@@V?$not_null@V?$NonOwnerPointer@VServerNetworkHandler@@@Bedrock@@@gsl@@0@Z",
-    SimulatedPlayer,
-    null,
-    CxxString,
-    BlockPos,
-    int32_t,
-    ServerNetworkHandlerNonOwnerPointer,
-    CxxString,
-);
-
-const shHandler = ServerNetworkHandlerNonOwnerPointer.construct();
-
+// 1.26's create takes nine arguments and is reached through the GameTest wrapper (engine/simulatedplayer.ts);
+// 2024's decoration is used only by a build whose table still has it.
 SimulatedPlayer.create = function (name: string, blockPos: VectorXYZ, dimensionId: DimensionId) {
+    if ("bdsx:SimulatedPlayer::create" in proc) {
+        const pos = Vec3.create(blockPos.x, blockPos.y, blockPos.z);
+        const p = createSimulatedPlayer(bedrockServer.level as any as StaticPointer, name, pos, dimensionId);
+        if (p === null) throw Error("SimulatedPlayer::create returned null");
+        return p.as(SimulatedPlayer);
+    }
+    const create = procHacker.js(
+        "?create@SimulatedPlayer@@SAPEAV1@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVBlockPos@@V?$AutomaticID@VDimension@@H@@V?$not_null@V?$NonOwnerPointer@VServerNetworkHandler@@@Bedrock@@@gsl@@0@Z",
+        SimulatedPlayer,
+        null,
+        CxxString,
+        BlockPos,
+        int32_t,
+        ServerNetworkHandlerNonOwnerPointer,
+        CxxString,
+    );
     if (!(blockPos instanceof BlockPos)) blockPos = BlockPos.create(blockPos);
+    const shHandler = ServerNetworkHandlerNonOwnerPointer.construct();
     shHandler.assign(bedrockServer.nonOwnerPointerServerNetworkHandler);
-    const unknown = "";
-    return SimulatedPlayer$create(name, blockPos as BlockPos, dimensionId, shHandler, unknown); // it destructs snHandler
+    return create(name, blockPos as BlockPos, dimensionId, shHandler, ""); // it destructs shHandler
 };
 SimulatedPlayer.prototype.simulateDisconnect = procHacker.js("?simulateDisconnect@SimulatedPlayer@@QEAAXXZ", void_t, { this: SimulatedPlayer });
 SimulatedPlayer.prototype.simulateAttack = procHacker.js("?simulateAttack@SimulatedPlayer@@QEAA_NPEAVActor@@@Z", bool_t, { this: SimulatedPlayer }, Actor);
@@ -3066,7 +3072,18 @@ SimulatedPlayer.prototype.simulateLookAt = function (target: BlockPos | Actor | 
         SimulatedPlayer$simulateLookAtLocation(this, target, duration);
     }
 };
-SimulatedPlayer.tryGetFromEntity = procHacker.js("?tryGetFromEntity@SimulatedPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z", SimulatedPlayer, null, EntityContext, bool_t);
+// 1.26 keeps no SimulatedPlayer::tryGetFromEntity: 2024's is Player's plus the simulated flag, a flag component the
+// binary spells SimulatedPlayerFlagComponent (docs/findings-slots.md "SimulatedPlayer")
+const SIMULATED_PLAYER_FLAG_HASH = enttTypeHash("SimulatedPlayerFlagComponent");
+SimulatedPlayer.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) => SimulatedPlayer | null>(
+    "?tryGetFromEntity@SimulatedPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z",
+    function tryGetFromEntity(entity: EntityContext, getRemoved: boolean = false): SimulatedPlayer | null {
+        if (!enttHas(contextHolder(entity), SIMULATED_PLAYER_FLAG_HASH)) return null;
+        const p = actorFromEntity(entity, getRemoved);
+        return p === null ? null : (Actor.from(p) as SimulatedPlayer | null);
+    },
+    () => procHacker.js("?tryGetFromEntity@SimulatedPlayer@@SAPEAV1@AEAVEntityContext@@_N@Z", SimulatedPlayer, null, EntityContext, bool_t),
+);
 
 /*
 TODO: Implement `ScriptNavigationResult`
