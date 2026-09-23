@@ -18,6 +18,7 @@ import { proc } from "./bds/symbols";
 import type { CommandResult, CommandResultType } from "./commandresult";
 import { CANCEL, Encoding } from "./common";
 import { Config } from "./config";
+import { capi } from "./capi";
 import { bedrock_server_exe, cgate, ipfilter, MultiThreadQueue, NativePointer, StaticPointer, uv_async, VoidPointer } from "./core";
 import { decay } from "./decay";
 import { dll } from "./dll";
@@ -116,7 +117,19 @@ function patchForStdio(): void {
         StaticPointer,
         int64_as_float_t,
     );
-    procHacker.write("?BedrockLogOut@@YAXIPEBDZZ", 0, asm().jmp64(asmcode.logHook, Register.rax));
+    if ("bdsx:BedrockLogOut" in proc) {
+        // BDS 1.26 keeps BedrockLogOut only as a clone whose one caller always
+        // passed "%s": the format was constant-propagated away, so the priority
+        // is in ecx, the message in r8 and rdx is dead. Put "%s" back in rdx and
+        // enter the same hook (docs/findings-inventory.md, A1-c).
+        const fmt = capi.malloc(3);
+        fmt.setUint8(0x25, 0);
+        fmt.setUint8(0x73, 1);
+        fmt.setUint8(0, 2);
+        procHacker.write("bdsx:BedrockLogOut", 0, asm().mov_r_c(Register.rdx, fmt).jmp64(asmcode.logHook, Register.rax));
+    } else {
+        procHacker.write("?BedrockLogOut@@YAXIPEBDZZ", 0, asm().jmp64(asmcode.logHook, Register.rax));
+    }
 
     asmcode.CommandOutputSenderHookCallback = makefunc.np(
         line => {
