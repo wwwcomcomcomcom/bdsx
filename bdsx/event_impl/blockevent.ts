@@ -3,6 +3,7 @@ import { Block, BlockActor, BlockSource, ButtonBlock, ChestBlock, ChestBlockActo
 import { BlockPos, Vec3 } from "../bds/blockpos";
 import { FALLON_ACTOR, FALLON_DISTANCE, FALLON_POS, FALLON_REGION } from "../bds/engine/fallon";
 import { GameMode } from "../bds/gamemode";
+import { proc } from "../bds/symbols";
 import { ItemStack } from "../bds/inventory";
 import { Player, ServerPlayer } from "../bds/player";
 import { VanillaServerGameplayEventListener } from "../bds/server";
@@ -504,6 +505,25 @@ export class BlockAttackEvent {
     constructor(public block: Block, public player: Player | null, public blockPos: BlockPos) {}
 }
 events.attackBlock.setInstaller(() => {
+    // 1.26 keeps no out-of-line Block::attack (2024's was a thunk into the block class's attack virtual); the player's
+    // attack on a block starts in GameMode::startDestroyBlock, 2024's first caller of it, so the event is raised there --
+    // once per start rather than on every continueDestroyBlock tick -- and a cancel stops the breaking before it begins
+    // (docs/findings-slots.md "attackBlock")
+    const START_DESTROY = "?startDestroyBlock@GameMode@@UEAA_NAEBVBlockPos@@EAEA_N@Z";
+    if (!("?attack@Block@@QEBA_NPEAVPlayer@@AEBVBlockPos@@@Z" in proc) && START_DESTROY in proc) {
+        const _startDestroy = procHacker.hooking(START_DESTROY, bool_t, null, GameMode, BlockPos, uint8_t, StaticPointer)(
+            (gameMode: GameMode, blockPos: BlockPos, face: number, destroyed: StaticPointer): boolean => {
+                const player = gameMode.actor;
+                const event = new BlockAttackEvent(player.getRegion().getBlock(blockPos), player, blockPos);
+                if (events.attackBlock.fire(event) === CANCEL) {
+                    destroyed.setBoolean(false);
+                    return false;
+                }
+                return _startDestroy(gameMode, blockPos, face, destroyed);
+            },
+        );
+        return;
+    }
     function onBlockAttacked(block: Block, player: Player | null, blockPos: BlockPos): bool_t {
         const event = new BlockAttackEvent(block, player, blockPos);
         const canceled = events.attackBlock.fire(event) === CANCEL;
