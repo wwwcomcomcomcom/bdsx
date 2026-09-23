@@ -1,4 +1,5 @@
 import { Actor, ActorDamageCause, ActorDamageSource, type ActorInitializationMethod, DimensionId, Mob } from "../bds/actor";
+import { GameMode } from "../bds/gamemode";
 import { BlockPos, Vec3 } from "../bds/blockpos";
 import { HitResult, ProjectileComponent, SplashPotionEffectSubcomponent } from "../bds/components";
 import { ComplexInventoryTransaction, ContainerId, HandSlot, InventorySource, InventorySourceType, ItemStack, ItemStackBase } from "../bds/inventory";
@@ -230,6 +231,19 @@ events.playerUseItem.setInstaller(() => {
 });
 
 events.itemUse.setInstaller(() => {
+    // 1.26 inlines ItemStack::use into its only caller, GameMode::useItem (the cooldown check, then the item's use
+    // virtual), so the event is raised there: the same item and player before the use, a cancel returning false
+    // (docs/findings-slots.md "itemUse")
+    if (!("?use@ItemStack@@QEAAAEAV1@AEAVPlayer@@@Z" in proc) && "?useItem@GameMode@@UEAA_NAEAVItemStack@@@Z" in proc) {
+        const _onUseItem = procHacker.hooking("?useItem@GameMode@@UEAA_NAEAVItemStack@@@Z", bool_t, null, GameMode, ItemStack)(
+            (gameMode: GameMode, itemStack: ItemStack): boolean => {
+                const event = new ItemUseEvent(itemStack, gameMode.actor);
+                if (events.itemUse.fire(event) === CANCEL) return false;
+                return _onUseItem(gameMode, event.itemStack);
+            },
+        );
+        return;
+    }
     function onItemUse(itemStack: ItemStack, player: Player): ItemStack {
         const event = new ItemUseEvent(itemStack, player);
         const canceled = events.itemUse.fire(event) === CANCEL;
