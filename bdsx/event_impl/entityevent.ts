@@ -1,5 +1,6 @@
 import { Actor, ActorDamageCause, ActorDamageSource, type ActorInitializationMethod, DimensionId, Mob } from "../bds/actor";
 import { GameMode } from "../bds/gamemode";
+import { pdbcache } from "../pdbcache";
 import { BlockPos, Vec3 } from "../bds/blockpos";
 import { HitResult, ProjectileComponent, SplashPotionEffectSubcomponent } from "../bds/components";
 import { ComplexInventoryTransaction, ContainerId, HandSlot, InventorySource, InventorySourceType, ItemStack, ItemStackBase } from "../bds/inventory";
@@ -257,6 +258,44 @@ events.itemUse.setInstaller(() => {
 });
 
 events.itemUseOnBlock.setInstaller(() => {
+    // 1.26: ItemStack::useOn no longer covers the whole interaction -- when it reports failure, GameMode::useItemOn goes
+    // on and places the block itself -- so the event is raised from useItemOn, and a cancel returns a failed result
+    // before anything happens. 1.26's useItemOn takes one more bool than 2024's: after the Block* on 1.26.40.8, before
+    // it on 1.26.51.1 (layouts.GameMode.useItemOnBoolFirst), hence bdsx:GameMode::useItemOn
+    // (docs/findings-slots.md "itemUseOnBlock")
+    if ("bdsx:GameMode::useItemOn" in proc) {
+        const boolFirst = pdbcache.layouts.GameMode?.useItemOnBoolFirst === 1;
+        const fire = (gameMode: GameMode, result: StaticPointer, itemStack: ItemStack, pos: BlockPos, face: number, click: Vec3): ItemUseOnBlockEvent | null => {
+            const event = new ItemUseOnBlockEvent(itemStack, gameMode.actor, pos.x, pos.y, pos.z, face, click.x, click.y, click.z);
+            if (events.itemUseOnBlock.fire(event) === CANCEL) {
+                result.setInt32(0);
+                return null;
+            }
+            pos.x = event.x;
+            pos.y = event.y;
+            pos.z = event.z;
+            click.x = event.clickX;
+            click.y = event.clickY;
+            click.z = event.clickZ;
+            return event;
+        };
+        if (boolFirst) {
+            const _useItemOn = procHacker.hooking("bdsx:GameMode::useItemOn", StaticPointer, null, GameMode, StaticPointer, ItemStack, BlockPos, uint8_t, Vec3, uint8_t, StaticPointer)(
+                (gameMode, result, itemStack, pos, face, click, b, block) => {
+                    const event = fire(gameMode, result, itemStack, pos, face, click);
+                    return event === null ? result : _useItemOn(gameMode, result, event.itemStack, pos, event.face, click, b, block);
+                },
+            );
+        } else {
+            const _useItemOn = procHacker.hooking("bdsx:GameMode::useItemOn", StaticPointer, null, GameMode, StaticPointer, ItemStack, BlockPos, uint8_t, Vec3, StaticPointer, uint8_t)(
+                (gameMode, result, itemStack, pos, face, click, block, b) => {
+                    const event = fire(gameMode, result, itemStack, pos, face, click);
+                    return event === null ? result : _useItemOn(gameMode, result, event.itemStack, pos, event.face, click, block, b);
+                },
+            );
+        }
+        return;
+    }
     function onItemUseOnBlock(
         itemStack: ItemStack,
         interactionResult: StaticPointer,
