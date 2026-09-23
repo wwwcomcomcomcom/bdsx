@@ -594,11 +594,95 @@ function installSendRaw(): void {
     });
 }
 
+/**
+ * The 1.26 packetSendAll: a broadcast to a recipient list (LoopbackPacketSender::sendToClients -- the
+ * simulated player's PlayerList add, among others) goes sendToClients -> NetworkSystem::sendToMultiple
+ * -> NetworkSystem::_sendInternal once per recipient, and never through NetworkSystem::send, so
+ * packetSend did not see it. 2024 patched the same per-recipient loop inside sendToClients (the loop
+ * was inlined there then); 1.26's sendToClients is an assert and a tail jump, and the loop lives in
+ * sendToMultiple. The patch replaces that loop's argument setup and `call _sendInternal` (+0x1c2, 21
+ * bytes, identical on 1.26.40.8 and 1.26.51.1; the rel32 is checked to land on _sendInternal) with a
+ * call to the stub below, which reproduces the setup -- rdi NetworkSystem, rbx the recipient
+ * (NetworkIdentifierWithSubId, NetworkIdentifier first), rsi the Packet, the serialized bytes at
+ * NetworkSystem+0x1b0 -- after asking onPacketSend. CANCEL skips that one recipient, as 2024's did.
+ * docs/findings-packets.md "packetSend for recipient-list broadcasts".
+ */
+const SEND_TO_MULTIPLE_SYMBOL =
+    "?sendToMultiple@NetworkSystem@@QEAAXAEBV?$vector@UNetworkIdentifierWithSubId@@V?$allocator@UNetworkIdentifierWithSubId@@@std@@@std@@AEBVPacket@@@Z";
+const SEND_INTERNAL_SYMBOL =
+    "?_sendInternal@NetworkSystem@@AEAAXAEBVNetworkIdentifier@@AEBVPacket@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z";
+const SEND_TO_MULTIPLE_CALL_SITE = 0x1c2;
+const NETWORK_SYSTEM_SEND_BUFFER = 0x1b0;
+
+function installSendAll(): void {
+    if (!(SEND_TO_MULTIPLE_SYMBOL in proc) || !(SEND_INTERNAL_SYMBOL in proc)) return;
+    const sendInternal = proc[SEND_INTERNAL_SYMBOL];
+    const site = proc[SEND_TO_MULTIPLE_SYMBOL].add(SEND_TO_MULTIPLE_CALL_SITE);
+    if (site.getUint8(16) !== 0xe8 || !site.add(21 + site.getInt32(17)).equalsptr(sendInternal)) {
+        console.error("hook-packet-send-all: the call in sendToMultiple does not reach _sendInternal, not patched");
+        return;
+    }
+    const js = makefunc.np(onPacketSend, int32_t, { name: "onPacketSendAll" }, int32_t, NetworkIdentifier, Packet);
+    dispatcherKeepAlive.push(js);
+    const stub = asm()
+        .sub_r_c(Register.rsp, 0x28) // entered by a call: rsp is 8 off, this realigns and reserves the shadow space
+        .mov_r_c(Register.rax, dllraw.kernel32.GetCurrentThreadId)
+        .call_r(Register.rax)
+        .cmp_r_c(Register.rax, capi.nodeThreadId, OperationSize.dword)
+        .jne_label("pass")
+        .mov_r_rp(Register.rax, Register.rsi, 1, 0)
+        .mov_r_r(Register.rcx, Register.rsi)
+        .call_rp(Register.rax, 1, 8) // Packet::getId
+        .mov_r_r(Register.rax, Register.rax, OperationSize.dword)
+        .cmp_r_c(Register.rax, PACKET_ID_COUNT, OperationSize.dword)
+        .jae_label("pass")
+        .mov_r_c(Register.rcx, enabledPacket)
+        .add_r_r(Register.rcx, Register.rax)
+        .movzx_r_rp(Register.rcx, Register.rcx, 1, 0, OperationSize.dword, OperationSize.byte)
+        .test_r_c(Register.rcx, 1 << events.PacketEventType.Send, OperationSize.dword)
+        .jz_label("pass")
+        .mov_r_r(Register.rcx, Register.rax, OperationSize.dword)
+        .mov_r_r(Register.rdx, Register.rbx)
+        .mov_r_r(Register.r8, Register.rsi)
+        .mov_r_c(Register.rax, js)
+        .call_r(Register.rax)
+        .test_r_r(Register.rax, Register.rax, OperationSize.dword)
+        .jnz_label("done")
+        .label("pass")
+        .mov_r_rp(Register.r9, Register.rdi, 1, NETWORK_SYSTEM_SEND_BUFFER)
+        .mov_r_r(Register.rcx, Register.rdi)
+        .mov_r_r(Register.rdx, Register.rbx)
+        .mov_r_r(Register.r8, Register.rsi)
+        .mov_r_c(Register.rax, sendInternal)
+        .call_r(Register.rax)
+        .label("done")
+        .add_r_c(Register.rsp, 0x28)
+        .ret()
+        .alloc("hook of NetworkSystem::sendToMultiple's _sendInternal call");
+    procHacker.patching(
+        "hook-packet-send-all",
+        SEND_TO_MULTIPLE_SYMBOL,
+        SEND_TO_MULTIPLE_CALL_SITE,
+        stub,
+        Register.rax,
+        true,
+        // prettier-ignore
+        [
+            0x4c, 0x8b, 0x8f, 0xb0, 0x01, 0x00, 0x00,   // mov r9,qword ptr ds:[rdi+1B0]
+            0x48, 0x89, 0xf9,                           // mov rcx,rdi
+            0x48, 0x89, 0xda,                           // mov rdx,rbx
+            0x49, 0x89, 0xf0,                           // mov r8,rsi
+            0xe8, null, null, null, null,               // call NetworkSystem::_sendInternal
+        ],
+    );
+}
+
 bedrockServer.withLoading().then(() => {
     const sendToClientsSymbol =
         "?sendToClients@LoopbackPacketSender@@UEAAXAEBV?$vector@UNetworkIdentifierWithSubId@@V?$allocator@UNetworkIdentifierWithSubId@@@std@@@std@@AEBVPacket@@@Z";
 
-    if (packetizeSymbol in proc) hook2024Receive();
+    const is2024 = packetizeSymbol in proc;
+    if (is2024) hook2024Receive();
     else if (process.env.BDSX_NO_PACKET_DISPATCH !== "1") {
         installPacketDispatchers();
         installRawReceive();
@@ -608,6 +692,12 @@ bedrockServer.withLoading().then(() => {
     // hook send
     asmcode.onPacketSend = makefunc.np(onPacketSend, int32_t, null, int32_t, NetworkIdentifier, Packet);
     asmcode.sendOriginal = procHacker.hookingRaw("?send@NetworkSystem@@QEAAXAEBVNetworkIdentifier@@AEBVPacket@@W4SubClientId@@@Z", asmcode.packetSendHook);
+
+    if (!is2024) {
+        // 1.26: recipient-list broadcasts (above); raw sends are BatchedNetworkPeer::sendPacket (installSendRaw)
+        installSendAll();
+        return;
+    }
 
     asmcode.packetSendAllCancelPoint = proc[sendToClientsSymbol].add(0x11e); // jump to after NetworkSystem::_sendInternal
 
