@@ -4,6 +4,7 @@ import { BlockPos, Vec3 } from "../bds/blockpos";
 import { FALLON_ACTOR, FALLON_DISTANCE, FALLON_POS, FALLON_REGION } from "../bds/engine/fallon";
 import { GameMode } from "../bds/gamemode";
 import { proc } from "../bds/symbols";
+import { INTERACT_EVENT_POS, interactEventPlayer } from "../bds/engine/blockinteract";
 import { ItemStack } from "../bds/inventory";
 import { Player, ServerPlayer } from "../bds/player";
 import { VanillaServerGameplayEventListener } from "../bds/server";
@@ -314,6 +315,18 @@ events.campfireDouse.setInstaller(() => {
 });
 
 events.buttonPress.setInstaller(() => {
+    // 1.26: the block's interact handler, registered by the ButtonBlock constructor, takes (BlockType const*, the interact
+    // event&); a cancel skips it, leaving the event unhandled. The event carries no face, so the face reads 0
+    // (engine/blockinteract.ts, docs/findings-slots.md "chestOpen, buttonPress")
+    if ("bdsx:ButtonBlock::use" in proc) {
+        const _use = procHacker.hooking("bdsx:ButtonBlock::use", void_t, null, ButtonBlock, StaticPointer)((block: ButtonBlock, interaction: StaticPointer): void => {
+            const player = interactEventPlayer(interaction).as(Player);
+            const blockPos = interaction.addAs(BlockPos, INTERACT_EVENT_POS);
+            if (events.buttonPress.fire(new ButtonPressEvent(block, player, blockPos, 0)) === CANCEL) return;
+            return _use(block, interaction);
+        });
+        return;
+    }
     function onButtonPress(buttonBlock: ButtonBlock, player: Player, blockPos: BlockPos, playerOrientation: number): boolean {
         const event = new ButtonPressEvent(buttonBlock, player, blockPos, playerOrientation);
         const canceled = events.buttonPress.fire(event) === CANCEL;
@@ -335,6 +348,18 @@ events.buttonPress.setInstaller(() => {
 });
 
 events.chestOpen.setInstaller(() => {
+    // 1.26: the block's interact handler, registered by the ChestBlock constructor, takes (BlockType const*, the interact
+    // event&); a cancel skips it, leaving the event unhandled. The event carries no face, so the face reads 0
+    // (engine/blockinteract.ts, docs/findings-slots.md "chestOpen, buttonPress")
+    if ("bdsx:ChestBlock::use" in proc) {
+        const _use = procHacker.hooking("bdsx:ChestBlock::use", void_t, null, ChestBlock, StaticPointer)((block: ChestBlock, interaction: StaticPointer): void => {
+            const player = interactEventPlayer(interaction).as(Player);
+            const blockPos = interaction.addAs(BlockPos, INTERACT_EVENT_POS);
+            if (events.chestOpen.fire(new ChestOpenEvent(block, player, blockPos, 0)) === CANCEL) return;
+            return _use(block, interaction);
+        });
+        return;
+    }
     function onChestOpen(chestBlock: ChestBlock, player: Player, blockPos: BlockPos, face: number): boolean {
         const event = new ChestOpenEvent(chestBlock, player, blockPos, face);
         const canceled = events.chestOpen.fire(event) === CANCEL;
