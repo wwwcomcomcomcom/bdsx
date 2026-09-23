@@ -395,7 +395,11 @@ export class ItemStackBase extends NativeClass {
     isStackedByData(): boolean {
         abstract();
     }
-    isStackable(): boolean {
+    /**
+     * With no argument: whether this stack can hold more than one item. With `other`: whether the two
+     * stacks would merge (same item, same aux value when the item stacks by data, same user data).
+     */
+    isStackable(other?: ItemStackBase): boolean {
         abstract();
     }
     isPotionItem(): boolean {

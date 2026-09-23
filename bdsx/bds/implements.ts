@@ -3864,7 +3864,17 @@ ItemStackBase.prototype.sameItem = function (item) {
 };
 ItemStackBase.prototype.sameItemAndAux = procHacker.js("?sameItemAndAux@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
 ItemStackBase.prototype.isStackedByData = procHacker.js("?isStackedByData@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isStackable = procHacker.js("?isStackable@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase });
+// Two overloads. Upstream bound the no-argument method to the one-argument name, so `other` was
+// whatever rdx held. `isStackable()` is "can this stack hold more than one" (Item::getMaxStackSize > 1,
+// not a damaged damageable); `isStackable(other)` is "would these two merge": the same Item, `other`
+// stackable, the same getAuxValue() when the item is stacked by data, the same user data and the
+// same can-place/can-destroy hashes and blocking tick. 1.26 still has both out of line
+// (docs/findings-inventory.md section 14).
+const ItemStackBase$isStackable = procHacker.js("?isStackable@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+const ItemStackBase$isStackableWith = procHacker.js("?isStackable@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
+ItemStackBase.prototype.isStackable = function (this: ItemStackBase, other?: ItemStackBase): boolean {
+    return other === undefined ? ItemStackBase$isStackable.call(this) : ItemStackBase$isStackableWith.call(this, other);
+};
 ItemStackBase.prototype.isPotionItem = procHacker.js("?isPotionItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isPattern = procHacker.js("?isPattern@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isLiquidClipItem = procHacker.js("?isLiquidClipItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
