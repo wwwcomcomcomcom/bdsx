@@ -3,6 +3,7 @@ import { VoidPointer } from "../core";
 import type { CxxVector } from "../cxxvector";
 import { nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, CxxStringWith8Bytes, int32_t, int8_t, uint16_t, uint32_t, uint8_t } from "../nativetype";
+import { pdbcache } from "../pdbcache";
 import type { Actor, DimensionId, ItemActor } from "./actor";
 import type { ChunkPos } from "./blockpos";
 import { BlockPos } from "./blockpos";
@@ -108,11 +109,14 @@ export class BlockLegacy extends NativeClass {
     }
 }
 
+// 1.26 moved the BlockLegacy (BlockType) pointer from +0x30 to +0x68; symbols.json carries it
+const Block$blockLegacy = pdbcache.layouts.Block?.blockLegacy ?? 0x30;
+
 @nativeClass(null)
 export class Block extends NativeClass {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
-    @nativeField(BlockLegacy.ref(), 0x30) // accessed in Block::getVariant
+    @nativeField(BlockLegacy.ref(), Block$blockLegacy) // accessed in Block::getVariant
     blockLegacy: BlockLegacy;
 
     /**
