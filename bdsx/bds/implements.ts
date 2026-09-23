@@ -1,6 +1,8 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttComponent, enttHas, enttTypeHash } from "./engine/entt";
+import { engineLayout } from "./engine/deps";
+import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -10,7 +12,7 @@ import { capi } from "../capi";
 import { commandParser } from "../commandparser";
 import { CommandResult, CommandResultType } from "../commandresult";
 import { AttributeName, Direction, VectorXYZ, abstract } from "../common";
-import { AllocatedPointer, StaticPointer, VoidPointer } from "../core";
+import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { CxxPair } from "../cxxpair";
 import { CxxVector, CxxVectorToArray } from "../cxxvector";
 import { decay } from "../decay";
@@ -5385,17 +5387,47 @@ Scoreboard.prototype.createScoreboardId = procHacker.js(
     { this: Scoreboard },
     CxxString,
 );
-Scoreboard.prototype.getCriteria = procHacker.js(
+// 1.26 keeps no copy of the scoreboard's readers; they walk the containers at their layout offsets
+// (bds/engine/scoreboard.ts, docs/findings-scoreboard.md section 6). The binary wins where a table has the name.
+function scoreboardFind(self: Scoreboard, map: number, match: (node: NativePointer) => boolean): NativePointer | null {
+    for (const node of mapNodes(self as any as StaticPointer, map)) if (match(node)) return node;
+    return null;
+}
+const stringKey = (name: string) => (node: NativePointer) => node.getCxxString(MAP_NODE_VALUE) === name;
+const idKey = (id: ScoreboardId) => (node: NativePointer) => node.getBin64(MAP_NODE_VALUE) === id.id;
+function copyScoreboardId(from: StaticPointer, offset: number): ScoreboardId {
+    const id = new ScoreboardId(true);
+    id.id = from.getBin64(offset);
+    id.identityDef = from.getPointerAs(IdentityDefinition, offset + 8);
+    return id;
+}
+Scoreboard.prototype.getCriteria = derived(
     "?getCriteria@Scoreboard@@QEBAPEAVObjectiveCriteria@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    ObjectiveCriteria,
-    { this: Scoreboard },
-    CxxString,
+    function getCriteria(this: Scoreboard, name: string): ObjectiveCriteria | null {
+        const node = scoreboardFind(this, SCOREBOARD_CRITERIA, stringKey(name));
+        return node === null ? null : node.getPointerAs(ObjectiveCriteria, MAP_NODE_VALUE + 32);
+    } as Scoreboard["getCriteria"],
+    () =>
+        procHacker.js(
+            "?getCriteria@Scoreboard@@QEBAPEAVObjectiveCriteria@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            ObjectiveCriteria,
+            { this: Scoreboard },
+            CxxString,
+        ),
 );
-Scoreboard.prototype.getDisplayObjective = procHacker.js(
+Scoreboard.prototype.getDisplayObjective = derived(
     "?getDisplayObjective@Scoreboard@@QEBAPEBVDisplayObjective@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    DisplayObjective,
-    { this: Scoreboard },
-    CxxString,
+    function getDisplayObjective(this: Scoreboard, displaySlot: string): DisplayObjective | null {
+        const node = scoreboardFind(this, SCOREBOARD_DISPLAY_OBJECTIVES, stringKey(displaySlot));
+        return node === null ? null : node.addAs(DisplayObjective, MAP_NODE_VALUE + 32);
+    },
+    () =>
+        procHacker.js(
+            "?getDisplayObjective@Scoreboard@@QEBAPEBVDisplayObjective@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            DisplayObjective,
+            { this: Scoreboard },
+            CxxString,
+        ),
 );
 Scoreboard.prototype.getObjective = procHacker.js(
     "?getObjective@Scoreboard@@QEBAPEAVObjective@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
@@ -5403,36 +5435,77 @@ Scoreboard.prototype.getObjective = procHacker.js(
     { this: Scoreboard },
     CxxString,
 );
-const Scoreboard$getObjectiveNames = procHacker.js(
+Scoreboard.prototype.getObjectiveNames = derived(
     "?getObjectiveNames@Scoreboard@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
-    CxxVector$string,
-    { this: Scoreboard, structureReturn: true },
+    function getObjectiveNames(this: Scoreboard): string[] {
+        return [...mapNodes(this as any as StaticPointer, SCOREBOARD_OBJECTIVES)].map(node => node.getCxxString(MAP_NODE_VALUE));
+    },
+    () => {
+        const Scoreboard$getObjectiveNames = procHacker.js(
+            "?getObjectiveNames@Scoreboard@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
+            CxxVector$string,
+            { this: Scoreboard, structureReturn: true },
+        );
+        return function (this: Scoreboard) {
+            const names: CxxVector<CxxString> = Scoreboard$getObjectiveNames.call(this);
+            const res = names.toArray();
+            names.destruct();
+            return res;
+        };
+    },
 );
-Scoreboard.prototype.getObjectiveNames = function () {
-    const names: CxxVector<CxxString> = Scoreboard$getObjectiveNames.call(this);
-    const res = names.toArray();
-    names.destruct();
-    return res;
-};
-const Scoreboard$getObjectives = procHacker.js(
+Scoreboard.prototype.getObjectives = derived(
     "?getObjectives@Scoreboard@@QEBA?AV?$vector@PEBVObjective@@V?$allocator@PEBVObjective@@@std@@@std@@XZ",
-    CxxVector.make(Objective.ref()),
-    { this: Scoreboard, structureReturn: true },
+    function getObjectives(this: Scoreboard): Objective[] {
+        return [...mapNodes(this as any as StaticPointer, SCOREBOARD_OBJECTIVES)].map(node => node.getPointerAs(Objective, MAP_NODE_VALUE + 32));
+    },
+    () => {
+        const Scoreboard$getObjectives = procHacker.js(
+            "?getObjectives@Scoreboard@@QEBA?AV?$vector@PEBVObjective@@V?$allocator@PEBVObjective@@@std@@@std@@XZ",
+            CxxVector.make(Objective.ref()),
+            { this: Scoreboard, structureReturn: true },
+        );
+        return function (this: Scoreboard) {
+            const objectives: CxxVector<Objective> = Scoreboard$getObjectives.call(this);
+            const res = objectives.toArray();
+            objectives.destruct();
+            return res;
+        };
+    },
 );
-Scoreboard.prototype.getObjectives = function () {
-    const objectives: CxxVector<Objective> = Scoreboard$getObjectives.call(this);
-    const res = objectives.toArray();
-    objectives.destruct();
-    return res;
-};
-const Scoreboard$getActorScoreboardId = procHacker.js("?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVActor@@@Z", ScoreboardId, null, Scoreboard, Actor);
-const Scoreboard$getPlayerScoreboardId = procHacker.js("?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVPlayer@@@Z", ScoreboardId, null, Scoreboard, Player);
-const Scoreboard$getFakePlayerScoreboardId = procHacker.js(
+// IdentityDictionary: players_ (PlayerScoreboardId -> ScoreboardId) and entities_ (ActorUniqueID -> ScoreboardId)
+// have an 8-byte key, so the value is at +24; fakes_ (std::string -> ScoreboardId) at +48.
+function dictionaryId(self: Scoreboard, map: number, match: (node: NativePointer) => boolean, valueOffset: number): ScoreboardId {
+    const node = scoreboardFind(self, map, match);
+    return node === null ? ScoreboardId.INVALID : node.addAs(ScoreboardId, valueOffset);
+}
+const Scoreboard$getActorScoreboardId = derived(
+    "?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVActor@@@Z",
+    (self: Scoreboard, actor: Actor): ScoreboardId => {
+        const key = actor.getUniqueIdBin();
+        return dictionaryId(self, SCOREBOARD_IDENTITY_ENTITIES, node => node.getBin64(MAP_NODE_VALUE) === key, MAP_NODE_VALUE + 8);
+    },
+    () => procHacker.js("?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVActor@@@Z", ScoreboardId, null, Scoreboard, Actor),
+);
+const Scoreboard$getPlayerScoreboardId = derived(
+    "?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVPlayer@@@Z",
+    (self: Scoreboard, player: Player): ScoreboardId => {
+        const key = player.getUniqueIdBin();
+        return dictionaryId(self, SCOREBOARD_IDENTITY_PLAYERS, node => node.getBin64(MAP_NODE_VALUE) === key, MAP_NODE_VALUE + 8);
+    },
+    () => procHacker.js("?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBVPlayer@@@Z", ScoreboardId, null, Scoreboard, Player),
+);
+const Scoreboard$getFakePlayerScoreboardId = derived(
     "?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    ScoreboardId,
-    null,
-    Scoreboard,
-    CxxString,
+    (self: Scoreboard, name: string): ScoreboardId => dictionaryId(self, SCOREBOARD_IDENTITY_FAKES, stringKey(name), MAP_NODE_VALUE + 32),
+    () =>
+        procHacker.js(
+            "?getScoreboardId@Scoreboard@@QEBAAEBUScoreboardId@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            ScoreboardId,
+            null,
+            Scoreboard,
+            CxxString,
+        ),
 );
 
 const Scoreboard$createActorScoreboardId = procHacker.jsv(
@@ -5472,31 +5545,78 @@ Scoreboard.prototype.getFakePlayerScoreboardId = function (target) {
     return id;
 };
 
-Scoreboard.prototype.getScoreboardIdentityRef = procHacker.js(
+// identity_refs_: ScoreboardId -> ScoreboardIdentityRef, the value at +32
+Scoreboard.prototype.getScoreboardIdentityRef = derived(
     "?getScoreboardIdentityRef@Scoreboard@@QEAAPEAVScoreboardIdentityRef@@AEBUScoreboardId@@@Z",
-    ScoreboardIdentityRef,
-    { this: Scoreboard },
-    ScoreboardId,
+    function getScoreboardIdentityRef(this: Scoreboard, id: ScoreboardId): ScoreboardIdentityRef | null {
+        const node = scoreboardFind(this, SCOREBOARD_IDENTITY_REFS, idKey(id));
+        return node === null ? null : node.addAs(ScoreboardIdentityRef, MAP_NODE_VALUE + 16);
+    },
+    () =>
+        procHacker.js(
+            "?getScoreboardIdentityRef@Scoreboard@@QEAAPEAVScoreboardIdentityRef@@AEBUScoreboardId@@@Z",
+            ScoreboardIdentityRef,
+            { this: Scoreboard },
+            ScoreboardId,
+        ),
 );
-(Scoreboard.prototype as any)._getScoreboardIdentityRefs = procHacker.js(
+(Scoreboard.prototype as any)._getScoreboardIdentityRefs = derived(
     "?getScoreboardIdentityRefs@Scoreboard@@QEBA?AV?$vector@VScoreboardIdentityRef@@V?$allocator@VScoreboardIdentityRef@@@std@@@std@@XZ",
-    CxxVector$ScoreboardIdentityRef,
-    { this: Scoreboard },
-    CxxVector$ScoreboardIdentityRef,
+    function (this: Scoreboard, out: CxxVector<ScoreboardIdentityRef>): CxxVector<ScoreboardIdentityRef> {
+        for (const node of mapNodes(this as any as StaticPointer, SCOREBOARD_IDENTITY_REFS)) out.push(node.addAs(ScoreboardIdentityRef, MAP_NODE_VALUE + 16));
+        return out;
+    },
+    () =>
+        procHacker.js(
+            "?getScoreboardIdentityRefs@Scoreboard@@QEBA?AV?$vector@VScoreboardIdentityRef@@V?$allocator@VScoreboardIdentityRef@@@std@@@std@@XZ",
+            CxxVector$ScoreboardIdentityRef,
+            { this: Scoreboard },
+            CxxVector$ScoreboardIdentityRef,
+        ),
 );
-(Scoreboard.prototype as any)._getTrackedIds = procHacker.js(
+(Scoreboard.prototype as any)._getTrackedIds = derived(
     "?getTrackedIds@Scoreboard@@QEBA?AV?$vector@UScoreboardId@@V?$allocator@UScoreboardId@@@std@@@std@@XZ",
-    CxxVector$ScoreboardId,
-    { this: Scoreboard },
-    CxxVector$ScoreboardId,
+    function (this: Scoreboard, out: CxxVector<ScoreboardId>): CxxVector<ScoreboardId> {
+        for (const node of mapNodes(this as any as StaticPointer, SCOREBOARD_IDENTITY_REFS)) out.push(copyScoreboardId(node, MAP_NODE_VALUE));
+        return out;
+    },
+    () =>
+        procHacker.js(
+            "?getTrackedIds@Scoreboard@@QEBA?AV?$vector@UScoreboardId@@V?$allocator@UScoreboardId@@@std@@@std@@XZ",
+            CxxVector$ScoreboardId,
+            { this: Scoreboard },
+            CxxVector$ScoreboardId,
+        ),
 );
 Scoreboard.prototype.removeObjective = procHacker.js("?removeObjective@Scoreboard@@QEAA_NPEAVObjective@@@Z", bool_t, { this: Scoreboard }, Objective);
-Scoreboard.prototype.resetPlayerScore = procHacker.js(
-    "?resetPlayerScore@Scoreboard@@QEAA_NAEBUScoreboardId@@AEAVObjective@@@Z",
+// 1.26 inlines resetPlayerScore(id, objective) into every caller; written the way they (and Endstone) do it:
+// the score must exist, then the onPlayerScoreRemoved notification, then removeFromObjective
+const ScoreboardIdentityRef$removeFromObjective = procHacker.js(
+    "?removeFromObjective@ScoreboardIdentityRef@@QEAA_NAEAVScoreboard@@AEAVObjective@@@Z",
     bool_t,
-    { this: Scoreboard },
-    ScoreboardId,
+    { this: ScoreboardIdentityRef },
+    Scoreboard,
     Objective,
+);
+Scoreboard.prototype.resetPlayerScore = derived(
+    "?resetPlayerScore@Scoreboard@@QEAA_NAEBUScoreboardId@@AEAVObjective@@@Z",
+    function resetPlayerScore(this: Scoreboard, id: ScoreboardId, objective: Objective): boolean {
+        if (!objective.getPlayerScore(id).valid) return false;
+        const idRef = this.getScoreboardIdentityRef(id);
+        if (idRef === null) return false;
+        const vftable = (this as any as StaticPointer).getPointer(0);
+        const notify = makefunc.js(vftable.getPointer(SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT * 8), void_t, { this: Scoreboard }, ScoreboardId, Objective);
+        notify.call(this, id, objective);
+        return ScoreboardIdentityRef$removeFromObjective.call(idRef, this, objective);
+    },
+    () =>
+        procHacker.js(
+            "?resetPlayerScore@Scoreboard@@QEAA_NAEBUScoreboardId@@AEAVObjective@@@Z",
+            bool_t,
+            { this: Scoreboard },
+            ScoreboardId,
+            Objective,
+        ),
 );
 Scoreboard.prototype.sync = procHacker.js(
     "?onScoreChanged@ServerScoreboard@@UEAAXAEBUScoreboardId@@AEBVObjective@@@Z",
@@ -5506,29 +5626,63 @@ Scoreboard.prototype.sync = procHacker.js(
     Objective,
 );
 
-const Objective$getPlayers = procHacker.js(
+// Objective: scores_ (ScoreboardId -> int, the score at +32), name_ +0x58, display_name_ +0x78 (bdsx's fields)
+Objective.prototype.getPlayers = derived(
     "?getPlayers@Objective@@QEBA?AV?$vector@UScoreboardId@@V?$allocator@UScoreboardId@@@std@@@std@@XZ",
-    CxxVector$ScoreboardId,
-    { this: Objective, structureReturn: true },
+    function getPlayers(this: Objective): ScoreboardId[] {
+        return [...mapNodes(this as any as StaticPointer, OBJECTIVE_SCORES)].map(node => copyScoreboardId(node, MAP_NODE_VALUE));
+    },
+    () => {
+        const Objective$getPlayers = procHacker.js(
+            "?getPlayers@Objective@@QEBA?AV?$vector@UScoreboardId@@V?$allocator@UScoreboardId@@@std@@@std@@XZ",
+            CxxVector$ScoreboardId,
+            { this: Objective, structureReturn: true },
+        );
+        return function (this: Objective) {
+            const ids: CxxVector<ScoreboardId> = Objective$getPlayers.call(this);
+            const res = ids.toArray();
+            ids.destruct();
+            return res;
+        };
+    },
 );
-Objective.prototype.getPlayers = function () {
-    const ids: CxxVector<ScoreboardId> = Objective$getPlayers.call(this);
-    const res = ids.toArray();
-    ids.destruct();
-    return res;
-};
-Objective.prototype.getPlayerScore = procHacker.js(
+Objective.prototype.getPlayerScore = derived(
     "?getPlayerScore@Objective@@QEBA?AUScoreInfo@@AEBUScoreboardId@@@Z",
-    ScoreInfo,
-    { this: Objective, structureReturn: true },
-    ScoreboardId,
+    function getPlayerScore(this: Objective, id: ScoreboardId): ScoreInfo {
+        const info = new ScoreInfo(true);
+        info.objective = this;
+        info.valid = false;
+        info.value = 0;
+        for (const node of mapNodes(this as any as StaticPointer, OBJECTIVE_SCORES)) {
+            if (node.getBin64(MAP_NODE_VALUE) !== id.id) continue;
+            info.valid = true;
+            info.value = node.getInt32(MAP_NODE_VALUE + 16);
+            break;
+        }
+        return info;
+    },
+    () =>
+        procHacker.js(
+            "?getPlayerScore@Objective@@QEBA?AUScoreInfo@@AEBUScoreboardId@@@Z",
+            ScoreInfo,
+            { this: Objective, structureReturn: true },
+            ScoreboardId,
+        ),
 );
-Objective.prototype.getName = procHacker.js("?getName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: Objective,
-});
-Objective.prototype.getDisplayName = procHacker.js("?getDisplayName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: Objective,
-});
+Objective.prototype.getName = derived(
+    "?getName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function getName(this: Objective): string {
+        return this.name;
+    },
+    () => procHacker.js("?getName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Objective }),
+);
+Objective.prototype.getDisplayName = derived(
+    "?getDisplayName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function getDisplayName(this: Objective): string {
+        return this.displayName;
+    },
+    () => procHacker.js("?getDisplayName@Objective@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Objective }),
+);
 
 IdentityDefinition.prototype.isPlayerType = procHacker.js("?getScoreboardId@ScoreboardIdentityRef@@QEBAAEBUScoreboardId@@XZ", bool_t, {
     this: IdentityDefinition,
@@ -5567,18 +5721,38 @@ ScoreboardId.prototype.isValid = derived(
     int32_t,
     uint8_t,
 );
-ScoreboardIdentityRef.prototype.getIdentityType = procHacker.js("?getIdentityType@ScoreboardIdentityRef@@QEBA?AW4Type@IdentityDefinition@@XZ", uint8_t, {
-    this: ScoreboardIdentityRef,
-});
-ScoreboardIdentityRef.prototype.getEntityId = procHacker.js("?getEntityId@ScoreboardIdentityRef@@QEBAAEBUActorUniqueID@@XZ", ActorUniqueID.ref(), {
-    this: ScoreboardIdentityRef,
-});
-ScoreboardIdentityRef.prototype.getPlayerId = procHacker.js("?getPlayerId@ScoreboardIdentityRef@@QEBAAEBUPlayerScoreboardId@@XZ", ActorUniqueID.ref(), {
-    this: ScoreboardIdentityRef,
-});
-ScoreboardIdentityRef.prototype.getScoreboardId = procHacker.js("?getScoreboardId@ScoreboardIdentityRef@@QEBAAEBUScoreboardId@@XZ", ScoreboardId, {
-    this: ScoreboardIdentityRef,
-});
+// ScoreboardIdentityRef: objective_references_ +0, scoreboard_id_ +8 (its IdentityDefinition* at +16);
+// IdentityDefinition: player_id_ +24, entity_id_ +32, identity_type_ +72 (Endstone identity_definition.h)
+const identityDefOf = (self: ScoreboardIdentityRef) => (self as any as StaticPointer).getPointer(0x10);
+ScoreboardIdentityRef.prototype.getIdentityType = derived(
+    "?getIdentityType@ScoreboardIdentityRef@@QEBA?AW4Type@IdentityDefinition@@XZ",
+    function getIdentityType(this: ScoreboardIdentityRef): number {
+        const def = identityDefOf(this);
+        return def.isNull() ? 0 : def.getUint8(engineLayout("IdentityDefinition", "identityType", 72));
+    },
+    () => procHacker.js("?getIdentityType@ScoreboardIdentityRef@@QEBA?AW4Type@IdentityDefinition@@XZ", uint8_t, { this: ScoreboardIdentityRef }),
+);
+ScoreboardIdentityRef.prototype.getEntityId = derived(
+    "?getEntityId@ScoreboardIdentityRef@@QEBAAEBUActorUniqueID@@XZ",
+    function getEntityId(this: ScoreboardIdentityRef): ActorUniqueID {
+        return identityDefOf(this).getBin64(engineLayout("IdentityDefinition", "entityId", 32));
+    },
+    () => procHacker.js("?getEntityId@ScoreboardIdentityRef@@QEBAAEBUActorUniqueID@@XZ", ActorUniqueID.ref(), { this: ScoreboardIdentityRef }),
+);
+ScoreboardIdentityRef.prototype.getPlayerId = derived(
+    "?getPlayerId@ScoreboardIdentityRef@@QEBAAEBUPlayerScoreboardId@@XZ",
+    function getPlayerId(this: ScoreboardIdentityRef): ActorUniqueID {
+        return identityDefOf(this).getBin64(engineLayout("IdentityDefinition", "playerId", 24));
+    },
+    () => procHacker.js("?getPlayerId@ScoreboardIdentityRef@@QEBAAEBUPlayerScoreboardId@@XZ", ActorUniqueID.ref(), { this: ScoreboardIdentityRef }),
+);
+ScoreboardIdentityRef.prototype.getScoreboardId = derived(
+    "?getScoreboardId@ScoreboardIdentityRef@@QEBAAEBUScoreboardId@@XZ",
+    function getScoreboardId(this: ScoreboardIdentityRef): ScoreboardId {
+        return this.scoreboardId;
+    },
+    () => procHacker.js("?getScoreboardId@ScoreboardIdentityRef@@QEBAAEBUScoreboardId@@XZ", ScoreboardId, { this: ScoreboardIdentityRef }),
+);
 ScoreboardIdentityRef.prototype.isPlayerType = function () {
     let iddef = (this as any as StaticPointer).getPointerAs(IdentityDefinition, 0x10);
     if (iddef === null) iddef = IdentityDefinition.Invalid;
