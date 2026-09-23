@@ -450,21 +450,16 @@ events.entitySneak.setInstaller(() => {
     });
 });
 
+// 1.26: the method is passed by reference (the body reads it through r8), and the function is reached through a
+// vftable; the table ships it under bdsx's key, found through its own lambda (docs/findings-slots.md
+// "sendActorCreated"). Fires once for every actor entering the world: Loaded (1) with the world, Spawned (2), ...
 events.entityCreated.setInstaller(() => {
-    // stub code, need to implement and reposition.
-    function onEntityCreated(actorEventCoordinator: VoidPointer, entity: Actor, method: ActorInitializationMethod): void {
-        const event = new EntityCreatedEvent(entity, method);
+    function onEntityCreated(actorEventCoordinator: VoidPointer, entity: Actor, method: StaticPointer): void {
+        const event = new EntityCreatedEvent(entity, method.getUint8(0));
         _onEntityCreated(actorEventCoordinator, event.entity, method);
         events.entityCreated.fire(event);
     }
-    const _onEntityCreated = procHacker.hooking(
-        "?sendActorCreated@ActorEventCoordinator@@QEAAXAEAVActor@@W4ActorInitializationMethod@@@Z",
-        void_t,
-        null,
-        VoidPointer,
-        Actor,
-        int32_t,
-    )(onEntityCreated);
+    const _onEntityCreated = procHacker.hooking("bdsx:ActorEventCoordinator::sendActorCreated", void_t, null, VoidPointer, Actor, StaticPointer)(onEntityCreated);
 });
 
 events.playerAttack.setInstaller(() => {
