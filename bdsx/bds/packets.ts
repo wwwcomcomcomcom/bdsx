@@ -39,6 +39,8 @@ import { Packet } from "./packet";
 import { MinecraftPacketIds } from "./packetids";
 import type { GameType, Player } from "./player";
 import { pdbcache } from "../pdbcache";
+import { constructPlayerListEntry } from "./engine/playerlist";
+import { derived } from "./symbols";
 import { DisplaySlot, ObjectiveSortOrder, ScoreboardId } from "./scoreboard";
 import { SerializedSkin } from "./skin";
 
@@ -1148,12 +1150,31 @@ export class PlayerListEntry extends AbstractClass {
     }
 }
 PlayerListEntry.prototype[NativeType.dtor] = procHacker.js("??1PlayerListEntry@@QEAA@XZ", VoidPointer, { this: PlayerListEntry });
-PlayerListEntry.prototype[NativeType.ctor] = procHacker.js("??0PlayerListEntry@@QEAA@XZ", VoidPointer, { this: PlayerListEntry });
+// 1.26 has neither constructor; bdsx writes 2024's defaults into the 1.26 entry (engine/playerlist.ts)
+PlayerListEntry.prototype[NativeType.ctor] = derived(
+    "??0PlayerListEntry@@QEAA@XZ",
+    function (this: PlayerListEntry): void {
+        constructPlayerListEntry(this as any as StaticPointer, null);
+    },
+    () => {
+        const ctor = procHacker.js("??0PlayerListEntry@@QEAA@XZ", VoidPointer, { this: PlayerListEntry });
+        return function (this: PlayerListEntry): void {
+            ctor.call(this);
+        };
+    },
+);
 PlayerListEntry.prototype[NativeType.ctor_copy] = function (from) {
     ConstructPlayerListEntryByUUID(this, from.add(PLAYERLISTENTRY_UUID_OFFSET));
 };
-const PLAYERLISTENTRY_UUID_OFFSET = PlayerListEntry.offsetOf("uuid");
-const ConstructPlayerListEntryByUUID = procHacker.js("??0PlayerListEntry@@QEAA@VUUID@mce@@@Z", VoidPointer, null, PlayerListEntry, StaticPointer);
+const PLAYERLISTENTRY_UUID_OFFSET = pdbcache.layouts.PlayerListEntry?.uuid ?? PlayerListEntry.offsetOf("uuid");
+const ConstructPlayerListEntryByUUID = derived(
+    "??0PlayerListEntry@@QEAA@VUUID@mce@@@Z",
+    (self: PlayerListEntry, uuid: StaticPointer): void => constructPlayerListEntry(self as any as StaticPointer, uuid),
+    () => {
+        const ctor = procHacker.js("??0PlayerListEntry@@QEAA@VUUID@mce@@@Z", VoidPointer, null, PlayerListEntry, StaticPointer);
+        return (self: PlayerListEntry, uuid: StaticPointer): void => void ctor(self, uuid);
+    },
+);
 
 @nativeClass(null)
 export class PlayerListPacket extends Packet {
