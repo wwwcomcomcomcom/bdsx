@@ -12,7 +12,9 @@
  * one more global. The vector's initializer list names the seven HashedString globals below and the global is
  * carved_pumpkin, the same on both builds.
  */
-import type { NativePointer, StaticPointer } from "../../core";
+import { NativePointer, StaticPointer, VoidPointer } from "../../core";
+import { makefunc } from "../../makefunc";
+import { bool_t } from "../../nativetype";
 import { engineLayout } from "./deps";
 
 export const ITEM_BLOCK_TYPE = engineLayout("Item", "blockType", 0x178);
@@ -54,4 +56,22 @@ export function isHumanoidWearableBlockItemOwn(stack: StaticPointer): boolean {
     if (item.isNull()) return false;
     const blockType = itemBlockType(item);
     return blockType !== null && WEARABLE_BLOCK_NAMES.has(blockTypeName(blockType));
+}
+
+/**
+ * Item::canDestroyInCreative through the item's own vftable. bdsx found the slot by looking the address up in
+ * ??_7ComponentItem@@6B@, which 1.26's tables do not name; the slot is 48 on both builds (2024: 43), read off the
+ * component item's table, whose slot holds the same bit-1-of-the-flags-byte leaf 2024's had.
+ */
+export const ITEM_CAN_DESTROY_IN_CREATIVE_SLOT = engineLayout("Item", "canDestroyInCreativeSlot", 43);
+const canDestroyCalls = new Map<string, (item: VoidPointer) => boolean>();
+export function itemCanDestroyInCreative(item: StaticPointer): boolean {
+    const fn = item.getPointer(0).getPointer(ITEM_CAN_DESTROY_IN_CREATIVE_SLOT * 8);
+    const key = fn.toString();
+    let call = canDestroyCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, bool_t, null, VoidPointer);
+        canDestroyCalls.set(key, call);
+    }
+    return call(item);
 }
