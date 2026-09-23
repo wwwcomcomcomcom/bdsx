@@ -58,26 +58,27 @@ export class ScoreResetEvent {
     constructor(public identityRef: ScoreboardIdentityRef, public objective: Objective) {}
 }
 
+// 1.26: Scoreboard::resetPlayerScore(id, objective) is inlined into every caller; each reset ends in
+// ScoreboardIdentityRef::removeFromObjective, called right after the onPlayerScoreRemoved notification
+// (docs/findings-scoreboard.md section 3). A cancelled reset skips the removal and re-sends the score.
 events.scoreReset.setInstaller(() => {
     const _onScoreReset = procHacker.hooking(
-        "?resetPlayerScore@Scoreboard@@QEAA_NAEBUScoreboardId@@AEAVObjective@@@Z",
+        "?removeFromObjective@ScoreboardIdentityRef@@QEAA_NAEAVScoreboard@@AEAVObjective@@@Z",
         bool_t,
         null,
+        ScoreboardIdentityRef,
         Scoreboard,
-        ScoreboardId,
         Objective,
     )(onScoreReset);
-    function onScoreReset(scoreboard: Scoreboard, scoreboardId: ScoreboardId, objective: Objective): boolean {
-        const idRef = scoreboard.getScoreboardIdentityRef(scoreboardId)!;
+    function onScoreReset(idRef: ScoreboardIdentityRef, scoreboard: Scoreboard, objective: Objective): boolean {
         const event = new ScoreResetEvent(idRef, objective);
         const canceled = events.scoreReset.fire(event) === CANCEL;
+        // re-send before decaying: upstream decayed idRef first, and reading its scoreboardId then threw
+        if (canceled) scoreboard.sync(idRef.scoreboardId, objective);
         decay(idRef);
         decay(objective);
-        if (canceled) {
-            scoreboard.sync(idRef.scoreboardId, objective);
-            return false;
-        }
-        return _onScoreReset(scoreboard, scoreboardId, event.objective);
+        if (canceled) return false;
+        return _onScoreReset(idRef, scoreboard, event.objective);
     }
 });
 
