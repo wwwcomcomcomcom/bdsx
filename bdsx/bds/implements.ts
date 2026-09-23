@@ -5,6 +5,7 @@ import { engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
+import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
 import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative } from "./engine/item";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -3514,27 +3515,46 @@ Certificate.prototype.getIdentity = function (): mce.UUID {
     return ExtendedCertificate.getIdentity(this).value;
 };
 
-ConnectionRequest.prototype.getCertificate = procHacker.js("?getCertificate@ConnectionRequest@@QEBAPEBVCertificate@@XZ", Certificate, { this: ConnectionRequest });
+// 1.26 has no Certificate: the identity it carried is the request's game server token (engine/identity.ts). The
+// Certificate bdsx hands out is then a view of the request itself, and ExtendedCertificate reads the token's claims.
+ConnectionRequest.prototype.getCertificate = derived(
+    "?getCertificate@ConnectionRequest@@QEBAPEBVCertificate@@XZ",
+    function getCertificate(this: ConnectionRequest): Certificate {
+        return (this as any as StaticPointer).as(Certificate);
+    },
+    () => procHacker.js("?getCertificate@ConnectionRequest@@QEBAPEBVCertificate@@XZ", Certificate, { this: ConnectionRequest }),
+);
 
 namespace ExtendedCertificate {
-    export const getXuid = procHacker.js(
+    const claims = (cert: Certificate): IdentityClaims => identityClaims(cert as any as StaticPointer) ?? { xid: "", xname: "", identity: "" };
+    export const getXuid = derived(
         "?getXuid@ExtendedCertificate@@SA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVCertificate@@_N@Z",
-        CxxString,
-        { structureReturn: true },
-        Certificate,
-        bool_t,
+        // 2024's took "trust self-signed": a self-signed identity has no xuid unless the caller trusts it
+        (cert: Certificate, b: boolean): string => (!b && authenticationType(cert as any as StaticPointer) === 2 ? "" : claims(cert).xid),
+        () =>
+            procHacker.js(
+                "?getXuid@ExtendedCertificate@@SA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVCertificate@@_N@Z",
+                CxxString,
+                { structureReturn: true },
+                Certificate,
+                bool_t,
+            ),
     );
-    export const getIdentityName = procHacker.js(
+    export const getIdentityName = derived(
         "?getIdentityName@ExtendedCertificate@@SA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVCertificate@@@Z",
-        CxxString,
-        { structureReturn: true },
-        Certificate,
+        (cert: Certificate): string => claims(cert).xname,
+        () =>
+            procHacker.js(
+                "?getIdentityName@ExtendedCertificate@@SA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBVCertificate@@@Z",
+                CxxString,
+                { structureReturn: true },
+                Certificate,
+            ),
     );
-    export const getIdentity = procHacker.js(
+    export const getIdentity = derived(
         "?getIdentity@ExtendedCertificate@@SA?AVUUID@mce@@AEBVCertificate@@@Z",
-        mce.UUIDWrapper,
-        { structureReturn: true },
-        Certificate,
+        (cert: Certificate): { value: mce.UUID } => ({ value: uuidFromString(claims(cert).identity) }),
+        () => procHacker.js("?getIdentity@ExtendedCertificate@@SA?AVUUID@mce@@AEBVCertificate@@@Z", mce.UUIDWrapper, { structureReturn: true }, Certificate),
     );
 }
 
