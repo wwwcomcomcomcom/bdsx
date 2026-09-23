@@ -115,9 +115,11 @@ let __ScoreModifyEvInstalled = false;
 const installScoreModifyEv = function (): void {
     if (__ScoreModifyEvInstalled) return;
     __ScoreModifyEvInstalled = true;
+    // 1.26: returns ScoreboardOperationResult (0 = Success) instead of 2024's bool (docs/findings-scoreboard.md
+    // section 7). A cancelled change answers ReadOnlyCriteria (2), the engine's own "this score cannot change".
     const _onScoreModify = procHacker.hooking(
-        "?modifyScoreInObjective@ScoreboardIdentityRef@@QEAA_NAEAHAEAVObjective@@HW4PlayerScoreSetFunction@@@Z",
-        bool_t,
+        "?modifyScoreInObjective@ScoreboardIdentityRef@@QEAA?AW4ScoreboardOperationResult@@AEAHAEAVObjective@@HW4PlayerScoreSetFunction@@@Z",
+        uint8_t,
         null,
         ScoreboardIdentityRef,
         StaticPointer,
@@ -125,7 +127,7 @@ const installScoreModifyEv = function (): void {
         int32_t,
         uint8_t,
     )(onScoreModify);
-    function onScoreModify(identityRef: ScoreboardIdentityRef, result: StaticPointer, objective: Objective, score: int32_t, mode: PlayerScoreSetFunction): bool_t {
+    function onScoreModify(identityRef: ScoreboardIdentityRef, result: StaticPointer, objective: Objective, score: int32_t, mode: PlayerScoreSetFunction): uint8_t {
         let event: ScoreSetEvent;
         let canceled: boolean;
         switch (mode) {
@@ -145,7 +147,8 @@ const installScoreModifyEv = function (): void {
         decay(identityRef);
         decay(objective);
         if (canceled) {
-            return false;
+            result.setInt32(0);
+            return 2; // ScoreboardOperationResult::ReadOnlyCriteria
         }
         return _onScoreModify(event.identityRef, result, event.objective, event.score, mode);
     }

@@ -5712,9 +5712,11 @@ ScoreboardId.prototype.isValid = derived(
     () => procHacker.js("?isValid@ScoreboardId@@QEBA_NXZ", bool_t, { this: ScoreboardId }),
 );
 
+// 1.26 returns ScoreboardOperationResult (0 = Success, 1 overflow, 2 read-only criteria) where 2024 returned
+// bool (docs/findings-scoreboard.md section 7); the public wrapper only reads the score it writes back
 (ScoreboardIdentityRef.prototype as any)._modifyScoreInObjective = procHacker.js(
-    "?modifyScoreInObjective@ScoreboardIdentityRef@@QEAA_NAEAHAEAVObjective@@HW4PlayerScoreSetFunction@@@Z",
-    bool_t,
+    "?modifyScoreInObjective@ScoreboardIdentityRef@@QEAA?AW4ScoreboardOperationResult@@AEAHAEAVObjective@@HW4PlayerScoreSetFunction@@@Z",
+    uint8_t,
     { this: ScoreboardIdentityRef },
     StaticPointer,
     Objective,
