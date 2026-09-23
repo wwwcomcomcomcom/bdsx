@@ -6062,14 +6062,10 @@ const itemComponents = new Map<bin64_t, new () => ItemComponent>([
     [proc["??_7DurabilityItemComponent@@6B@"].getAddressBin(), DurabilityItemComponent], // DurabilityItemComponent$vftable
     [proc["??_7DiggerItemComponent@@6B@"].getAddressBin(), DiggerItemComponent], // DiggerItemComponent$vftable
     [proc["??_7DisplayNameItemComponent@@6B@"].getAddressBin(), DisplayNameItemComponent], // DisplayNameItemComponent$vftable
-    // XXX: removed
-    // [proc["??_7DyePowderItemComponent@@6B@"].getAddressBin(), DyePowderItemComponent], // DyePowderItemComponent$vftable
     [proc["??_7EntityPlacerItemComponent@@6B@"].getAddressBin(), EntityPlacerItemComponent], // EntityPlacerItemComponent$vftable
     [proc["??_7FoodItemComponent@@6B?$NetworkedItemComponent@VFoodItemComponent@@@@@"].getAddressBin(), FoodItemComponent], // FoodItemComponent$vftable
     [proc["??_7FuelItemComponent@@6B@"].getAddressBin(), FuelItemComponent], // FuelItemComponent$vftable
     [proc["??_7IconItemComponent@@6B@"].getAddressBin(), IconItemComponent], // IconItemComponent$vftable
-    // XXX: removed
-    // [proc["??_7KnockbackResistanceItemComponent@@6B@"].getAddressBin(), KnockbackResistanceItemComponent], // KnockbackResistanceItemComponent$vftable
     [proc["??_7OnUseItemComponent@@6B@"].getAddressBin(), OnUseItemComponent], // OnUseItemComponent$vftable
     [proc["??_7PlanterItemComponent@@6B@"].getAddressBin(), PlanterItemComponent], // PlanterItemComponent$vftable
     [proc["??_7ProjectileItemComponent@@6B@"].getAddressBin(), ProjectileItemComponent], // ProjectileItemComponent$vftable
@@ -6142,14 +6138,10 @@ ArmorItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@Armor
 DurabilityItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DurabilityItemComponent@@SAAEBVHashedString@@XZ", "minecraft:durability");
 DiggerItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DiggerItemComponent@@SAAEBVHashedString@@XZ", "minecraft:digger");
 DisplayNameItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@DisplayNameItemComponent@@SAAEBVHashedString@@XZ", "minecraft:display_name");
-// XXX: removed
-// DyePowderItemComponent.getIdentifier = procHacker.js("?getIdentifier@DyePowderItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
 EntityPlacerItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@EntityPlacerItemComponent@@SAAEBVHashedString@@XZ", "minecraft:entity_placer");
 FoodItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@FoodItemComponent@@SAAEBVHashedString@@XZ", "minecraft:food");
 FuelItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@FuelItemComponent@@SAAEBVHashedString@@XZ", "minecraft:fuel");
 IconItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@IconItemComponent@@SAAEBVHashedString@@XZ", "minecraft:icon");
-// XXX: removed
-// KnockbackResistanceItemComponent.getIdentifier = procHacker.js("?getIdentifier@KnockbackResistanceItemComponent@@SAAEBVHashedString@@XZ", HashedString, null);
 OnUseItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@OnUseItemComponent@@SAAEBVHashedString@@XZ", "minecraft:on_use");
 PlanterItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@PlanterItemComponent@@SAAEBVHashedString@@XZ", "minecraft:block_placer");
 ProjectileItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@ProjectileItemComponent@@SAAEBVHashedString@@XZ", "minecraft:projectile");
@@ -6197,10 +6189,6 @@ FoodItemComponent.prototype.getUsingConvertsToItemDescriptor = procHacker.js(
     ItemDescriptor,
     { this: FoodItemComponent },
 );
-// XXX: removed
-// KnockbackResistanceItemComponent.prototype.getProtectionValue = procHacker.js("?getProtectionValue@KnockbackResistanceItemComponent@@QEBAMXZ", float32_t, {
-//     this: KnockbackResistanceItemComponent,
-// });
 ProjectileItemComponent.prototype.getShootDir = procHacker.js(
     "?getShootDir@ProjectileItemComponent@@QEBA?AVVec3@@AEBVPlayer@@M@Z",
     Vec3,

@@ -39,9 +39,6 @@ export class ItemComponent extends NativeClass {
     isDisplayName(): this is DisplayNameItemComponent {
         return this instanceof DisplayNameItemComponent;
     }
-    isDyePowder(): this is DyePowderItemComponent {
-        return this instanceof DyePowderItemComponent;
-    }
     isEntityPlacer(): this is EntityPlacerItemComponent {
         return this instanceof EntityPlacerItemComponent;
     }
@@ -53,9 +50,6 @@ export class ItemComponent extends NativeClass {
     }
     isIcon(): this is IconItemComponent {
         return this instanceof IconItemComponent;
-    }
-    isKnockbackResistance(): this is KnockbackResistanceItemComponent {
-        return this instanceof KnockbackResistanceItemComponent;
     }
     isOnUse(): this is OnUseItemComponent {
         return this instanceof OnUseItemComponent;
@@ -114,11 +108,6 @@ export class DurabilityItemComponent extends ItemComponent {
 
 export class DisplayNameItemComponent extends ItemComponent {}
 
-/**
- * @deprecated removed
- */
-export class DyePowderItemComponent extends ItemComponent {}
-
 export class EntityPlacerItemComponent extends ItemComponent {
     // TODO: removed method, need to implement
     // positionAndRotateActor(actor: Actor, vec3: Vec3, unsignedInt8: number, _vec3: Vec3, blockLegacy: BlockLegacy): void {
@@ -141,15 +130,6 @@ export class FoodItemComponent extends ItemComponent {
 export class FuelItemComponent extends ItemComponent {}
 
 export class IconItemComponent extends ItemComponent {}
-
-/**
- * @deprecated removed
- */
-export class KnockbackResistanceItemComponent extends ItemComponent {
-    getProtectionValue(): number {
-        abstract();
-    }
-}
 
 export class OnUseItemComponent extends ItemComponent {}
 
