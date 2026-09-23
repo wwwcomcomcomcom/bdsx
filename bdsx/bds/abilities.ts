@@ -2,20 +2,19 @@ import { abstract } from "../common";
 import { CxxPair } from "../cxxpair";
 import { AbstractClass, nativeClass, NativeClass, nativeField, NativeStruct } from "../nativeclass";
 import { bool_t, float32_t } from "../nativetype";
-import { pdbcache } from "../pdbcache";
 import type { CommandPermissionLevel } from "./command";
 import type { PlayerPermission } from "./player";
+import { engineLayout } from "./engine/deps";
 import { proc } from "./symbols";
 
 // The ability block's shape, from symbols.json `layouts` (docs/findings-abilities.md). 1.26 added
 // one ability (VerticalFlySpeed) and one layer (Editor), so a layer is 20 * 12 bytes rather than
 // 19 * 12 and LayeredAbilities carries six of them after a 24-byte PermissionsHandler. The literals
 // are the 2024 shape, which is what a build without the layouts entry had.
-const Abilities$layout = pdbcache.layouts.Abilities ?? {};
 /** bytes per Ability; the ability count is the bound the binary checks before indexing */
-export const abilityStride = Abilities$layout.abilityStride ?? 0x0c;
-export const abilityCount = Abilities$layout.abilityCount ?? 19;
-const Abilities$size = Abilities$layout.size ?? abilityCount * abilityStride;
+export const abilityStride = engineLayout("Abilities", "abilityStride", 0x0c);
+export const abilityCount = engineLayout("Abilities", "abilityCount", 19);
+const Abilities$size = engineLayout("Abilities", "size", abilityCount * abilityStride);
 
 @nativeClass(Abilities$size)
 export class Abilities extends AbstractClass {
