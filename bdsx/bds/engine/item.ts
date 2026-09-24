@@ -75,3 +75,15 @@ export function itemCanDestroyInCreative(item: StaticPointer): boolean {
     }
     return call(item);
 }
+
+/**
+ * ComponentItem's cereal::ReflectionCtx (docs/findings-nbt.md "Item components"): the item holds a pointer to the
+ * engine's context -- the constructor's fourth argument, stored at +0x290 on 1.26.40.8, +0x298 on 1.26.51.1, +0x2c0 in
+ * 2024 -- and ComponentItem::buildNetworkTag passes it to each networked component's buildNetworkTag.
+ */
+export const COMPONENT_ITEM_REFLECTION_CTX = engineLayout("ComponentItem", "reflectionCtx", 0x2c0);
+export function componentItemReflectionCtx(item: StaticPointer): NativePointer | null {
+    return item.getNullablePointer(COMPONENT_ITEM_REFLECTION_CTX);
+}
+/** where ComponentItem.getComponent leaves its item's context on the component it returns */
+export const REFLECTION_CTX_OF = Symbol("reflectionCtx");

@@ -1,5 +1,5 @@
 import { abstract } from "../common";
-import { VoidPointer } from "../core";
+import { StaticPointer, VoidPointer } from "../core";
 import { CxxVector } from "../cxxvector";
 import { AbstractClass, nativeClass, NativeClass, nativeField, NativeStruct } from "../nativeclass";
 import { bin64_t, bool_t, CxxString, CxxStringWith8Bytes, int16_t, int32_t, NativeType, uint32_t, uint8_t } from "../nativetype";
@@ -7,6 +7,7 @@ import { Actor, ActorRuntimeID } from "./actor";
 import { Block, BlockLegacy } from "./block";
 import { BlockPos, Vec3 } from "./blockpos";
 import { CommandName } from "./commandname";
+import { componentItemReflectionCtx, REFLECTION_CTX_OF } from "./engine/item";
 import type { ItemEnchants } from "./enchants";
 import { HashedString } from "./hashedstring";
 import type { ItemComponent } from "./item_component";
@@ -188,6 +189,8 @@ export class ComponentItem extends Item {
         const component = this._getComponent(hashedStr);
         hashedStr.destruct();
 
+        // a networked component's buildNetworkTag/initializeFromNetwork read the engine's ReflectionCtx its item holds
+        if (component !== null) (component as any)[REFLECTION_CTX_OF] = componentItemReflectionCtx(this as unknown as StaticPointer);
         return component;
     }
     protected _getComponent(identifier: HashedString): ItemComponent {

@@ -1,12 +1,12 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
-import { engineLayout } from "./engine/deps";
+import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
-import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative } from "./engine/item";
+import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative, REFLECTION_CTX_OF } from "./engine/item";
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -1598,11 +1598,16 @@ const getDamageSensorComponent = procHacker.js(
     null,
     Actor,
 );
-const getCommandBlockComponent = procHacker.js(
+// 1.26 has no out-of-line try_get for it (docs/findings-nbt.md "CommandBlockComponent"): MinecartCommandBlock::
+// readAdditionalSaveData (40 0x2d3fe20 / 51 0x598e210) inlines the lookup -- hash 0x42d5de32, packed stride 0xc8 on
+// both builds (2024: 0xa0) -- and jumps to the component's own read.
+const getCommandBlockComponent = derived<(actor: Actor) => CommandBlockComponent>(
     "??$tryGetComponent@VCommandBlockComponent@@@Actor@@QEAAPEAVCommandBlockComponent@@XZ",
-    CommandBlockComponent,
-    null,
-    Actor,
+    function tryGetCommandBlockComponent(actor: Actor): CommandBlockComponent {
+        const component = enttComponent(actor, componentHash("CommandBlockComponent"), engineLayout("CommandBlockComponent", "size", 0xa0));
+        return component === null ? (null as any) : component.as(CommandBlockComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VCommandBlockComponent@@@Actor@@QEAAPEAVCommandBlockComponent@@XZ", CommandBlockComponent, null, Actor),
 );
 const getNameableComponent = procHacker.js("??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ", NameableComponent, null, Actor);
 const getNavigationComponent = procHacker.js("??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ", NavigationComponent, null, Actor);
@@ -4084,7 +4089,9 @@ ItemStackBase.prototype.getComponentItem = derived<(this: ItemStackBase) => Comp
         const item = weak.getNullablePointerAs(Item, 0);
         if (item === null) return null;
         if (!Item$isComponentBased.call(item)) return null;
-        return item as unknown as ComponentItem;
+        // the JS class too: a bare `Item` has none of ComponentItem's methods (getComponent, buildNetworkTag threw
+        // "Object doesn't support property or method" -- docs/findings-nbt.md "Item components")
+        return item.as(ComponentItem);
     },
     () => procHacker.js("?getComponentItem@ItemStackBase@@QEBAPEBVComponentItem@@XZ", ComponentItem, { this: ItemStackBase }),
 );
@@ -6468,8 +6475,19 @@ const ItemComponent$buildNetworkTag = procHacker.jsv(
     { this: ItemComponent, structureReturn: true },
     cereal.ReflectionCtx,
 );
-ItemComponent.prototype.buildNetworkTag = function (u = new cereal.ReflectionCtx(true)) {
-    return ItemComponent$buildNetworkTag.call(this, u);
+/**
+ * The cereal::ReflectionCtx a component's network calls get when the caller passes none (docs/findings-nbt.md "Item
+ * components"). It is an engine object: a networked component (NetworkedItemComponent<T>) reads through it, so the
+ * zeroed stand-in bdsx used to allocate would crash there. ComponentItem::buildNetworkTag passes the one its item
+ * holds (layouts.ComponentItem.reflectionCtx), and ComponentItem.getComponent hands that on to the component.
+ */
+function engineReflectionCtx(component: ItemComponent): cereal.ReflectionCtx {
+    const ctx = (component as any)[REFLECTION_CTX_OF] as VoidPointer | null | undefined;
+    if (ctx == null) throw Error("ItemComponent: no cereal::ReflectionCtx -- pass the engine's, or get the component from ComponentItem.getComponent()");
+    return ctx.as(cereal.ReflectionCtx);
+}
+ItemComponent.prototype.buildNetworkTag = function (u?: cereal.ReflectionCtx) {
+    return ItemComponent$buildNetworkTag.call(this, u ?? engineReflectionCtx(this));
 };
 const ItemComponent$initializeFromNetwork = procHacker.jsv(
     "??_7InteractButtonItemComponent@@6B@",
@@ -6479,8 +6497,8 @@ const ItemComponent$initializeFromNetwork = procHacker.jsv(
     CompoundTag,
     cereal.ReflectionCtx,
 );
-ItemComponent.prototype.initializeFromNetwork = function (tag, u = new cereal.ReflectionCtx(true)) {
-    return ItemComponent$initializeFromNetwork.call(this, tag, u);
+ItemComponent.prototype.initializeFromNetwork = function (tag, u?: cereal.ReflectionCtx) {
+    return ItemComponent$initializeFromNetwork.call(this, tag, u ?? engineReflectionCtx(this));
 };
 
 // `<X>ItemComponent::getIdentifier()` is a zero-argument magic-statics accessor on every build:
