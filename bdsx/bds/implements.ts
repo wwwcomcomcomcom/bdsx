@@ -6031,23 +6031,73 @@ StringTag.prototype[NativeType.ctor] = function () {
     this.vftable = StringTag$vftable;
     CxxString[NativeType.ctor](this.add(StringTagDataOffset));
 };
-ListTag.prototype[NativeType.ctor] = procHacker.js("??0ListTag@@QEAA@XZ", void_t, { this: ListTag });
-ListTag.prototype[NativeType.dtor] = procHacker.js("??1ListTag@@UEAA@XZ", void_t, { this: ListTag });
-const ListTag$add = procHacker.js("?add@ListTag@@QEAAXV?$unique_ptr@VTag@@U?$default_delete@VTag@@@std@@@std@@@Z", void_t, null, ListTag, TagPointer);
-ListTag.prototype.pushAllocated = function (tag: Tag): void_t {
-    ListTag$add(this, TagPointer.create(tag));
-};
-ListTag.prototype.size = procHacker.js("?size@ListTag@@QEBAHXZ", int64_as_float_t, { this: ListTag });
+// ListTag, CompoundTag's lookups and CompoundTagVariant have no out-of-line body in 1.26 (docs/findings-nbt.md): the
+// engine inlines them. Their layouts are the ones Endstone asserts and 1.21.3.01 had -- ListTag is the vftable, a
+// std::vector<std::unique_ptr<Tag>> and the element type at +0x20; CompoundTag is the vftable and a
+// std::map<std::string, CompoundTagVariant, std::less<>>; CompoundTagVariant is the std::variant of the twelve tags, the
+// index byte at +0x28 (-1 = valueless) -- so bdsx carries them. Destroying a tag always goes back to the engine: vftable
+// slot 0 is MSVC's scalar deleting destructor, and flag 0 destroys the members without freeing the storage, which is
+// exactly what 1.26's own variant destructor does (40 0x1beea90: `cmpb $-1, 0x28(tag)`, then slot 0 with edx = 0).
+const ListTag$vftable = proc["??_7ListTag@@6B@"];
+ListTag.prototype[NativeType.ctor] = derived(
+    "??0ListTag@@QEAA@XZ",
+    function (this: ListTag): void {
+        // 1.21.3.01 0x82fa50: the vftable, an empty vector, type End
+        this.vftable = ListTag$vftable;
+        this.data.construct();
+        this.type = Tag.Type.End;
+    },
+    () => procHacker.js("??0ListTag@@QEAA@XZ", void_t, { this: ListTag }),
+);
+ListTag.prototype[NativeType.dtor] = derived<(this: ListTag) => void>("??1ListTag@@UEAA@XZ", vectorDeletingDestructor, () =>
+    procHacker.js("??1ListTag@@UEAA@XZ", void_t, { this: ListTag }),
+);
+ListTag.prototype.pushAllocated = derived(
+    "?add@ListTag@@QEAAXV?$unique_ptr@VTag@@U?$default_delete@VTag@@@std@@@std@@@Z",
+    function (this: ListTag, tag: Tag): void {
+        // 1.21.3.01 0x839470 and Endstone's list_tag.cpp: the list takes the element's type, then owns it
+        this.type = tag.getId();
+        this.data.push(tag);
+    },
+    () => {
+        const ListTag$add = procHacker.js(
+            "?add@ListTag@@QEAAXV?$unique_ptr@VTag@@U?$default_delete@VTag@@@std@@@std@@@Z",
+            void_t,
+            null,
+            ListTag,
+            TagPointer,
+        );
+        return function (this: ListTag, tag: Tag): void {
+            ListTag$add(this, TagPointer.create(tag));
+        };
+    },
+);
+ListTag.prototype.size = derived(
+    "?size@ListTag@@QEBAHXZ",
+    function (this: ListTag): number {
+        return this.data.size();
+    },
+    () => procHacker.js("?size@ListTag@@QEBAHXZ", int64_as_float_t, { this: ListTag }),
+);
 
 CompoundTag.prototype[NativeType.ctor] = procHacker.js("??0CompoundTag@@QEAA@XZ", void_t, { this: CompoundTag });
 CompoundTag.prototype[NativeType.dtor] = procHacker.js("??1CompoundTag@@UEAA@XZ", void_t, { this: CompoundTag });
 CompoundTag.prototype[NativeType.ctor_move] = procHacker.js("??0CompoundTag@@QEAA@$$QEAV0@@Z", void_t, { this: CompoundTag }, CompoundTag);
-CompoundTag.prototype.get = procHacker.js(
+CompoundTag.prototype.get = derived(
     "?get@CompoundTag@@QEAAPEAVTag@@V?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
-    Tag,
-    { this: CompoundTag },
-    CxxStringView,
-) as any;
+    function <T extends Tag>(this: CompoundTag, key: string): T | null {
+        // std::map::find, then the variant's alternative (it starts at the variant's first byte)
+        const variant = this.data.get(key);
+        return variant === null ? null : (variant.get() as T);
+    },
+    () =>
+        procHacker.js(
+            "?get@CompoundTag@@QEAAPEAVTag@@V?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
+            Tag,
+            { this: CompoundTag },
+            CxxStringView,
+        ) as any,
+);
 const CompoundTag$put = procHacker.js(
     "?put@CompoundTag@@QEAAPEAVTag@@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$unique_ptr@VTag@@U?$default_delete@VTag@@@std@@@4@@Z",
     void_t,
@@ -6059,19 +6109,45 @@ const CompoundTag$put = procHacker.js(
 CompoundTag.prototype.setAllocated = function (key, value) {
     CompoundTag$put(this, CxxStringWrapper.constructWith(key), TagPointer.create(value)); // `key` and `value` will be moved into the CompoundTag. no need to destruct them
 };
-CompoundTag.prototype.delete = procHacker.js(
+CompoundTag.prototype.delete = derived(
     "?remove@CompoundTag@@QEAA_NV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
-    bool_t,
-    { this: CompoundTag },
-    CxxStringView,
+    function (this: CompoundTag, key: string): boolean {
+        // find + erase: bdsx's CxxMap is MSVC's _Tree, and erasing a node destroys the pair (the key string and
+        // CompoundTagVariant's destructor below) and frees it with ucrt free, BDS's own allocator underneath
+        return this.data.delete(key);
+    },
+    () =>
+        procHacker.js(
+            "?remove@CompoundTag@@QEAA_NV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
+            bool_t,
+            { this: CompoundTag },
+            CxxStringView,
+        ),
 );
-CompoundTag.prototype.has = procHacker.js(
+CompoundTag.prototype.has = derived(
     "?contains@CompoundTag@@QEBA_NV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
-    bool_t,
-    { this: CompoundTag },
-    CxxStringView,
+    function (this: CompoundTag, key: string): boolean {
+        // Endstone's compound_tag.cpp: `get(key) != nullptr`. 1.26 inlines it; the out-of-line function once shipped
+        // under this name is get itself (it returns the Tag*, docs/findings-nbt.md)
+        return this.get(key) !== null;
+    },
+    () =>
+        procHacker.js(
+            "?contains@CompoundTag@@QEBA_NV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z",
+            bool_t,
+            { this: CompoundTag },
+            CxxStringView,
+        ),
 );
-CompoundTag.prototype.clear = procHacker.js("?clear@CompoundTag@@QEAAXXZ", void_t, { this: CompoundTag });
+CompoundTag.prototype.clear = derived(
+    "?clear@CompoundTag@@QEAAXXZ",
+    function (this: CompoundTag): void {
+        // the engine's own destructor empties the map and its own constructor makes a fresh one
+        this.destruct();
+        this.construct();
+    },
+    () => procHacker.js("?clear@CompoundTag@@QEAAXXZ", void_t, { this: CompoundTag }),
+);
 
 CompoundTagVariant.prototype[NativeType.ctor] = function (): void {
     // init as a EndTag
@@ -6080,8 +6156,35 @@ CompoundTagVariant.prototype[NativeType.ctor] = function (): void {
     ptr.setPointer(EndTag$vftable, 0); // set the value as a EndTag
     ptr.setUint8(0, 0x28); // the type index of the std::variant<...>, 0 is the EndTag
 };
-CompoundTagVariant.prototype[NativeType.dtor] = procHacker.js("??1CompoundTagVariant@@QEAA@XZ", void_t, { this: CompoundTagVariant });
-CompoundTagVariant.prototype.emplace = procHacker.js("?emplace@CompoundTagVariant@@QEAAAEAVTag@@$$QEAV2@@Z", void_t, { this: CompoundTagVariant }, Tag);
+const CompoundTagVariant$index = 0x28;
+function CompoundTagVariant$destroy(variant: CompoundTagVariant): void {
+    const ptr = variant as any as StaticPointer;
+    if (ptr.getUint8(CompoundTagVariant$index) !== 0xff) vectorDeletingDestructor.call(ptr.as(Tag));
+}
+CompoundTagVariant.prototype[NativeType.dtor] = derived(
+    "??1CompoundTagVariant@@QEAA@XZ",
+    function (this: CompoundTagVariant): void {
+        CompoundTagVariant$destroy(this);
+    },
+    () => procHacker.js("??1CompoundTagVariant@@QEAA@XZ", void_t, { this: CompoundTagVariant }),
+);
+CompoundTagVariant.prototype.emplace = derived(
+    "?emplace@CompoundTagVariant@@QEAAAEAVTag@@$$QEAV2@@Z",
+    function (this: CompoundTagVariant, tag: Tag): void {
+        // `tag_storage = T(std::move(tag))`: the old alternative goes, the new one is moved in. MSVC's std::string,
+        // std::vector and std::map hold no pointer back to their owner, so moving one is copying its bytes and
+        // leaving the source an empty tag of the same type (its constructor), which the caller then destroys.
+        const id = tag.getId();
+        const type = tagTypes[id];
+        if (type == null) throw Error(`Invalid Tag.getId(): ${id}`);
+        CompoundTagVariant$destroy(this);
+        const ptr = this as any as StaticPointer;
+        ptr.copyFrom(tag, type[NativeType.size]);
+        ptr.setUint8(id, CompoundTagVariant$index);
+        tag.construct();
+    },
+    () => procHacker.js("?emplace@CompoundTagVariant@@QEAAAEAVTag@@$$QEAV2@@Z", void_t, { this: CompoundTagVariant }, Tag),
+);
 
 // structure.ts
 StructureSettings.prototype[NativeType.ctor] = procHacker.js("??0StructureSettings@@QEAA@XZ", void_t, { this: StructureSettings });

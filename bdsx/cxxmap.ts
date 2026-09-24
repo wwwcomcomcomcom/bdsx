@@ -335,7 +335,8 @@ export abstract class CxxMap<K, V> extends NativeClass {
             _Fixnode = _Pnode._Left; // stitch up left subtree
         } else {
             // two subtrees, must lift successor node to replace erased
-            _Pnode = node; // _Pnode is successor node
+            _Pnode = _Min(_Erasednode._Right); // _Pnode is successor node (this was `node` itself, which took the
+            // one-subtree path below and dropped the erased node's whole left subtree)
             _Fixnode = _Pnode._Right; // _Fixnode is only subtree
         }
 
@@ -519,8 +520,10 @@ export abstract class CxxMap<K, V> extends NativeClass {
 
     private _delete(node: CxxTreeNode<CxxPair<K, V>>): void {
         this._Extract(node);
+        // the pair is the node's `noInitialize` field, so destroy it by hand and free the node itself, as
+        // _Erase_tree does (this used to destroy the pair twice and free `&node._Myval`, 0x20 into the block)
         node._Myval.destruct();
-        NativeClass.delete(node._Myval);
+        NativeClass.delete(node);
     }
 
     private _deleteAll(_First: CxxTreeNode<CxxPair<K, V>>, _Last: CxxTreeNode<CxxPair<K, V>>): void {

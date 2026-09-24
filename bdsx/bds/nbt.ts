@@ -463,6 +463,7 @@ export class ListTag<T extends Tag = Tag> extends Tag {
         for (let i = 0; i < size; i++) {
             dst.set(i, src.get(i).allocateClone());
         }
+        this.type = list.type; // the element type goes with the elements (the engine writes it out)
     }
 
     get<_T extends Tag = T>(idx: number): _T {
