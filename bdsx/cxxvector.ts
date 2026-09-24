@@ -678,7 +678,10 @@ export abstract class CxxVector<T> extends NativeClass implements Iterable<T> {
                         const bytes = endptr.subptr(beginptr);
                         const n = Math.floor(bytes / type.BYTES_PER_ELEMENT);
                         const out = new type(n);
-                        if (beginptr !== null) beginptr.copyTo(out, out.byteLength);
+                        // an empty vector (begin == end, often both null) has nothing to copy, and copyTo refuses a
+                        // zero-length array: 1.26.51's StructureTemplate::save writes an empty IntArrayTag for an
+                        // empty template (docs/findings-nbt.md "StructureTemplate")
+                        if (n !== 0) beginptr.copyTo(out, out.byteLength);
                         return out;
                     }
 

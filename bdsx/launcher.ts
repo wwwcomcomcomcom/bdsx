@@ -13,6 +13,7 @@ import * as nimodule from "./bds/networkidentifier";
 import { RakNet } from "./bds/raknet";
 import { RakNetConnector } from "./bds/raknetinstance";
 import * as bd_server from "./bds/server";
+import { levelStructureManager } from "./bds/engine/structure";
 import { StructureManager } from "./bds/structure";
 import { proc } from "./bds/symbols";
 import type { CommandResult, CommandResultType } from "./commandresult";
@@ -66,7 +67,7 @@ class Liner {
 
 let launched = false;
 let closed = false;
-let nonOwnerPointerStructureManager: Bedrock.NonOwnerPointer<StructureManager> | null = null;
+let structureManagerTaken = false;
 const loadingIsFired = DeferPromise.make<void>();
 let pendingOpenFromTick: ((level: Level) => void) | null = null;
 let serverStopHooked = true;
@@ -293,8 +294,7 @@ function _launch(asyncResolve: () => void): void {
             bedrockServer.nonOwnerPointerServerNetworkHandler.dispose();
             decay(bedrockServer.nonOwnerPointerServerNetworkHandler);
         }
-        if (nonOwnerPointerStructureManager != null) {
-            nonOwnerPointerStructureManager.dispose();
+        if (structureManagerTaken) {
             decayIfReal("structureManager");
         }
     }, void_t);
@@ -618,13 +618,11 @@ function _launch(asyncResolve: () => void): void {
             let structureManager: StructureManager | null = null;
             if (level != null) {
                 attempt("structureManager", () => {
-                    const Level$getStructureManager = procHacker.js(
-                        "?getStructureManager@Level@@UEAA?AV?$not_null@V?$NonOwnerPointer@VStructureManager@@@Bedrock@@@gsl@@XZ",
-                        Bedrock.NonOwnerPointer.make(StructureManager),
-                        { this: Level, structureReturn: true },
-                    );
-                    nonOwnerPointerStructureManager = Level$getStructureManager.call(level);
-                    structureManager = nonOwnerPointerStructureManager!.get()!;
+                    // 1.26's NonOwnerPointer is 24 bytes, not bdsx's 16 (engine/structure.ts)
+                    const p = levelStructureManager(level as any as StaticPointer);
+                    if (p === null) throw Error("no Level::getStructureManager in this build");
+                    structureManager = p.as(StructureManager);
+                    structureManagerTaken = true;
                     if ("??_7StructureManager@@6B@" in proc) {
                         bdsxEqualsAssert(structureManager.vftable, proc["??_7StructureManager@@6B@"], "level.getStructureManager()");
                     }

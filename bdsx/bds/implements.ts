@@ -6299,7 +6299,7 @@ StructureSettings.prototype.setStructureSize = procHacker.js(
 StructureTemplateData.prototype.allocateAndSave = procHacker.js(
     "?save@StructureTemplateData@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
     CompoundTag.ref(),
-    { this: StructureTemplate, structureReturn: true },
+    { this: StructureTemplateData, structureReturn: true },
 );
 const StructureTemplateData$load = procHacker.js("?load@StructureTemplateData@@QEAA_NAEBVCompoundTag@@@Z", bool_t, null, StructureTemplateData, CompoundTag);
 StructureTemplateData.prototype.load = function (tag) {

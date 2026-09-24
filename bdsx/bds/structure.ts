@@ -5,6 +5,7 @@ import { CxxString, int32_t } from "../nativetype";
 import { Block, BlockSource } from "./block";
 import { BlockPos, Vec3 } from "./blockpos";
 import type { BlockPalette } from "./level";
+import { engineLayout } from "./engine/deps";
 import { CompoundTag, NBT } from "./nbt";
 
 export enum Rotation {
@@ -138,15 +139,20 @@ export class StructureSettings extends AbstractClass {
     }
 }
 
+/**
+ * 1.26 put neighbor_aware_block_upgrade_version (an int) at +0xc, so size moved +0xc -> +0x10 and
+ * structure_world_origin +0x18 -> +0x1c on both builds: StructureTemplateData::save's two writers and load's two
+ * parsers read and store exactly those dwords (docs/findings-nbt.md "StructureTemplate").
+ */
 @nativeClass(0xb8)
 export class StructureTemplateData extends AbstractClass {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
     @nativeField(int32_t)
     formatVersion: int32_t;
-    @nativeField(BlockPos)
+    @nativeField(BlockPos, engineLayout("StructureTemplateData", "structureSize", 0x0c))
     readonly size: BlockPos;
-    @nativeField(BlockPos)
+    @nativeField(BlockPos, engineLayout("StructureTemplateData", "structureWorldOrigin", 0x18))
     readonly structureWorldOrigin: BlockPos;
 
     save(): Record<string, any> {
