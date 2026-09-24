@@ -60,6 +60,7 @@ export function noSuchLayer(): Abilities {
         const ptr = new AllocatedPointer(LAYER_STRIDE);
         ptr.setBuffer(Buffer.alloc(LAYER_STRIDE));
         emptyAbilities = ptr.as(Abilities);
+        (emptyAbilities as any).$buffer = ptr; // `as()` copies only the address; the view must keep the buffer alive
     }
     return emptyAbilities;
 }
