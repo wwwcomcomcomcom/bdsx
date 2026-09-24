@@ -1,6 +1,7 @@
 import { Actor } from "../bds/actor";
 import { Block, BlockActor, BlockSource, ButtonBlock, ChestBlock, ChestBlockActor, PistonAction as PistonActorInBlockModule, PistonBlockActor } from "../bds/block";
 import { BlockPos, Vec3 } from "../bds/blockpos";
+import { hitResultBlockPos, lightningBlockPos, lightningStrikesThisTick } from "../bds/engine/blockhit";
 import { FALLON_ACTOR, FALLON_DISTANCE, FALLON_POS, FALLON_REGION } from "../bds/engine/fallon";
 import { GameMode } from "../bds/gamemode";
 import { proc } from "../bds/symbols";
@@ -454,6 +455,21 @@ export class ProjectileHitBlockEvent {
     constructor(public block: Block, public region: BlockSource, public blockPos: BlockPos, public projectile: Actor) {}
 }
 events.projectileHitBlock.setInstaller(() => {
+    if (!("?onProjectileHit@Block@@QEBAXAEAVBlockSource@@AEBVBlockPos@@AEBVActor@@@Z" in proc)) {
+        // 1.26 inlines Block::onProjectileHit into ProjectileComponent::onHit, its only caller in 2024 as well, which
+        // calls the block at the HitResult's block position with the projectile unconditionally. The event is raised
+        // from bdsx's own onHit hook (projectileHit), so on onHit's entry, before the engine's own ProjectileHitEvent
+        // gate rather than after it (docs/findings-blocks.md section 21)
+        events.projectileHit.on(ev => {
+            const region = ev.projectile.getDimensionBlockSource();
+            const blockPos = hitResultBlockPos(ev.result);
+            const event = new ProjectileHitBlockEvent(region.getBlock(blockPos), region, blockPos, ev.projectile);
+            events.projectileHitBlock.fire(event);
+            decay(event.block);
+            decay(region);
+        });
+        return;
+    }
     function onProjectileHit(block: Block, region: BlockSource, blockPos: BlockPos, projectile: Actor): void {
         const event = new ProjectileHitBlockEvent(block, region, blockPos, projectile);
         events.projectileHitBlock.fire(event);
@@ -477,6 +493,24 @@ export class LightningHitBlockEvent {
     constructor(public block: Block, public region: BlockSource, public blockPos: BlockPos) {}
 }
 events.lightningHitBlock.setInstaller(() => {
+    if (!("?onLightningHit@Block@@QEBAXAEAVBlockSource@@AEBVBlockPos@@@Z" in proc)) {
+        // 1.26 inlines Block::onLightningHit into LightningBolt::normalTick, its only caller in 2024 as well: on the
+        // bolt's first tick the block under it is struck. The hook runs only while a bolt exists, and raises the
+        // event on that tick before the original strikes (docs/findings-blocks.md section 21)
+        const _normalTick = procHacker.hooking("?normalTick@LightningBolt@@UEAAXXZ", void_t, null, StaticPointer)((bolt: StaticPointer): void => {
+            const actor = lightningStrikesThisTick(bolt) ? Actor.from(bolt) : null;
+            if (actor !== null) {
+                const region = actor.getDimensionBlockSource();
+                const blockPos = lightningBlockPos(actor);
+                const event = new LightningHitBlockEvent(region.getBlock(blockPos), region, blockPos);
+                events.lightningHitBlock.fire(event);
+                decay(event.block);
+                decay(region);
+            }
+            return _normalTick(bolt);
+        });
+        return;
+    }
     function onLightningHit(block: Block, region: BlockSource, blockPos: BlockPos): void {
         const event = new LightningHitBlockEvent(block, region, blockPos);
         events.lightningHitBlock.fire(event);
