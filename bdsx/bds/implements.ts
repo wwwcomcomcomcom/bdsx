@@ -7,6 +7,7 @@ import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
 import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative } from "./engine/item";
+import { itemStackLoad, itemStackSave } from "./engine/itemsave";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
 import * as colors from "colors";
@@ -3960,11 +3961,31 @@ ItemStackBase.prototype.getCustomName = procHacker.js("?getName@ItemStackBase@@Q
     this: ItemStackBase,
     structureReturn: true,
 });
-ItemStackBase.prototype.setCustomName = procHacker.js(
+ItemStackBase.prototype.setCustomName = derived(
     "?setCustomName@ItemStackBase@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: ItemStackBase },
-    CxxString,
+    // 2024 0x1b6ccf0 (docs/findings-nbt.md "setCustomName"): nothing without an item or with an empty name; otherwise
+    // user_data_ (+0x10, a unique_ptr<CompoundTag>) is created if missing, "display" made a compound if it is not
+    // one, and display.Name set. 1.26 keeps no out-of-line copy (the one shipped under this name was an Actor
+    // name-tag getter), so bdsx does it through the NBT layer: the engine's put, the engine's allocator underneath.
+    function (this: ItemStackBase, name: string): void {
+        const self = this as any as StaticPointer;
+        const ref = self.getNullablePointer(8); // item_: a WeakPtr<Item>
+        if (ref === null || ref.getNullablePointer(0) === null || name === "") return;
+        let userData = self.getNullablePointerAs(CompoundTag, 16);
+        if (userData === null) {
+            userData = CompoundTag.allocate();
+            self.setPointer(userData, 16);
+        }
+        if (!(userData.get("display") instanceof CompoundTag)) userData.setAllocated("display", CompoundTag.allocate());
+        userData.get<CompoundTag>("display")!.setAllocated("Name", StringTag.allocateWith(name));
+    },
+    () =>
+        procHacker.js(
+            "?setCustomName@ItemStackBase@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            void_t,
+            { this: ItemStackBase },
+            CxxString,
+        ),
 );
 ItemStackBase.prototype.getUserData = procHacker.js("?getUserData@ItemStackBase@@QEAAPEAVCompoundTag@@XZ", CompoundTag, { this: ItemStackBase });
 ItemStackBase.prototype.hasCustomName = procHacker.js("?hasCustomHoverName@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
@@ -4212,10 +4233,20 @@ ItemStackBase.prototype.isHumanoidWearableBlockItem = derived(
     () => procHacker.js("?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
 ItemStackBase.prototype.isHumanoidWearableArmorItem = procHacker.js("?isHumanoidArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.allocateAndSave = procHacker.js(
+ItemStackBase.prototype.allocateAndSave = derived(
     "?save@ItemStackBase@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
-    CompoundTag.ref(),
-    { this: ItemStackBase, structureReturn: true },
+    // 1.26's save takes a SaveContext: engine/itemsave.ts calls it with SaveToDisk, as ItemActor's own save does
+    function (this: ItemStackBase): CompoundTag {
+        const tag = itemStackSave(this as any as StaticPointer);
+        if (tag === null) throw Error("ItemStackBase::save returned no tag");
+        return tag.as(CompoundTag);
+    },
+    () =>
+        procHacker.js(
+            "?save@ItemStackBase@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
+            CompoundTag.ref(),
+            { this: ItemStackBase, structureReturn: true },
+        ),
 );
 ItemStackBase.prototype.isMusicDiscItem = function () {
     return this.getItem()?.isMusicDisk() === true;
@@ -4273,7 +4304,17 @@ ItemStackBase.prototype.hurtAndBreak = function (count: number, actor: Actor | n
 ItemStackBase.prototype.matches = procHacker.js("?matches@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
 ItemStackBase.prototype.matchesItem = procHacker.js("?matchesItem@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
 
-const ItemStackBase$load = procHacker.js("?load@ItemStackBase@@QEAAXAEBVCompoundTag@@@Z", void_t, { this: ItemStackBase }, CompoundTag);
+const ItemStackBase$load = derived(
+    "?load@ItemStackBase@@QEAAXAEBVCompoundTag@@@Z",
+    // 2024 0x1b65ec0: _loadItem, then Item::fixupOnLoad = fixupCommon + `if (getAuxValue() == 0x7fff) aux = 0`.
+    // 1.26 inlines all of it (engine/itemsave.ts); the aux store is the inlined setAuxValue(0): `movw $0, 0x20(stack)`
+    function (this: ItemStackBase, tag: CompoundTag): void {
+        if (itemStackLoad(this as any as StaticPointer, tag) && this.getAuxValue() === 0x7fff) {
+            (this as any as StaticPointer).setInt16(0, 32);
+        }
+    },
+    () => procHacker.js("?load@ItemStackBase@@QEAAXAEBVCompoundTag@@@Z", void_t, { this: ItemStackBase }, CompoundTag),
+);
 ItemStackBase.prototype.load = function (tag) {
     if (tag instanceof Tag) {
         ItemStackBase$load.call(this, tag);

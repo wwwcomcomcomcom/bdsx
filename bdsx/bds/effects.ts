@@ -8,6 +8,7 @@ import { nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, float32_t, int32_t, uint32_t } from "../nativetype";
 import { HashedString } from "./hashedstring";
 import { CompoundTag } from "./nbt";
+import { engineLayout } from "./engine/deps";
 
 export enum MobEffectIds {
     Empty,
@@ -92,7 +93,11 @@ export class MobEffect extends NativeClass {
 // difficulty durations are gone and two pointers sit at 0x10 and 0x18, so `amplifier` and the four
 // flags are at 0x20 / 0x24 (docs/findings-layouts.md, "MobEffectInstance"). Read off a live instance
 // with tools/actor-layout-probe.ts `effprobe`, which dumps the first 0x28 bytes.
-@nativeClass(0x88)
+// The size differs between the 1.26 builds: 0x88 on 1.26.40.8 and 0x90 on 1.26.51.1 (Endstone HEAD's unknown_40_), read
+// off each build's own vector<MobEffectInstance> push in AreaEffectCloud (`addq $0x88` / `$0x90` to the end pointer).
+// It matters wherever bdsx allocates one -- MobEffectInstance.load(tag) has the engine construct into it
+// (docs/findings-nbt.md "MobEffectInstance"). The fallback is 2024's 0x80.
+@nativeClass(engineLayout("MobEffectInstance", "size", 0x80))
 export class MobEffectInstance extends NativeClass {
     @nativeField(uint32_t)
     id: uint32_t;
