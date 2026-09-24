@@ -13,6 +13,7 @@ import * as nimodule from "./bds/networkidentifier";
 import { RakNet } from "./bds/raknet";
 import { RakNetConnector } from "./bds/raknetinstance";
 import * as bd_server from "./bds/server";
+import { copyLevelServerNetworkHandler } from "./bds/engine/networkhandler";
 import { levelStructureManager } from "./bds/engine/structure";
 import { StructureManager } from "./bds/structure";
 import { proc } from "./bds/symbols";
@@ -507,7 +508,17 @@ function _launch(asyncResolve: () => void): void {
             const networkSystem = serverNetworkSystem != null ? attempt("networkSystem", () => serverNetworkSystem.networkSystem) : null;
 
             const level = levelFromTick ?? (minecraft != null ? attempt("level", () => Minecraft$getLevel(minecraft)) : null);
-            const nonOwnerPointerServerNetworkHandler = minecraft != null ? attempt("serverNetworkHandler", () => minecraft.getNonOwnerPointerServerNetworkHandler()) : null;
+            // 1.26 has no Minecraft::getServerNetworkHandler; the Level holds the same NonOwnerPointer (engine/networkhandler.ts)
+            const nonOwnerPointerServerNetworkHandler =
+                minecraft != null && "?getServerNetworkHandler@Minecraft@@QEAA?AV?$NonOwnerPointer@VServerNetworkHandler@@@Bedrock@@XZ" in proc
+                    ? attempt("nonOwnerPointerServerNetworkHandler", () => minecraft.getNonOwnerPointerServerNetworkHandler())
+                    : level != null
+                    ? attempt("nonOwnerPointerServerNetworkHandler", () => {
+                          const out = Bedrock.NonOwnerPointer.make(nimodule.ServerNetworkHandler).construct();
+                          copyLevelServerNetworkHandler(level as any as StaticPointer, out as any as StaticPointer);
+                          return out;
+                      })
+                    : null;
             let minecraftCommands: MinecraftCommands | null = null;
             if (minecraft != null) {
                 if ("?getCommands@Minecraft@@QEAAAEAVMinecraftCommands@@XZ" in proc) {
@@ -534,10 +545,11 @@ function _launch(asyncResolve: () => void): void {
             let connector: RakNetConnector | null = null;
             let rakPeer: RakNet.RakPeer | null = null;
             let rakPeerLazy: (() => RakNet.RakPeer | null) | null = null;
-            if (serverNetworkSystem != null && !("?getRemoteConnector@NetworkSystem@@QEAA?AV?$not_null@V?$NonOwnerPointer@VRemoteConnector@@@Bedrock@@@gsl@@XZ" in proc) && layouts.ServerNetworkSystem?.connector != null) {
-                // no getter symbol: the connector and the peer are members whose
-                // offsets were read from the live objects (symbols.json layouts).
-                // The peer is created after the first tick, so it is read lazily.
+            // 1.26 has no NetworkSystem::getRemoteConnector address: the connector and the peer are members whose
+            // offsets were read from the live objects (symbols.json layouts). 2024's route through the getter's
+            // NonOwnerPointer (and its 2024 -48 adjustment) is gone with the name. The peer is created after the first
+            // tick, so it is read lazily.
+            if (serverNetworkSystem != null && layouts.ServerNetworkSystem?.connector != null) {
                 const sns = serverNetworkSystem as any as StaticPointer;
                 attempt("connector", () => {
                     const c = sns.getPointer(layouts.ServerNetworkSystem.connector);
@@ -579,46 +591,32 @@ function _launch(asyncResolve: () => void): void {
                     };
                     rakPeer = attempt("rakPeer", rakPeerLazy);
                 }
-            } else if (networkSystem != null) {
-                attempt("connector", () => {
-                    const NetworkSystem$getConnector = procHacker.js(
-                        "?getRemoteConnector@NetworkSystem@@QEAA?AV?$not_null@V?$NonOwnerPointer@VRemoteConnector@@@Bedrock@@@gsl@@XZ",
-                        Bedrock.NonOwnerPointer.make(RakNetConnector),
-                        { structureReturn: true, this: nimodule.NetworkSystem },
-                    );
-                    const nonOwnerPointerConnector: Bedrock.NonOwnerPointer<RakNetConnector> = NetworkSystem$getConnector.call(networkSystem);
-                    connector = nonOwnerPointerConnector.get()!.subAs(RakNetConnector, 48); // adjust
-                    if ("??_7RakNetConnector@@6BConnector@@@" in proc) {
-                        bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
-                    }
-                    rakPeer = RakNetConnector$getPeer(connector);
-                    nonOwnerPointerConnector.dispose();
-                    if ("??_7RakPeer@RakNet@@6BRakPeerInterface@1@@" in proc) {
-                        bdsxEqualsAssert(rakPeer.vftable, proc["??_7RakPeer@RakNet@@6BRakPeerInterface@1@@"], "Invalid rakPeer");
+            } else if (serverNetworkSystem != null) {
+                console.error(colors.yellow("[bdsx] connector: no ServerNetworkSystem.connector layout in this build's table"));
+            }
+            const commandOutputSender = minecraftCommands != null ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8) : null;
+            // the handler is updateServerAnnouncement's `this`; the NonOwnerPointer's object must be the same one, and the
+            // handler's second base (NetEventCallback, +0x10: its constructor, 40 0xa58530 / 51 0x96b9b0) its own vftable
+            let serverNetworkHandler: nimodule.ServerNetworkHandler | null = serverNetworkHandlerFromAnnounce;
+            if (nonOwnerPointerServerNetworkHandler != null) {
+                attempt("serverNetworkHandler", () => {
+                    const handler = nonOwnerPointerServerNetworkHandler.get();
+                    if (handler === null) throw Error("the NonOwnerPointer is empty or its object is gone");
+                    if (serverNetworkHandler !== null) {
+                        bdsxEqualsAssert(handler, serverNetworkHandler, "nonOwnerPointerServerNetworkHandler.get() vs updateServerAnnouncement's this");
+                    } else {
+                        serverNetworkHandler = handler;
                     }
                 });
             }
-            const commandOutputSender = minecraftCommands != null ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8) : null;
-            const serverNetworkHandler =
-                nonOwnerPointerServerNetworkHandler == null && serverNetworkHandlerFromAnnounce != null
-                    ? serverNetworkHandlerFromAnnounce
-                    : nonOwnerPointerServerNetworkHandler != null
-                    ? attempt("serverNetworkHandler", () => {
-                          const handler = nonOwnerPointerServerNetworkHandler.get()!.subAs(nimodule.ServerNetworkHandler, 0x10); // XXX: unknown state. cut corners.
-                          if ("??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@" in proc) {
-                              bdsxEqualsAssert(
-                                  handler.vftable,
-                                  proc["??_7ServerNetworkHandler@@6BEnableQueueForMainThread@Threading@Bedrock@@@"],
-                                  "Invalid serverNetworkHandler",
-                              );
-                          }
-                          return handler;
-                      })
-                    : null;
+            if (serverNetworkHandler !== null && "??_7ServerNetworkHandler@@6BNetEventCallback@@@" in proc) {
+                const netEventCallback = (serverNetworkHandler as any as StaticPointer).getPointer(0x10);
+                bdsxEqualsAssert(netEventCallback, proc["??_7ServerNetworkHandler@@6BNetEventCallback@@@"], "Invalid serverNetworkHandler (NetEventCallback base at +0x10)");
+            }
             let structureManager: StructureManager | null = null;
             if (level != null) {
                 attempt("structureManager", () => {
-                    // 1.26's NonOwnerPointer is 24 bytes, not bdsx's 16 (engine/structure.ts)
+                    // through engine/structure.ts: the 24-byte NonOwnerPointer, object at +0x10
                     const p = levelStructureManager(level as any as StaticPointer);
                     if (p === null) throw Error("no Level::getStructureManager in this build");
                     structureManager = p.as(StructureManager);

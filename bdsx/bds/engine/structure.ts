@@ -4,8 +4,8 @@
  * 1.26's Bedrock::NonOwnerPointer<T> is 24 bytes { control, its count block, the object } (the same shape
  * engine/simulatedplayer.ts builds for ServerNetworkHandler). Level::getStructureManager (40 0x72d300 / 51 0x7c5190)
  * copies Level+0x2c0..+0x2d0 into its struct return, adds a use on the count block (`lock incl 8(rep)`), and checks
- * the control byte is set. bdsx's Bedrock.NonOwnerPointer is the 2024 16-byte shape: through it bdsx read a wrong
- * pointer, and the call wrote 8 bytes past the 16 bdsx allocated for the return.
+ * the control byte is set. bdsx's Bedrock.NonOwnerPointer had the 2024 16-byte shape: through it bdsx read a wrong
+ * pointer, and the call wrote 8 bytes past the 16 bdsx allocated for the return (bds/bedrock.ts now has the 1.26 shape).
  *
  * This takes the object at +0x10 (StructureManager has no second base in front of it: its own destructor stores
  * ??_7StructureManager@@6B@ at +0, which launcher.ts checks) and drops the use at once, the way launcher.ts drops the

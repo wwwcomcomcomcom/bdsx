@@ -3,6 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
+import { copyLevelServerNetworkHandler } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
@@ -3675,10 +3676,21 @@ Minecraft.prototype.getLevel = function () {
 Minecraft.prototype.getNetworkHandler = function () {
     return bedrockServer.networkSystem;
 };
-Minecraft.prototype.getNonOwnerPointerServerNetworkHandler = procHacker.js(
+// 1.26 has no address for it: the Level holds the same NonOwnerPointer (engine/networkhandler.ts). A fresh one per call,
+// with its own use; dispose() drops it.
+Minecraft.prototype.getNonOwnerPointerServerNetworkHandler = derived(
     "?getServerNetworkHandler@Minecraft@@QEAA?AV?$NonOwnerPointer@VServerNetworkHandler@@@Bedrock@@XZ",
-    Bedrock.NonOwnerPointer.make(ServerNetworkHandler),
-    { this: Minecraft, structureReturn: true },
+    function getNonOwnerPointerServerNetworkHandler(this: Minecraft): Bedrock.NonOwnerPointer<ServerNetworkHandler> {
+        const out = ServerNetworkHandlerNonOwnerPointer.construct();
+        copyLevelServerNetworkHandler(bedrockServer.level as any as StaticPointer, out as any as StaticPointer);
+        return out;
+    },
+    () =>
+        procHacker.js(
+            "?getServerNetworkHandler@Minecraft@@QEAA?AV?$NonOwnerPointer@VServerNetworkHandler@@@Bedrock@@XZ",
+            ServerNetworkHandlerNonOwnerPointer,
+            { this: Minecraft, structureReturn: true },
+        ),
 );
 Minecraft.prototype.getServerNetworkHandler = function () {
     return bedrockServer.serverNetworkHandler;
