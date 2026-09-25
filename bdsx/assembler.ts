@@ -2601,20 +2601,21 @@ export class X64Assembler {
             const memalign = this.memoryChunkAlign;
             const bufsize = (this.chunk.size + memalign - 1) & ~(memalign - 1);
             this.chunk.putRepeat(0xcc, bufsize - this.chunk.size);
+        }
 
-            // resolve def addresses
-            try {
-                chunk.resolveAll();
-            } catch (err) {
-                if (err instanceof ParsingError) {
-                    errors.add(err);
-                } else {
-                    throw err;
-                }
+        // resolve def addresses, and the label jumps _genChunk sized early: a jump followed by 127+ bytes and
+        // another label jump is left as an UnresolvedConstant, which must be written even with no def area
+        try {
+            chunk.resolveAll();
+        } catch (err) {
+            if (err instanceof ParsingError) {
+                errors.add(err);
+            } else {
+                throw err;
             }
-            if (errors.error !== null) {
-                throw errors.error;
-            }
+        }
+        if (errors.error !== null) {
+            throw errors.error;
         }
 
         return this;
