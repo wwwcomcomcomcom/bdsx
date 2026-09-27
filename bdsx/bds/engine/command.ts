@@ -23,7 +23,7 @@
  */
 import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
-import { CxxStringView, int32_t, void_t } from "../../nativetype";
+import { CxxString, CxxStringView, int32_t, void_t } from "../../nativetype";
 import { engineLayout, engineSymbol } from "./deps";
 
 /**
@@ -189,4 +189,77 @@ export function commandSelectorConstruct(selector: StaticPointer, forcePlayer: b
     selector.setUint8(forcePlayer ? 1 : 0, 0xbe);
     const extra = engineLayout("CommandSelectorBase", "defaultTrueFlag", -1);
     if (extra >= 0) selector.setUint8(1, extra);
+}
+
+// ---- CommandRegistry::Parser (docs/findings-scoreboard.md section 12) ----
+
+/**
+ * CommandRegistry::Parser keeps 2024's 0xc0-byte layout on both builds: registry +0, parse table +8, the parse stack
+ * (a deque) +0x10, the input +0x38, the root ParseToken (unique_ptr) +0x78, the error message +0x80, the error
+ * parameters (vector<string>) +0xa0, the version +0xb8, "generate params" +0xbc. The constructor (40 0x33e390, 51
+ * 0x121f2a0, buildParseTable inlined), parseCommand, getErrorParams and the destructor are out of line under their
+ * 2024 prototypes; createCommand (2024: an 89-byte wrapper) and getErrorMessage (`lea rax,[rcx+0x80]`) are not.
+ */
+export const COMMAND_PARSER_SIZE = engineLayout("CommandRegistry::Parser", "size", 0xc0);
+const PARSER_ROOT = engineLayout("CommandRegistry::Parser", "root", 0x78);
+const PARSER_ERROR_MESSAGE = engineLayout("CommandRegistry::Parser", "errorMessage", 0x80);
+const PARSER_ERROR_PARAMS = engineLayout("CommandRegistry::Parser", "errorParams", 0xa0);
+const PARSER_VERSION = engineLayout("CommandRegistry::Parser", "version", 0xb8);
+
+const REGISTRY_CREATE_COMMAND = engineSymbol(
+    "?createCommand@CommandRegistry@@AEBA?AV?$unique_ptr@VCommand@@U?$default_delete@VCommand@@@std@@@std@@AEBUParseToken@1@AEBVCommandOrigin@@HAEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@3@AEAV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@3@@Z",
+);
+let registryCreateCommand:
+    | ((registry: VoidPointer, out: VoidPointer, root: VoidPointer, origin: VoidPointer, version: number, error: VoidPointer, params: VoidPointer) => void)
+    | null = null;
+
+/**
+ * Parser::createCommand(origin): nothing before a parse has made a root token; otherwise
+ * CommandRegistry::createCommand(root, origin, version, errorMessage&, errorParams&) (40 0x33c3b0, 51 0x121d2d0), the
+ * call MinecraftCommands::compileCommand and executeCommand make themselves on both builds. Returns the Command the
+ * caller now owns, or null.
+ */
+export function commandParserCreateCommand(parser: StaticPointer, origin: VoidPointer): NativePointer | null {
+    const root = parser.getPointer(PARSER_ROOT);
+    if (root.isNull()) return null;
+    if (REGISTRY_CREATE_COMMAND === null) throw Error("CommandRegistry::createCommand: no address in this build");
+    if (registryCreateCommand === null) {
+        registryCreateCommand = makefunc.js(REGISTRY_CREATE_COMMAND, void_t, null, VoidPointer, VoidPointer, VoidPointer, VoidPointer, int32_t, VoidPointer, VoidPointer);
+    }
+    const out = new AllocatedPointer(8);
+    out.setInt64WithFloat(0, 0);
+    registryCreateCommand(parser.getPointer(0), out, root, origin, parser.getInt32(PARSER_VERSION), parser.add(PARSER_ERROR_MESSAGE), parser.add(PARSER_ERROR_PARAMS));
+    const cmd = out.getPointer(0);
+    return cmd.isNull() ? null : cmd;
+}
+
+/** Parser::getErrorMessage(): the std::string at +0x80 */
+export function commandParserErrorMessage(parser: StaticPointer): string {
+    return parser.getCxxString(PARSER_ERROR_MESSAGE);
+}
+
+// ---- CommandRegistry::getCommandName (section 12) ----
+
+/**
+ * getCommandName(const std::string&): lexes the line and returns its first non-whitespace token, or "" (40 0x36dc70,
+ * 51 0x124a3e0; the only callers of the lexer's step besides Parser::_parse). 2024's is a const member that never
+ * reads `this`; 51 keeps that (rcx registry, rdx sret, r8 string) and 40 drops the dead `this` (rcx sret, rdx string),
+ * so `thisArgs` in the table says which.
+ */
+const GET_COMMAND_NAME = engineSymbol("bdsx:CommandRegistry::getCommandName");
+const GET_COMMAND_NAME_THIS_ARGS = engineLayout("CommandRegistry::getCommandName", "thisArgs", 1);
+let getCommandNameCall: ((registry: VoidPointer, command: string) => string) | null = null;
+
+export function commandNameOf(registry: VoidPointer, command: string): string {
+    if (GET_COMMAND_NAME === null) throw Error("CommandRegistry::getCommandName: no address in this build");
+    if (getCommandNameCall === null) {
+        if (GET_COMMAND_NAME_THIS_ARGS === 0) {
+            const fn = makefunc.js(GET_COMMAND_NAME, CxxString, { structureReturn: true }, CxxString);
+            getCommandNameCall = (_registry, cmd) => fn(cmd);
+        } else {
+            const fn = makefunc.js(GET_COMMAND_NAME, CxxString, { this: VoidPointer, structureReturn: true }, CxxString);
+            getCommandNameCall = (reg, cmd) => fn.call(reg, cmd);
+        }
+    }
+    return getCommandNameCall(registry, command);
 }

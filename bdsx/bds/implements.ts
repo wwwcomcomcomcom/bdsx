@@ -6942,7 +6942,6 @@ Object.defineProperties(command.MinecraftCommands.prototype, {
 });
 
 // launcher.ts
-const CommandOutputParameterVector = CxxVector.make(CommandOutputParameter);
 bedrockServer.executeCommand = function (
     command: string,
     mute: CommandResultType = null,
@@ -6960,11 +6959,12 @@ bedrockServer.executeCommand = function (
     return result;
 };
 
-// 1.26 has no out-of-line CommandRegistry::Parser (MinecraftCommands::compileCommand inlines it, and
-// createCommand into CommandRegistry::createCommand): the engine runs the command itself. The output reaches the
-// origin unless muted; Data mode gets the status code, not the messages (docs/findings-scoreboard.md section 5).
-const Parser$available = "??0Parser@CommandRegistry@@QEAA@AEBV1@H@Z" in proc;
-function executeCommandByEngine(command: string, origin: CommandOrigin, mute: CommandResultType): CommandResult<CommandResult.Any> {
+// On 1.26 the engine runs the command itself: MinecraftCommands::executeCommand builds its own CommandOutput (whose
+// constructor and error() bdsx has no address for) and drives CommandRegistry::Parser inline. bdsx's own copy of that
+// loop, which also fired events.command by hand, is gone; CommandRegistry.Parser stays as a plugin API
+// (docs/findings-scoreboard.md sections 5 and 12). The output reaches the origin unless muted; Data mode gets the
+// status code, not the messages.
+function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: CommandResultType = null): CommandResult<CommandResult.Any> {
     if (mute === true || mute == null) mute = CommandResultType.Mute;
     else if (mute === false) mute = CommandResultType.Output;
     const ctx = CommandContext.constructWith(command, origin);
@@ -6975,85 +6975,6 @@ function executeCommandByEngine(command: string, origin: CommandOrigin, mute: Co
         return res;
     } finally {
         ctx.destruct();
-    }
-}
-
-function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: CommandResultType = null): CommandResult<CommandResult.Any> {
-    if (!Parser$available) return executeCommandByEngine(command, origin, mute);
-    // fire `events.command` manually. because it does not pass MinecraftCommands::executeCommand
-    const ctx = CommandContext.constructWith(command, origin);
-    const resv = events.command.fire(command, origin.getName(), ctx);
-    ctx.destruct();
-    decay(ctx);
-    if (typeof resv === "number") {
-        const res = new MCRESULT(true) as CommandResult<CommandResult.Any>;
-        res.result = resv;
-        return res;
-    }
-
-    // modified MinecraftCommands::executeCommand
-    const commands = bedrockServer.minecraftCommands;
-    const registry = bedrockServer.commandRegistry;
-
-    if (mute === true || mute == null) mute = CommandResultType.Mute;
-    else if (mute === false) mute = CommandResultType.Output;
-
-    const outputType =
-        mute === CommandResultType.Mute ? CommandOutputType.None : mute === CommandResultType.Output ? CommandOutputType.AllOutput : CommandOutputType.DataSet;
-    const output = CommandOutput.constructWith(outputType);
-    const cmdparser = CommandRegistry.Parser.constructWith(registry, CommandVersion.CurrentVersion);
-    try {
-        let cmd: Command | null;
-        const res = new MCRESULT(true) as CommandResult<CommandResult.Any>;
-        if (cmdparser.parseCommand(command) && (cmd = cmdparser.createCommand(origin)) !== null) {
-            cmd.run(origin, output);
-            cmd.destruct();
-
-            const successCount = output.getSuccessCount();
-            if (successCount > 0) {
-                res.result = 1; // MCRESULT_Success
-            } else {
-                res.result = 0x200; // MCRESULT_ExecutionFail
-            }
-        } else {
-            const outputParams = CommandOutputParameterVector.construct();
-            const errorParams: string[] = cmdparser.getErrorParams();
-            if (errorParams.length !== 0) {
-                outputParams.reserve(errorParams.length);
-                for (const err of errorParams) {
-                    outputParams.prepare().constructWith(err);
-                }
-            }
-            const message = cmdparser.getErrorMessage();
-            output.error(message, outputParams); // outputParams is destructed by output.error
-            res.result = 0; // MCRESULT_FailedToParseCommand;
-        }
-
-        const statusCode = res.getFullCode();
-        output.set_int("statusCode", statusCode);
-
-        if ((mute & CommandResultType.Output) !== 0 && !output.empty()) {
-            commands.handleOutput(origin, output);
-        }
-        if ((mute & CommandResultType.Data) !== 0) {
-            const len = output.messages.size();
-            let statusMessage = "";
-            if (len > 0) {
-                const first = output.messages.get(0);
-                statusMessage = translateText(first.messageId, first.params);
-                for (let i = 1; i < len; i++) {
-                    const msg = output.messages.get(i);
-                    const translated = translateText(msg.messageId, msg.params);
-                    statusMessage += "\n";
-                    statusMessage += translated;
-                }
-            }
-            res.data = Object.assign({ statusCode, statusMessage }, output.propertyBag.json.value());
-        }
-        return res;
-    } finally {
-        output.destruct();
-        cmdparser.destruct();
     }
 }
 

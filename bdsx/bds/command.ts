@@ -50,7 +50,11 @@ import { ServerPlayer } from "./player";
 import {
     COMMAND_OUTPUT_SUCCESS_COUNT,
     COMMAND_MESSAGE_SIZE,
+    COMMAND_PARSER_SIZE,
     commandAllocVftable,
+    commandNameOf,
+    commandParserCreateCommand,
+    commandParserErrorMessage,
     commandEnumBackedRule,
     commandEnumTypeId,
     commandOutputAddMessage,
@@ -1475,7 +1479,8 @@ export namespace CommandRegistry {
         list: CxxVector<CxxString>;
     }
 
-    @nativeClass(0xc0)
+    // 2024's 0xc0-byte layout on both 1.26 builds (engine/command.ts, docs/findings-scoreboard.md section 12)
+    @nativeClass(COMMAND_PARSER_SIZE)
     export class Parser extends AbstractClass {
         constructWith(registry: CommandRegistry, version: number): void {
             abstract();
@@ -1843,12 +1848,10 @@ CommandRegistry.prototype.registerAlias = procHacker.js(
     CxxString,
     CxxString,
 );
-CommandRegistry.prototype.getCommandName = procHacker.js(
-    "?getCommandName@CommandRegistry@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV23@@Z",
-    CxxString,
-    { structureReturn: true, this: CommandRegistry },
-    CxxString,
-);
+// 1.26: out of line on both builds, but 40 dropped the unused `this` (engine/command.ts, findings-scoreboard.md 12)
+CommandRegistry.prototype.getCommandName = function (this: CommandRegistry, command: string): string {
+    return commandNameOf(this, command);
+};
 CommandRegistry.prototype.findCommand = procHacker.js(
     "?findCommand@CommandRegistry@@AEAAPEAUSignature@1@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     CommandRegistry.Signature,
@@ -1891,16 +1894,32 @@ CommandRegistry.Parser.prototype.parseCommand = procHacker.js(
     { this: CommandRegistry.Parser },
     CxxString,
 );
-CommandRegistry.Parser.prototype.createCommand = procHacker.js(
+// 1.26 inlines both into MinecraftCommands::compileCommand / executeCommand (findings-scoreboard.md 12)
+CommandRegistry.Parser.prototype.createCommand = derived(
     "?createCommand@Parser@CommandRegistry@@QEAA?AV?$unique_ptr@VCommand@@U?$default_delete@VCommand@@@std@@@std@@AEBVCommandOrigin@@@Z",
-    Command.ref(),
-    { this: CommandRegistry.Parser, structureReturn: true },
-    CommandOrigin,
+    function (this: CommandRegistry.Parser, origin: CommandOrigin): Command | null {
+        const cmd = commandParserCreateCommand(this as any as StaticPointer, origin);
+        return cmd === null ? null : cmd.as(Command);
+    },
+    () =>
+        procHacker.js(
+            "?createCommand@Parser@CommandRegistry@@QEAA?AV?$unique_ptr@VCommand@@U?$default_delete@VCommand@@@std@@@std@@AEBVCommandOrigin@@@Z",
+            Command.ref(),
+            { this: CommandRegistry.Parser, structureReturn: true },
+            CommandOrigin,
+        ),
 );
-CommandRegistry.Parser.prototype.getErrorMessage = procHacker.js(
+CommandRegistry.Parser.prototype.getErrorMessage = derived(
     "?getErrorMessage@Parser@CommandRegistry@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-    CxxString,
-    { this: CommandRegistry.Parser },
+    function (this: CommandRegistry.Parser): string {
+        return commandParserErrorMessage(this as any as StaticPointer);
+    },
+    () =>
+        procHacker.js(
+            "?getErrorMessage@Parser@CommandRegistry@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+            CxxString,
+            { this: CommandRegistry.Parser },
+        ),
 );
 CommandRegistry.Parser.prototype.getErrorParams = procHacker.js(
     "?getErrorParams@Parser@CommandRegistry@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
