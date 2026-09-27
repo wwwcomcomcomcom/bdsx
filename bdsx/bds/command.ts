@@ -58,6 +58,7 @@ import {
     commandEnumBackedRule,
     commandEnumTypeId,
     commandOutputAddMessage,
+    commandOutputDeleteBag,
     commandOutputError,
     commandOutputSuccess,
     commandParseRule,
@@ -1790,7 +1791,16 @@ CommandOutput.prototype.set_Vec3 = function (k, v) {
             int32_t,
         ),
 );
-CommandOutput.prototype[NativeType.dtor] = procHacker.js("??1CommandOutput@@QEAA@XZ", void_t, { this: CommandOutput });
+// 1.26 inlines ~CommandOutput everywhere (docs/findings-scoreboard.md section 13): the message vector, then the
+// property bag's deleting destructor, as 2024's 0xcbd0e0. The constructor and set<int> ship under their 2024 names.
+CommandOutput.prototype[NativeType.dtor] = derived(
+    "??1CommandOutput@@QEAA@XZ",
+    function (this: CommandOutput): void {
+        this.messages.destruct();
+        commandOutputDeleteBag(this as any as StaticPointer);
+    },
+    () => procHacker.js("??1CommandOutput@@QEAA@XZ", void_t, { this: CommandOutput }),
+);
 
 CommandOutputSender.prototype._toJson = function () {
     return JsonValue.constructWith({ error: "REMOVED FUNCTION" });

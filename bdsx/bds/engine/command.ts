@@ -171,6 +171,31 @@ export function commandOutputError(output: StaticPointer, messageId: string, par
     if (output.getInt32(0) !== 0) commandOutputAddMessage(output, messageId, params, 1);
 }
 
+const bagDeleteBySlot = new Map<string, (bag: VoidPointer, flags: number) => void>();
+
+/**
+ * The property-bag half of the inlined ~CommandOutput (section 13). The constructor ships (40 0x12df330, 51 0x1201940)
+ * but no out-of-line destructor is left: executeCommand's epilogue (40 0x38bc60, 51 0x3dabe0) and a run-and-count
+ * helper (40 0x10d6420, 51 0xfbe4c0) destroy the message vector at +0x10, then call slot 0 of the bag at +8 with 1
+ * when it is set -- 2024's ??1CommandOutput (0xcbd0e0) member for member. Slot 0 is CommandPropertyBag's deleting
+ * destructor (40 0x3c2390, 51 0x125a8c0: ~Json::Value on +8, then a 0x20-byte free). The caller destroys the
+ * messages first.
+ */
+export function commandOutputDeleteBag(output: StaticPointer): void {
+    const bag = output.getNullablePointer(8);
+    if (bag === null) return;
+    output.setPointer(null, 8);
+    const fn = bag.getPointer(0).getPointer(0);
+    const key = fn.toString();
+    let call = bagDeleteBySlot.get(key);
+    if (call === undefined) {
+        const native = makefunc.js(fn, void_t, null, VoidPointer, int32_t);
+        call = (b: VoidPointer, flags: number) => native(b, flags);
+        bagDeleteBySlot.set(key, call);
+    }
+    call(bag, 1);
+}
+
 // ---- CommandSelectorBase (section 10.3) ----
 
 /**
