@@ -26,6 +26,7 @@ import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import { teleportActor } from "./engine/teleport";
 import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
 import { applyEnchantOwn } from "./engine/enchant";
+import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct } from "./engine/itemdescriptor";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -4068,7 +4069,11 @@ ItemStackBase.prototype.getMaxStackSize = derived(
         const item = weak.getNullablePointerAs(Item, 0);
         if (item === null) return 0xff;
         const descriptor = ItemStackBase$getDescriptor.call(this);
-        return Item$getMaxStackSize.call(item, descriptor);
+        try {
+            return Item$getMaxStackSize.call(item, descriptor);
+        } finally {
+            descriptor.destruct(); // the sret is bdsx's memory, the impl_ inside it the engine's
+        }
     },
     () => procHacker.js("?getMaxStackSize@ItemStackBase@@QEBAEXZ", uint8_t, { this: ItemStackBase }),
 );
@@ -4909,9 +4914,29 @@ PlayerInventory.prototype.dropAllOnDeath = derived(
     () => procHacker.js("?dropAllOnDeath@PlayerInventory@@QEAAX_N@Z", void_t, { this: PlayerInventory }, bool_t),
 );
 
-ItemDescriptor.prototype[NativeType.ctor] = procHacker.js("??0ItemDescriptor@@QEAA@XZ", void_t, { this: ItemDescriptor });
-ItemDescriptor.prototype[NativeType.dtor] = procHacker.js("??1ItemDescriptor@@UEAA@XZ", void_t, { this: ItemDescriptor });
-ItemDescriptor.prototype[NativeType.ctor_copy] = procHacker.js("??0ItemDescriptor@@QEAA@AEBV0@@Z", void_t, { this: ItemDescriptor }, ItemDescriptor);
+// 1.26 inlines all three on both builds; the only out-of-line code is the vftable's deleting destructor
+// (engine/itemdescriptor.ts, docs/findings-nbt.md section 23).
+ItemDescriptor.prototype[NativeType.ctor] = derived(
+    "??0ItemDescriptor@@QEAA@XZ",
+    function (this: ItemDescriptor): void {
+        itemDescriptorConstruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0ItemDescriptor@@QEAA@XZ", void_t, { this: ItemDescriptor }),
+);
+ItemDescriptor.prototype[NativeType.dtor] = derived(
+    "??1ItemDescriptor@@UEAA@XZ",
+    function (this: ItemDescriptor): void {
+        itemDescriptorDestruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??1ItemDescriptor@@UEAA@XZ", void_t, { this: ItemDescriptor }),
+);
+ItemDescriptor.prototype[NativeType.ctor_copy] = derived(
+    "??0ItemDescriptor@@QEAA@AEBV0@@Z",
+    function (this: ItemDescriptor, from: ItemDescriptor): void {
+        itemDescriptorCopy(this as unknown as StaticPointer, from as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0ItemDescriptor@@QEAA@AEBV0@@Z", void_t, { this: ItemDescriptor }, ItemDescriptor),
+);
 // 1.26 keeps no out-of-line complete-object destructor (docs/findings-audit.md "Audit leftovers"): every copy is inlined
 // into the scalar deleting destructor, vftable slot 0 (40 0x23e230 / 51 0x2d6bc0), which frees the user-data string
 // at +0x40 and the net-id variant at +0x20, restores ItemDescriptor's vptr, releases its impl, and calls
