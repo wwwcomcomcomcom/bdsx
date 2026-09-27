@@ -26,6 +26,7 @@ import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import { teleportActor } from "./engine/teleport";
 import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
 import { applyEnchantOwn } from "./engine/enchant";
+import { inventoryTransactionActions } from "./engine/invtransaction";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
@@ -4972,6 +4973,8 @@ NetworkItemStackDescriptor.prototype[NativeType.ctor_copy] = procHacker.js(
     NetworkItemStackDescriptor,
 );
 
+// Out of line on both builds with 2024's prototype (docs/findings-nbt.md section 28; 40 0x258d300 / 51 0x2a67d80, 2024's
+// 0x1bcbea0 with ItemStackBase's getId/getAuxValue/isStackedByData/getUserData inlined). Only addAction calls it.
 InventoryTransaction.prototype.addItemToContent = procHacker.js(
     "?addItemToContent@InventoryTransaction@@AEAAXAEBVItemStack@@H@Z",
     void_t,
@@ -4979,11 +4982,24 @@ InventoryTransaction.prototype.addItemToContent = procHacker.js(
     ItemStack,
     int32_t,
 );
-(InventoryTransaction.prototype as any)._getActions = procHacker.js(
+// 1.26 inlines getActions on both builds (engine/invtransaction.ts): bdsx walks actions_ itself. A source the map does not
+// hold reads as an empty vector, as the engine's static one does.
+let emptyInventoryActions: CxxVector<InventoryAction> | null = null;
+(InventoryTransaction.prototype as any)._getActions = derived(
     "?getActions@InventoryTransaction@@QEBAAEBV?$vector@VInventoryAction@@V?$allocator@VInventoryAction@@@std@@@std@@AEBVInventorySource@@@Z",
-    CxxVector.make(InventoryAction),
-    { this: InventoryTransaction },
-    InventorySource,
+    function (this: InventoryTransaction, source: InventorySource): CxxVector<InventoryAction> {
+        const found = inventoryTransactionActions(this, source);
+        if (found !== null) return found.as(CxxVector.make(InventoryAction));
+        if (emptyInventoryActions === null) emptyInventoryActions = CxxVector.make(InventoryAction).construct();
+        return emptyInventoryActions;
+    },
+    () =>
+        procHacker.js(
+            "?getActions@InventoryTransaction@@QEBAAEBV?$vector@VInventoryAction@@V?$allocator@VInventoryAction@@@std@@@std@@AEBVInventorySource@@@Z",
+            CxxVector.make(InventoryAction),
+            { this: InventoryTransaction },
+            InventorySource,
+        ),
 );
 InventoryTransactionItemGroup.prototype.getItemStack = procHacker.js("?getItemInstance@InventoryTransactionItemGroup@@QEBA?AVItemStack@@XZ", ItemStack, {
     this: InventoryTransaction,

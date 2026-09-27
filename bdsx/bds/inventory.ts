@@ -852,13 +852,15 @@ export class InventoryAction extends AbstractClass {
     source: InventorySource;
     @nativeField(uint32_t)
     slot: uint32_t;
-    @nativeField(NetworkItemStackDescriptor) // 0x10
+    // 1.26 (both builds): 0x10 / 0x70 / 0xd0 / 0x168, size 0x200 -- InventoryTransaction::addAction reads the stacks'
+    // counts at +0xf2/+0x18a and steps the vector by 0x200 (docs/findings-nbt.md section 28). 2024: 0xd0 / 0x170, 0x210.
+    @nativeField(NetworkItemStackDescriptor)
     fromDesc: NetworkItemStackDescriptor;
-    @nativeField(NetworkItemStackDescriptor) // 0x68
+    @nativeField(NetworkItemStackDescriptor)
     toDesc: NetworkItemStackDescriptor;
-    @nativeField(ItemStack) // 0xc0
+    @nativeField(ItemStack)
     from: ItemStack;
-    @nativeField(ItemStack) // 0x160
+    @nativeField(ItemStack)
     to: ItemStack;
 }
 
