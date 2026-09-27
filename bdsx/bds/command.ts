@@ -1984,8 +1984,8 @@ class CommandBlockEnum extends CommandEnum<Block> {
     }
     mapValue(value: commandenum.EnumResult): Block {
         // the parameter holds a CommandBlockName: HashedString::computeHash of the full block name (the "Block" enum's
-        // data, docs/findings-scoreboard.md 11.6). Turning it into a Block needs BlockTypeRegistry::lookupByName, which
-        // has no address on BDS 1.26 yet, so Block.create throws there.
+        // data, docs/findings-scoreboard.md 11.6). Block.create looks the token up in the engine's block type registry
+        // (engine/blocktype.ts), which adds the minecraft: namespace to a bare name as the engine's own lookup does.
         return Block.create(value.token)!;
     }
 }

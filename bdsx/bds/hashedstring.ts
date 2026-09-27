@@ -29,14 +29,29 @@ export class HashedString extends NativeClass {
         return hStr;
     }
 }
-const HashedString$HashedString = procHacker.js(
-    "??0HashedString@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    null,
-    HashedString,
-    CxxString,
-);
 const str_offset = HashedString.offsetOf("str");
+/**
+ * HashedString(std::string const&): 2024 0x2784e00 zeroes the hash, copies the string to +8, nulls the last-match
+ * pointer at +0x28, then stores the FNV-1 hash of the C string (zero for an empty one). 1.26 keeps the same 48-byte
+ * layout (Endstone string_hash.h: str_hash_ +0, str_ +8, last_match_ +40) and no address for the constructor, so it
+ * is the JS constructor (null hash, an empty string, null last match) and then `set`. Like the native one it runs on
+ * memory that is only allocated (`new HashedString(true)`), so it must construct the string before assigning it.
+ */
+const HashedString$HashedString: (self: HashedString, str: string) => void = derived(
+    "??0HashedString@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+    (self: HashedString, str: string): void => {
+        self.construct();
+        self.set(str);
+    },
+    () =>
+        procHacker.js(
+            "??0HashedString@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            void_t,
+            null,
+            HashedString,
+            CxxString,
+        ),
+);
 /**
  * FNV-1 over the bytes of the string, 64-bit, stopping at the first NUL, with
  * the empty string hashing to zero -- which is what the 2024 body does:

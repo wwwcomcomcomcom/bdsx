@@ -21,6 +21,7 @@ import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREB
 import { pistonAttachedBlocks } from "./engine/piston";
 import { TickingAreaList } from "./tickingarea";
 import { setOnFireNoEffectsOwn } from "./engine/onfire";
+import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -4943,12 +4944,30 @@ InventoryTransactionItemGroup.prototype.getItemStack = procHacker.js("?getItemIn
 
 // block.ts
 namespace BlockTypeRegistry {
-    export const lookupByName = procHacker.js(
+    // 2024's static returned a WeakPtr<BlockLegacy>; 1.26's registry is an object and the lookup a member, whose
+    // result is a WeakPtr on 1.26.40 and a plain pointer on 1.26.51 (engine/blocktype.ts). bdsx only ever wanted
+    // the block type out of it, so this returns that and keeps no reference.
+    export const lookupByName = derived(
         "?lookupByName@BlockTypeRegistry@@SA?AV?$WeakPtr@VBlockLegacy@@@@AEBVHashedString@@_N@Z",
-        WeakPtr.make(BlockLegacy),
-        { structureReturn: true },
-        HashedString,
-        bool_t,
+        (name: HashedString): BlockLegacy | null => {
+            const type = lookupBlockType(name);
+            return type === null ? null : type.as(BlockLegacy);
+        },
+        (): ((name: HashedString) => BlockLegacy | null) => {
+            const lookup = procHacker.js(
+                "?lookupByName@BlockTypeRegistry@@SA?AV?$WeakPtr@VBlockLegacy@@@@AEBVHashedString@@_N@Z",
+                WeakPtr.make(BlockLegacy),
+                { structureReturn: true },
+                HashedString,
+                bool_t,
+            );
+            return name => {
+                const weak = lookup(name, false);
+                const legacy = weak.value();
+                weak.dispose(); // it does not delete `legacy` because it's WeakPtr
+                return legacy;
+            };
+        },
     );
 }
 
@@ -4980,7 +4999,14 @@ BlockLegacy.prototype.getCommandNames2 = derived(
 BlockLegacy.prototype.getCreativeCategory = procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy });
 BlockLegacy.prototype.setDestroyTime = procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t);
 BlockLegacy.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@BlockLegacy@@QEBA?AW4BlockActorType@@XZ", int32_t, { this: BlockLegacy });
-BlockLegacy.prototype.getBlockItemId = procHacker.js("?getBlockItemId@BlockLegacy@@QEBAFXZ", int16_t, { this: BlockLegacy });
+// inlined everywhere in 1.26 (40: 49 sites, 51: 45 of the branchless `movzwl 0x17e; mov $0xff; sub; cmovae` form)
+BlockLegacy.prototype.getBlockItemId = derived(
+    "?getBlockItemId@BlockLegacy@@QEBAFXZ",
+    function (this: BlockLegacy): number {
+        return blockTypeItemId(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getBlockItemId@BlockLegacy@@QEBAFXZ", int16_t, { this: BlockLegacy }),
+);
 BlockLegacy.prototype.getStateFromLegacyData = procHacker.js(
     "?getStateFromLegacyData@BlockLegacy@@QEBAAEBVBlock@@G@Z",
     Block.ref(),
@@ -5037,23 +5063,12 @@ Block.create = function (blockName: string, data: number = 0): Block | null {
     data |= 0;
     if (data < 0 || data > 0x7fff) data = 0;
     const blockNameHashed = HashedString.constructWith(blockName);
-    const legacyptr = BlockTypeRegistry.lookupByName(blockNameHashed, false);
+    const legacy = BlockTypeRegistry.lookupByName(blockNameHashed);
     blockNameHashed.destruct();
-
-    const legacy = legacyptr.value();
-    legacyptr.dispose(); // it does not delete `legacy` because it's WeakPtr
-    if (legacy !== null) {
-        if (legacy.getBlockItemId() < 0x100) {
-            if (data === 0x7fff) {
-                return legacy.getDefaultState();
-            } else {
-                return legacy.tryGetStateFromLegacyData(data);
-            }
-        } else {
-            return legacy.tryGetStateFromLegacyData(data);
-        }
-    }
-    return null;
+    if (legacy === null) return null;
+    // 0x7fff asks for the default state; that branch alone depends on the item id (2024 took it only below 0x100)
+    if (data === 0x7fff && legacy.getBlockItemId() < 0x100) return legacy.getDefaultState();
+    return legacy.tryGetStateFromLegacyData(data);
 };
 Block.prototype.getDescriptionId = procHacker.js("?getDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
     this: Block,
