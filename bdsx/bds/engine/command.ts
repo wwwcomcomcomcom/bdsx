@@ -21,7 +21,7 @@
  * success count +0x28), but success(message, params) and error(message, params) are inlined everywhere; the one
  * out-of-line member left is addMessage, which now takes the message id as a `std::string_view`.
  */
-import { NativePointer, StaticPointer, VoidPointer } from "../../core";
+import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
 import { CxxStringView, int32_t, void_t } from "../../nativetype";
 import { engineLayout, engineSymbol } from "./deps";
@@ -43,7 +43,63 @@ const RULES: [string, NativePointer | null][] = [
     ["CommandSelector<Actor>", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<CommandSelector<Actor>>::instance")],
     ["CommandSelector<Player>", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<CommandSelector<Player>>::instance")],
     ["WildcardCommandSelector<Actor>", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<WildcardCommandSelector<Actor>>::instance")],
+    // section 11.1: FullIntegerRange 0x100017, FilePath 0x100011, JsonObject 0x10004a
+    ["CommandIntegerRange", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<CommandIntegerRange>::instance")],
+    ["CommandFilePath", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<CommandFilePath>::instance")],
+    ["Json::Value", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<Json::Value>::instance")],
+    // section 11.5: MessageRoot 0x100044 (a vector of 0x28-byte MessageComponent, as 2024)
+    ["CommandMessage", engineSymbol("bdsx:CommandRegistry::ParseRuleFor<CommandMessage>::instance")],
 ];
+
+/** sizeof(CommandMessage): 2024's vector (0x18) plus, on 1.26, a bool at +0x18 (section 11.5) */
+export const COMMAND_MESSAGE_SIZE = engineLayout("CommandMessage", "size", 0x18);
+
+// ---- types the engine parses through an enum (section 11.2) ----
+
+/**
+ * The rule the engine itself passes for a type it parses through an enum: `bool`'s own parameters (alwaysday's
+ * `lock`, 40 0x3ccf4d0) hand CommandParameterData ParseRuleFor<bool>::instance, which a static initializer zeroes (40
+ * 0xba1d0) and nothing fills. registerOverloadInternal (40 0x36c4b0, 51 0x1248da0) looks a basic parameter's type id up
+ * in type_lookup_ (+0x1c0); when it maps to an enum it turns the parameter into that enum's (type 1, its name) and the
+ * enum's parse function becomes the parse override, so the rule is never read. bdsx passes a zeroed rule of its own.
+ */
+let enumBackedRule: AllocatedPointer | null = null;
+export function commandEnumBackedRule(): NativePointer {
+    if (enumBackedRule === null) {
+        enumBackedRule = new AllocatedPointer(16);
+        enumBackedRule.setInt64WithFloat(0, 0);
+        enumBackedRule.setInt64WithFloat(0, 8);
+    }
+    return enumBackedRule as unknown as NativePointer;
+}
+
+/** CommandRegistry::enums_ (+0xe0, a vector of 0x48-byte Enum { name, type id +0x20, parse +0x28, values +0x30 }) */
+const REGISTRY_ENUMS = 0xe0;
+const ENUM_STRIDE = 0x48;
+
+/**
+ * The type id the engine gave the enum named `name` (Enum::type, +0x20): the id of the C++ type its parse function
+ * writes. For `Boolean` that is type_id<CommandRegistry, bool> (the addEnumValues<bool> call in the registry setup,
+ * 40 0x347449 / 51 0x1226fd8, passes the static 40 0xc8b8340 / 51 0xcc1ed88), which a basic parameter must carry for
+ * registerOverloadInternal to find the enum. Read from the registry so no per-build static is needed. null if absent.
+ */
+export function commandEnumTypeId(registry: VoidPointer, name: string): number | null {
+    const e = findEnum(registry, name);
+    return e === null ? null : e.getUint16(0x20);
+}
+
+/** The engine's Enum entry named `name` (the vector element), or null */
+export function findEnum(registry: VoidPointer, name: string): NativePointer | null {
+    const vec = registry.add(REGISTRY_ENUMS);
+    const begin = vec.getPointer(0);
+    const end = vec.getPointer(8);
+    const n = (end.subptr(begin) / ENUM_STRIDE) | 0;
+    for (let i = 0; i < n; i++) {
+        const e = begin.add(i * ENUM_STRIDE);
+        if (e.getCxxString(0) === name) return e;
+    }
+    return null;
+}
 
 /** The engine's ParseRuleFor<T>::instance for the type bds/command.ts labels `label`, or null. */
 export function commandParseRuleFor(label: string | undefined): NativePointer | null {

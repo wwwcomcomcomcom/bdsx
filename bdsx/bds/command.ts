@@ -49,13 +49,17 @@ import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
 import {
     COMMAND_OUTPUT_SUCCESS_COUNT,
+    COMMAND_MESSAGE_SIZE,
     commandAllocVftable,
+    commandEnumBackedRule,
+    commandEnumTypeId,
     commandOutputAddMessage,
     commandOutputError,
     commandOutputSuccess,
     commandParseRule,
     commandParseRuleFor,
     commandSelectorConstruct,
+    findEnum,
 } from "./engine/command";
 import { updateSoftEnumOwn } from "./engine/softenum";
 import { derived, proc, procConst } from "./symbols";
@@ -202,13 +206,24 @@ export class CommandPosition extends NativeStruct {
     CommandOrigin,
     Vec3,
 );
-(CommandPosition.prototype as any)._getBlockPosition = procHacker.js(
+// 1.26 inlines getBlockPos into its callers; 2024's (0xcc71d0) is getPosition, then 0.001 added to each axis and
+// BlockPos(const Vec3&), which floors (docs/findings-scoreboard.md 11.4).
+(CommandPosition.prototype as any)._getBlockPosition = derived(
     "?getBlockPos@CommandPosition@@QEBA?AVBlockPos@@HAEBVCommandOrigin@@AEBVVec3@@@Z",
-    BlockPos,
-    { this: CommandPosition, structureReturn: true },
-    int32_t,
-    CommandOrigin,
-    Vec3,
+    function (this: CommandPosition, version: number, origin: CommandOrigin, offset: Vec3): BlockPos {
+        const pos: Vec3 = (this as any)._getPosition(version, origin, offset);
+        const e = Math.fround(0.001);
+        return BlockPos.create(Math.fround(pos.x + e), Math.fround(pos.y + e), Math.fround(pos.z + e));
+    },
+    () =>
+        procHacker.js(
+            "?getBlockPos@CommandPosition@@QEBA?AVBlockPos@@HAEBVCommandOrigin@@AEBVVec3@@@Z",
+            BlockPos,
+            { this: CommandPosition, structureReturn: true },
+            int32_t,
+            CommandOrigin,
+            Vec3,
+        ),
 );
 
 @nativeClass()
@@ -522,7 +537,18 @@ export class CommandIntegerRange extends NativeClass {
 // BDS only sets it to true when the input starts with `!`, but does not do anything otherwise
 // BDS does not change it to false actively, because it assumed default is false
 // Calling ??0CommandIntegerRange@@QEAA@XZ sets all values to default
-CommandIntegerRange.prototype[NativeType.ctor] = procHacker.js("??0CommandIntegerRange@@QEAA@XZ", CommandIntegerRange, { this: CommandIntegerRange });
+// 1.26 inlines it: ExecuteCommand's allocateCommand (40 0x3d963b0 at +0x2a8, 51 0x3b3a560 at +0x2a8) writes the same
+// three stores as 2024's 0xcba3b0 -- min INT_MIN, max INT_MAX, and the word 0x0100 at +8 (inverted false, inclusive
+// true). docs/findings-scoreboard.md 11.1.
+CommandIntegerRange.prototype[NativeType.ctor] = derived(
+    "??0CommandIntegerRange@@QEAA@XZ",
+    function (this: CommandIntegerRange): void {
+        this.setInt32(-0x80000000, 0);
+        this.setInt32(0x7fffffff, 4);
+        this.setUint16(0x100, 8);
+    },
+    () => procHacker.js("??0CommandIntegerRange@@QEAA@XZ", CommandIntegerRange, { this: CommandIntegerRange }) as unknown as (this: CommandIntegerRange) => void,
+);
 // The 2024 body compares against min and max and then flips the answer when
 // `inverted` is set; the byte after `inverted` chooses inclusive bounds (set)
 // or exclusive ones (clear). bdsx's class stops at `inverted`, so that byte is
@@ -577,6 +603,15 @@ export class CommandMessage extends NativeClass {
     generateMessage(origin: CommandOrigin, maxLength: int32_t): GenerateMessageResult {
         abstract();
     }
+
+    /**
+     * 1.26 adds a bool after the vector (+0x18; generateMessage returns an empty result at once when the vector is
+     * empty and the bool is clear), and every message command's allocateCommand zeroes it with the vector
+     * (docs/findings-scoreboard.md 11.5).
+     */
+    [NativeType.ctor](): void {
+        if (COMMAND_MESSAGE_SIZE > 0x18) this.setUint8(0, 0x18);
+    }
 }
 
 @nativeClass()
@@ -609,7 +644,7 @@ CommandMessage.abstract(
     {
         data: CxxVector.make(CommandMessage.MessageComponent),
     },
-    0x18,
+    COMMAND_MESSAGE_SIZE,
 );
 
 @nativeClass()
@@ -648,6 +683,22 @@ const PARSE_RULE_LABELS = new Map<Type<any>, string>([
     [PlayerCommandSelector, "CommandSelector<Player>"],
     [ActorWildcardCommandSelector, "WildcardCommandSelector<Actor>"],
     [PlayerWildcardCommandSelector, "WildcardCommandSelector<Actor>"],
+    [CommandIntegerRange, "CommandIntegerRange"],
+    [CommandFilePath, "CommandFilePath"],
+    [JsonValue, "Json::Value"],
+    [CommandMessage, "CommandMessage"],
+]);
+
+/**
+ * bdsx's parameter types the engine parses through an enum (2024's "type id pointer" types): the parameter carries the
+ * type id the engine gave that enum, and registerOverloadInternal turns it into an enum parameter whose parse is the
+ * enum's (engine/command.ts, docs/findings-scoreboard.md 11.2). The enum's parse writes the storage: parseEnum<bool>
+ * (40 0x3d2ed0, 51 0x126bd00) stores one byte, `getEnumData(token) != 0`.
+ */
+const ENUM_BACKED_TYPES = new Map<Type<any>, string>([
+    [bool_t, "Boolean"],
+    // Item and EntityType share one parse (40 0x3d2f60, 51 0x430950): the 8-byte enum data of the token's value
+    [CommandItem, "Item"],
 ]);
 
 // It is a special enum that cannot be used in `command.enum`, it is just a uint8_t.
@@ -1547,7 +1598,19 @@ export class Command extends NativeClass {
         options: CommandParameterOption = CommandParameterOption.None,
     ): CommandParameterData {
         const param = CommandParameterData.construct();
-        param.tid.id = type_id(CommandRegistry, paramType).id;
+        const enumBacked = ENUM_BACKED_TYPES.get(paramType);
+        let enumBackedId: number | null = null;
+        if (enumBacked !== undefined) {
+            const registry = (require("../launcher") as typeof import("../launcher")).bedrockServer.commandRegistry;
+            enumBackedId = commandEnumTypeId(registry, enumBacked);
+            if (enumBackedId === null) {
+                param.destruct();
+                throw Error(`${paramType.name}: the engine has no '${enumBacked}' enum on this BDS build`);
+            }
+            param.tid.id = enumBackedId;
+        } else {
+            param.tid.id = type_id(CommandRegistry, paramType).id;
+        }
         param.enumNameOrPostfix = null;
         if (paramType instanceof commandparser.CommandMappedValue && paramType.nameUtf8 !== undefined) {
             // a soft enum is a string with autocompletions, for example, objectives in /scoreboard
@@ -1565,12 +1628,28 @@ export class Command extends NativeClass {
         }
         // 1.26: +8 is the engine's ParseRuleFor<T>::instance, found by its parse function (engine/command.ts). An enum
         // parameter needs none: registerOverloadInternal gives it the enum's symbol and parse function.
-        param.parseRule = commandParseRuleFor(PARSE_RULE_LABELS.get(paramType)) ?? commandParseRule(commandParser.get(paramType));
-        if (param.parseRule === null && type !== CommandParameterDataType.ENUM) {
-            param.destruct();
-            throw Error(`${paramType.name}: no command parse rule for this type on this BDS build (bdsx/bds/engine/command.ts)`);
-        }
         param.parseOverride = null;
+        if (enumBackedId !== null) {
+            param.parseRule = commandEnumBackedRule();
+        } else {
+            param.parseRule = commandParseRuleFor(PARSE_RULE_LABELS.get(paramType)) ?? commandParseRule(commandParser.get(paramType));
+            if (param.parseRule === null && type !== CommandParameterDataType.ENUM) {
+                param.destruct();
+                throw Error(`${paramType.name}: no command parse rule for this type on this BDS build (bdsx/bds/engine/command.ts)`);
+            }
+        }
+        if (type === CommandParameterDataType.ENUM && paramType instanceof commandparser.CommandMappedValue) {
+            // registerOverloadInternal copies the enum's parse into the override unless the parameter's type id equals
+            // type_id<std::string> (the id every addEnumValues enum carries); set it here so the parameter never
+            // depends on bdsx's id for the enum missing that one value
+            const registry = (require("../launcher") as typeof import("../launcher")).bedrockServer.commandRegistry;
+            const e = findEnum(registry, paramType.name);
+            if (e === null) {
+                param.destruct();
+                throw Error(`${paramType.name}: the command enum is not registered`);
+            }
+            param.parseOverride = e.getPointer(0x28);
+        }
         param.name = name;
         param.type = type;
 
@@ -1904,6 +1983,9 @@ class CommandBlockEnum extends CommandEnum<Block> {
         super("Block");
     }
     mapValue(value: commandenum.EnumResult): Block {
+        // the parameter holds a CommandBlockName: HashedString::computeHash of the full block name (the "Block" enum's
+        // data, docs/findings-scoreboard.md 11.6). Turning it into a Block needs BlockTypeRegistry::lookupByName, which
+        // has no address on BDS 1.26 yet, so Block.create throws there.
         return Block.create(value.token)!;
     }
 }
@@ -1916,6 +1998,7 @@ export namespace Command {
     export const MobEffect = constptr(MobEffectClass);
     export const ActorDefinitionIdentifier = constptr(ActorDefinitionIdentifierClass);
 }
+ENUM_BACKED_TYPES.set(Command.ActorDefinitionIdentifier, "EntityType");
 
 /** @deprecated use Command.Block */
 export const CommandBlock = Command.Block;

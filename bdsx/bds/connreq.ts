@@ -5,7 +5,8 @@ import { makefunc } from "../makefunc";
 import { mce } from "../mce";
 import { AbstractClass, nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, int32_t, NativeType, uint8_t, void_t } from "../nativetype";
-import { proc } from "./symbols";
+import { jsonArrayElements, jsonObjectGet, jsonObjectMembers, jsonSize } from "./engine/json";
+import { derived, proc } from "./symbols";
 
 export enum JsonValueType {
     Null = 0,
@@ -98,10 +99,7 @@ export class JsonValue extends NativeClass {
     }
 
     getMemberNames(): string[] {
-        const members: CxxVector<CxxString> = Json$Value$GetMemberNames.call(this);
-        const array = members.toArray();
-        members.destruct();
-        return array;
+        return Json$Value$GetMemberNames(this);
     }
 
     setValue(value: unknown): void {
@@ -234,23 +232,67 @@ const Json$Value$CtorWithString = makefunc.js(
     JsonValue,
     CxxString,
 );
-const Json$Value$GetByInt = makefunc.js(proc["??AValue@Json@@QEAAAEAV01@H@Z"], JsonValue, null, JsonValue, int32_t);
-const Json$Value$GetByString = makefunc.js(proc["??AValue@Json@@QEAAAEAV01@PEBD@Z"], JsonValue, null, JsonValue, makefunc.Utf8);
-const Json$Value$GetMemberNames = makefunc.js(
-    proc[
-        "?getMemberNames@Value@Json@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ"
-    ],
-    CxxVector.make(CxxString),
-    { this: JsonValue, structureReturn: true },
+// 1.26 (docs/findings-scoreboard.md 11.3): neither build has an address for operator[](int), operator[](const char*),
+// getMemberNames or size, so bdsx reads the parsed value by its layout (engine/json.ts). These are read-only: a member
+// that is not there is not inserted, as the 2024 non-const operator[] did.
+const Json$Value$GetByInt = derived(
+    "??AValue@Json@@QEAAAEAV01@H@Z",
+    (self: JsonValue, index: number): JsonValue => {
+        const e = jsonArrayElements(self)[index];
+        if (e === undefined) throw RangeError(`Json::Value: no element ${index} (inserting is not available on BDS 1.26)`);
+        return e.as(JsonValue);
+    },
+    () => makefunc.js(proc["??AValue@Json@@QEAAAEAV01@H@Z"], JsonValue, null, JsonValue, int32_t),
+);
+const Json$Value$GetByString = derived(
+    "??AValue@Json@@QEAAAEAV01@PEBD@Z",
+    (self: JsonValue, key: string): JsonValue => {
+        const v = jsonObjectGet(self, key);
+        if (v === null) throw Error(`Json::Value: no member '${key}' (inserting is not available on BDS 1.26)`);
+        return v.as(JsonValue);
+    },
+    () => makefunc.js(proc["??AValue@Json@@QEAAAEAV01@PEBD@Z"], JsonValue, null, JsonValue, makefunc.Utf8),
+);
+const Json$Value$GetMemberNames = derived(
+    "?getMemberNames@Value@Json@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
+    (self: JsonValue): string[] => jsonObjectMembers(self).map(([k]) => k),
+    () => {
+        const native = makefunc.js(
+            proc[
+                "?getMemberNames@Value@Json@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ"
+            ],
+            CxxVector.make(CxxString),
+            { this: JsonValue, structureReturn: true },
+        );
+        return (self: JsonValue): string[] => {
+            const members: CxxVector<CxxString> = native.call(self);
+            const array = members.toArray();
+            members.destruct();
+            return array;
+        };
+    },
 );
 const Json$Value$_resolveReference = makefunc.js(proc["?_resolveReference@Value@Json@@AEAAAEAV12@PEBD@Z"], JsonValue, null, JsonValue, makefunc.Utf8);
-JsonValue.prototype.isMember = makefunc.js(
-    proc["?isMember@Value@Json@@QEBA_NAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z"],
-    bool_t,
-    { this: JsonValue },
-    CxxString,
+JsonValue.prototype.isMember = derived(
+    "?isMember@Value@Json@@QEBA_NAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+    function (this: JsonValue, name: string): boolean {
+        return jsonObjectGet(this, name) !== null;
+    },
+    () =>
+        makefunc.js(
+            proc["?isMember@Value@Json@@QEBA_NAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z"],
+            bool_t,
+            { this: JsonValue },
+            CxxString,
+        ),
 );
-JsonValue.prototype.size = makefunc.js(proc["?size@Value@Json@@QEBAIXZ"], int32_t, { this: JsonValue });
+JsonValue.prototype.size = derived(
+    "?size@Value@Json@@QEBAIXZ",
+    function (this: JsonValue): number {
+        return jsonSize(this);
+    },
+    () => makefunc.js(proc["?size@Value@Json@@QEBAIXZ"], int32_t, { this: JsonValue }),
+);
 JsonValue.prototype[NativeType.dtor] = makefunc.js(proc["??1Value@Json@@QEAA@XZ"], void_t, { this: JsonValue });
 
 @nativeClass(null)
