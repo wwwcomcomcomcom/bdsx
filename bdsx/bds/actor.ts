@@ -237,6 +237,7 @@ export class ActorDefinitionIdentifier extends NativeClass {
     static constructWith(fullName: EntityId): ActorDefinitionIdentifier;
     static constructWith(fullName: string): ActorDefinitionIdentifier;
     static constructWith(type: ActorType): ActorDefinitionIdentifier;
+    static constructWith(type: EntityId | ActorType): ActorDefinitionIdentifier;
     static constructWith(type: string | ActorType): ActorDefinitionIdentifier {
         abstract();
     }
@@ -635,16 +636,17 @@ export class Actor extends AbstractClass {
     /**
      * Summon a new entity
      * @example Actor.summonAt(player.getRegion(), player.getPosition(), ActorType.Pig)
+     * @example Actor.summonAt(player.getRegion(), player.getPosition(), "minecraft:pig")
      * @example Actor.summonAt(player.getRegion(), player.getPosition(), ActorType.Pig, player)
      * @example Actor.summonAt(player.getRegion(), player.getPosition(), ActorType.Pig, -1, player)
      * */
-    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType, summoner?: Actor): Actor;
-    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType, id?: ActorUniqueID, summoner?: Actor): Actor;
-    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType, id?: int64_as_float_t, summoner?: Actor): Actor;
+    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType | EntityId, summoner?: Actor): Actor;
+    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType | EntityId, id?: ActorUniqueID, summoner?: Actor): Actor;
+    static summonAt(region: BlockSource, pos: Vec3, type: ActorDefinitionIdentifier | ActorType | EntityId, id?: int64_as_float_t, summoner?: Actor): Actor;
     static summonAt(
         region: BlockSource,
         pos: Vec3,
-        type: ActorDefinitionIdentifier | ActorType,
+        type: ActorDefinitionIdentifier | ActorType | EntityId,
         id?: ActorUniqueID | int64_as_float_t | Actor,
         summoner?: Actor,
     ): Actor {

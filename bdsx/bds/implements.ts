@@ -22,6 +22,7 @@ import { pistonAttachedBlocks } from "./engine/piston";
 import { TickingAreaList } from "./tickingarea";
 import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import { teleportActor } from "./engine/teleport";
+import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -807,7 +808,7 @@ Actor.all = function (): IterableIterator<Actor> {
 Actor.summonAt = function (
     region: BlockSource,
     pos: Vec3,
-    type: ActorDefinitionIdentifier | ActorType,
+    type: ActorDefinitionIdentifier | ActorType | EntityId,
     id: ActorUniqueID | int64_as_float_t | Actor = -1,
     summoner: Actor | null = null,
 ): Actor {
@@ -2264,27 +2265,12 @@ WeakEntityRef.prototype.tryUnwrapActor = function (getRemoved = false) {
     return this.tryUnwrap(Actor, getRemoved);
 };
 
-const ActorDefinitionIdentifier$ActorDefinitionIdentifier$ActorType = procHacker.js(
-    "??0ActorDefinitionIdentifier@@QEAA@W4ActorType@@@Z",
-    void_t,
-    null,
-    ActorDefinitionIdentifier,
-    int32_t,
-);
-const ActorDefinitionIdentifier$ActorDefinitionIdentifier$CxxString = procHacker.js(
-    "??0ActorDefinitionIdentifier@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    null,
-    ActorDefinitionIdentifier,
-    CxxString,
-);
+// 1.26: the string constructor is out of line with 2024's body; the ActorType one is gone and only an
+// (ActorType, std::string initEvent) constructor is left. engine/actordefinition.ts, docs/findings-layouts.md
+// "ActorDefinitionIdentifier and spawnEntityAt"
 ActorDefinitionIdentifier.constructWith = function (type: string | number): ActorDefinitionIdentifier {
     const identifier = new ActorDefinitionIdentifier(true);
-    if (typeof type === "number") {
-        ActorDefinitionIdentifier$ActorDefinitionIdentifier$ActorType(identifier, type);
-    } else {
-        ActorDefinitionIdentifier$ActorDefinitionIdentifier$CxxString(identifier, type);
-    }
+    constructActorDefinitionIdentifier(identifier, type);
     return identifier;
 };
 
