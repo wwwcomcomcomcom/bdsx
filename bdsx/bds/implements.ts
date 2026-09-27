@@ -5001,8 +5001,11 @@ let emptyInventoryActions: CxxVector<InventoryAction> | null = null;
             InventorySource,
         ),
 );
+// 1.26 keeps 2024's getItemInstance (0x1bd3920) out of line (40 0x258c920 / 51 0x2a67090, docs/findings-nbt.md section 29):
+// the group in rcx, the sret in rdx, default-construct it, then ItemStack(Item&, 1, aux, tag) from the registry's item for
+// the u16 id at +0 and assign. Count is always 1; an id no item has gives the null stack.
 InventoryTransactionItemGroup.prototype.getItemStack = procHacker.js("?getItemInstance@InventoryTransactionItemGroup@@QEBA?AVItemStack@@XZ", ItemStack, {
-    this: InventoryTransaction,
+    this: InventoryTransactionItemGroup,
     structureReturn: true,
 });
 

@@ -877,7 +877,7 @@ export class InventoryTransactionItemGroup extends AbstractClass {
     @nativeField(bool_t)
     overflow: bool_t;
 
-    /** When the item is dropped this is air, it should be the item when it is picked up */
+    /** A new stack of the group's item, aux and user data, always count 1 (the null stack for an unknown id). The caller destructs it. */
     getItemStack(): ItemStack {
         abstract();
     }
