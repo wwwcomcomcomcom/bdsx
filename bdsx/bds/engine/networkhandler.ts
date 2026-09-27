@@ -84,3 +84,27 @@ export function setMaxNumPlayersOwn(snh: StaticPointer, n: number): number {
     }
     return result;
 }
+
+/**
+ * The NetworkIdentifier of every connection the NetworkSystem holds (docs/findings-packets.md "disconnectAll").
+ *
+ * 2024's ServerInstance::disconnectAllClientsWithMessage (1.21.3.01 0xc92790) walked NetworkSystem::getConnections()
+ * -- a vector<unique_ptr<NetworkConnection>> -- and disconnected each connection's id with the message. 1.26 has no
+ * copy on either build; the vector is NetworkSystem::connections_ (+0xa0, the inlined getPeerForUser) and the id is
+ * the connection's first member. The pointers returned here point into the connections, so a caller copies them
+ * before disconnecting anyone.
+ */
+const NETWORK_SYSTEM_CONNECTIONS = engineLayout("NetworkSystem", "connections", 0x40);
+const NETWORK_CONNECTION_ID = engineLayout("NetworkConnection", "id", 0);
+export function networkConnectionIds(system: StaticPointer): StaticPointer[] {
+    const begin = system.getNullablePointer(NETWORK_SYSTEM_CONNECTIONS);
+    const end = system.getNullablePointer(NETWORK_SYSTEM_CONNECTIONS + 8);
+    if (begin === null || end === null) return [];
+    const out: StaticPointer[] = [];
+    const count = end.subptr(begin) / 8;
+    for (let i = 0; i < count; i++) {
+        const connection = begin.getNullablePointer(i * 8);
+        if (connection !== null) out.push(connection.add(NETWORK_CONNECTION_ID));
+    }
+    return out;
+}

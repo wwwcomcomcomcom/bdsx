@@ -3,7 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
-import { copyLevelServerNetworkHandler, serverMaxNumPlayers, setMaxNumPlayersOwn } from "./engine/networkhandler";
+import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
@@ -3778,11 +3778,26 @@ Object.defineProperties(ServerInstance.prototype, {
         },
     },
 });
-(ServerInstance.prototype as any)._disconnectAllClients = procHacker.js(
+// 1.26 has no copy of disconnectAllClientsWithMessage: 2024's loop (0xc92790) over the NetworkSystem's connections,
+// each disconnected with the message and DisconnectFailReason 3, through the shipped per-client call
+// (engine/networkhandler.ts networkConnectionIds, docs/findings-packets.md "disconnectAll")
+(ServerInstance.prototype as any)._disconnectAllClients = derived(
     "?disconnectAllClientsWithMessage@ServerInstance@@QEAAXV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: ServerInstance },
-    CxxString,
+    function (this: ServerInstance, message: string): void {
+        // copy every id first: a disconnect may change the vector the pointers point into
+        const ids = networkConnectionIds(bedrockServer.networkSystem as unknown as StaticPointer).map(ptr => NetworkIdentifier.from(ptr)!);
+        const handler = bedrockServer.serverNetworkHandler;
+        for (const id of ids) {
+            ServerNetworkHandler$disconnectClientWithMessage(handler, id, /** subClientId */ 0, /** UnrecoverableError, as 2024 */ 3, message, undefined);
+        }
+    },
+    () =>
+        procHacker.js(
+            "?disconnectAllClientsWithMessage@ServerInstance@@QEAAXV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            void_t,
+            { this: ServerInstance },
+            CxxString,
+        ),
 );
 
 ServerInstance.prototype.createDimension = function (id: DimensionId): Dimension {
