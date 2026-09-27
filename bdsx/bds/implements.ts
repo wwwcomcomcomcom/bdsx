@@ -19,6 +19,7 @@ import {
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
+import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -296,7 +297,12 @@ namespace CommandUtils {
 
 namespace OnFireSystem {
     export const setOnFire = procHacker.js("?setOnFire@OnFireSystem@@SAXAEAVActor@@H@Z", void_t, null, Actor, int32_t);
-    export const setOnFireNoEffects = procHacker.js("?setOnFireNoEffects@OnFireSystem@@SAXAEAVActor@@H@Z", void_t, null, Actor, int32_t);
+    // 1.26 inlined setOnFireNoEffects into ScriptActor::setOnFire (engine/onfire.ts, docs/findings-layouts.md "OnFireSystem")
+    export const setOnFireNoEffects = derived(
+        "?setOnFireNoEffects@OnFireSystem@@SAXAEAVActor@@H@Z",
+        (actor: Actor, seconds: number): void => setOnFireNoEffectsOwn(actor, seconds),
+        () => procHacker.js("?setOnFireNoEffects@OnFireSystem@@SAXAEAVActor@@H@Z", void_t, null, Actor, int32_t),
+    );
 }
 
 // level.ts
