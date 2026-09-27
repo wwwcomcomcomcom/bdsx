@@ -549,10 +549,6 @@ export class Player extends Mob implements HasStorage {
         abstract();
     }
 
-    hasDimension(): boolean {
-        abstract();
-    }
-
     getAbilities(): LayeredAbilities {
         abstract();
     }

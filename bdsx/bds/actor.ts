@@ -1514,6 +1514,11 @@ export class Actor extends AbstractClass {
         abstract();
     }
 
+    /** whether the actor's WeakRef<Dimension> still locks: false before the Level adds it */
+    hasDimension(): boolean {
+        abstract();
+    }
+
     isInWaterOrRain(): boolean {
         abstract();
     }

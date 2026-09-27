@@ -1504,6 +1504,16 @@ function actorHasDimension(actor: Actor): boolean {
     if (rep === null || rep.getInt32(8) === 0) return false;
     return sp.getNullablePointer(off) !== null;
 }
+// hasDimension's false side was seen 2026-09-27: at the entry of ILevel::addEntity (slot 43) the actor is built and its
+// WeakRef<Dimension> is empty for about half of the calls, and after the add it locks for all of them -- on both builds
+// (docs/findings-layouts.md "hasDimension: both sides").
+Actor.prototype.hasDimension = derived(
+    "?hasDimension@Actor@@QEBA_NXZ",
+    function hasDimension(this: Actor): boolean {
+        return actorHasDimension(this);
+    },
+    () => procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
+);
 Actor.prototype.isInWorld = derived(
     "?isInWorld@Actor@@QEBA_NXZ",
     function isInWorld(this: Actor): boolean {
@@ -2956,8 +2966,6 @@ Player.prototype.isInRaid = derived(
     },
     () => procHacker.js("?isInRaid@Player@@QEBA_NXZ", bool_t, { this: Player }),
 );
-// `?hasDimension@Actor@@` has no address on 1.26 and is deliberately not derived yet: its layout candidate has only
-// ever been seen true (docs/findings-layouts.md, "Candidates held back"). isInWorld below uses the same dimension test.
 // 2024's isUsingItem is `!itemInUse.isNull()`; 1.26 inlines it everywhere. The item in use is the ItemStack at
 // layouts.Player.itemInUse (+1840 on both builds): the engine fills it while a bow is drawn, in step with the USINGITEM
 // actor flag, and leaves it null otherwise (docs/findings-layouts.md "Candidates held back", sbow40/sbow51)
@@ -2970,7 +2978,6 @@ Player.prototype.isUsingItem = derived(
     },
     () => procHacker.js("?isUsingItem@Player@@QEBA_NXZ", bool_t, { this: Player }),
 );
-Player.prototype.hasDimension = procHacker.js("?hasDimension@Actor@@QEBA_NXZ", bool_t, { this: Player });
 Player.prototype.getAbilities = procHacker.js("?getAbilities@Player@@QEAAAEAVLayeredAbilities@@XZ", LayeredAbilities, { this: Player });
 Player.prototype.getSelectedItem = procHacker.js("?getSelectedItem@Player@@QEBAAEBVItemStack@@XZ", ItemStack, { this: Player });
 Player.prototype.getName = procHacker.js("?getName@Player@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: Player });
