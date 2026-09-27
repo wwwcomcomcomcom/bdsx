@@ -32,6 +32,7 @@ import { MobEffect, MobEffectIds, MobEffectInstance } from "./effects";
 import { HashedString } from "./hashedstring";
 import type { ArmorSlot, ItemStack, SimpleContainer } from "./inventory";
 import type { Level } from "./level";
+import { engineLayout } from "./engine/deps";
 import { CompoundTag, NBT } from "./nbt";
 import type { NetworkIdentifier } from "./networkidentifier";
 import { Packet } from "./packet";
@@ -290,7 +291,9 @@ export class ActorDamageSource extends NativeClass {
     }
 }
 
-@nativeClass(0x30)
+// 1.26 sizes and offsets from the build's layouts (docs/findings-audit.md "Audit follow-ups"): the base source is
+// 0x30 bytes, the Block* follows it; the fallbacks are 2024's.
+@nativeClass(engineLayout("ActorDamageByBlockSource", "size", 0x30))
 export class ActorDamageByBlockSource extends ActorDamageSource {
     /**
      * At least Magma, Stalactite, and Stalagmite are verified that used in BDS
@@ -301,11 +304,11 @@ export class ActorDamageByBlockSource extends ActorDamageSource {
         abstract();
     }
 
-    @nativeField(Block.ref())
+    @nativeField(Block.ref(), engineLayout("ActorDamageByBlockSource", "block", 0x10))
     block: Block;
 }
 
-@nativeClass(0x50)
+@nativeClass(engineLayout("ActorDamageByActorSource", "size", 0x50))
 export class ActorDamageByActorSource extends ActorDamageSource {
     static constructWith(damagingEntity: Actor, cause?: ActorDamageCause): ActorDamageByActorSource;
     static constructWith(this: never, cause: ActorDamageCause): ActorDamageSource;
@@ -314,7 +317,7 @@ export class ActorDamageByActorSource extends ActorDamageSource {
     }
 }
 
-@nativeClass(0x80)
+@nativeClass(engineLayout("ActorDamageByChildActorSource", "size", 0x80))
 export class ActorDamageByChildActorSource extends ActorDamageByActorSource {
     static constructWith(childEntity: Actor, damagingEntity: Actor, cause?: ActorDamageCause): ActorDamageByChildActorSource;
     static constructWith(this: never, cause: ActorDamageCause): ActorDamageSource;
@@ -329,7 +332,9 @@ export class ActorDamageByChildActorSource extends ActorDamageByActorSource {
 
     getChildEntityUniqueId(): ActorUniqueID {
         // not official name, there is not a method for child entity in BDS
-        return this.getBin64(0x58); // accessed in ActorDamageByChildActorSource::ActorDamageByChildActorSource
+        // the constructor's first actor, written at +0x78 on 1.26 (2024: +0x58); BDS's own getter for it is the
+        // child table's slot 17, getDamagingEntityUniqueID
+        return this.getBin64(engineLayout("ActorDamageByChildActorSource", "childId", 0x58));
     }
 }
 

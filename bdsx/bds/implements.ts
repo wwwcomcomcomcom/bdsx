@@ -1640,10 +1640,28 @@ Actor.prototype.isInClouds = derived(
     () => procHacker.js("?isInClouds@Actor@@QEBA_NXZ", bool_t, { this: Actor }),
 );
 Actor.prototype.getEntityData = procHacker.js("?getEntityData@Actor@@QEBAAEBVSynchedActorDataEntityWrapper@@XZ", SynchedActorDataEntityWrapper, { this: Actor });
-Actor.prototype.getOwner = procHacker.js("?getOwner@Actor@@QEBAPEAVMob@@XZ", Mob, { this: Actor });
+// 1.26 (docs/findings-audit.md "Audit follow-ups"): the address propagation gave ?getOwner@Actor@@ is getOwnerId (the
+// owner id into an rdx return slot). 2024's getOwner was getOwnerId followed by Level::getMob; bdsx does the second half.
+const Actor$getOwnerId = procHacker.js("?getOwnerId@Actor@@QEBA?BUActorUniqueID@@XZ", ActorUniqueID, { this: Actor, structureReturn: true });
+Actor.prototype.getOwner = derived(
+    "?getOwner@Actor@@QEBAPEAVMob@@XZ",
+    function (this: Actor): Mob | null {
+        const owner = Actor.fromUniqueIdBin(Actor$getOwnerId.call(this), false);
+        return owner instanceof Mob ? owner : null;
+    },
+    () => procHacker.js("?getOwner@Actor@@QEBAPEAVMob@@XZ", Mob, { this: Actor }),
+);
 Actor.prototype.setOwner = procHacker.js("?setOwner@Actor@@UEAAXUActorUniqueID@@@Z", void_t, { this: Actor }, ActorUniqueID);
 Actor.prototype.getVariant = procHacker.js("?getVariant@Actor@@QEBAHXZ", int32_t, { this: Actor });
-Actor.prototype.setVariant = procHacker.js("?setVariant@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t);
+// 2024's setVariant is SynchedActorData::set<int>(Variant = 2, value); 1.26 has no out-of-line copy (the propagation
+// address was another function, docs/findings-audit.md "Audit follow-ups"), and bdsx carries set<int> itself.
+Actor.prototype.setVariant = derived(
+    "?setVariant@Actor@@QEAAXH@Z",
+    function (this: Actor, variant: number): void {
+        this.getEntityData().setInt(2 /* ActorDataIDs.Variant */, variant);
+    },
+    () => procHacker.js("?setVariant@Actor@@QEAAXH@Z", void_t, { this: Actor }, int32_t),
+);
 Actor.prototype.setTarget = procHacker.jsv("??_7Actor@@6B@", "?setTarget@Actor@@UEAAXPEAV1@@Z", void_t, { this: Actor }, Actor);
 Actor.prototype.playAnimation = function (animation, options = {}) {
     const pk = AnimateEntityPacket.allocate();
