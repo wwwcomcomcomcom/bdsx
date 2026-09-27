@@ -14,6 +14,7 @@ import {
     itemCanDestroyInCreative,
     itemCommandNames,
     itemStackIsBlockOwn,
+    itemStackIsValidAuxValue,
     REFLECTION_CTX_OF,
 } from "./engine/item";
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
@@ -2974,7 +2975,17 @@ Player.prototype.isFlying = derived(
     },
     () => procHacker.js("?isFlying@Player@@QEBA_NXZ", bool_t, { this: Player }),
 );
-Player.prototype.isHiddenFrom = procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
+// 1.26's Player::isHiddenFrom takes the ActorType, not the Mob (docs/findings-audit.md "The next audit batch"): its
+// decoration is unknowable, so it ships under a bdsx: key and bdsx passes the mob's type.
+Player.prototype.isHiddenFrom =
+    "bdsx:Player::isHiddenFrom" in proc
+        ? (() => {
+              const isHiddenFrom = procHacker.js("bdsx:Player::isHiddenFrom", bool_t, { this: Player }, int32_t);
+              return function (this: Player, source: Mob): boolean {
+                  return isHiddenFrom.call(this, source.getEntityTypeId());
+              };
+          })()
+        : procHacker.js("?isHiddenFrom@Player@@QEBA_NAEAVMob@@@Z", bool_t, { this: Player }, Mob);
 // 1.26.51.1 inlines isInRaid into its only caller; bdsx runs 2024's steps over the engine layer (engine/village.ts)
 Player.prototype.isInRaid = derived(
     "?isInRaid@Player@@QEBA_NXZ",
@@ -3986,7 +3997,15 @@ ItemStackBase.prototype.getAuxValue = derived(
     },
     () => procHacker.js("?getAuxValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isValidAuxValue = procHacker.js("?isValidAuxValue@ItemStackBase@@QEBA_NH@Z", bool_t, { this: ItemStackBase });
+// docs/findings-audit.md "The next audit batch": 1.26 keeps no out-of-line isValidAuxValue (the propagation address was
+// getMaxStackSize); bdsx dispatches the Item's own slot (engine/item.ts). 2024 bdsx bound it without its int argument.
+ItemStackBase.prototype.isValidAuxValue = derived(
+    "?isValidAuxValue@ItemStackBase@@QEBA_NH@Z",
+    function (this: ItemStackBase, aux: int32_t): boolean {
+        return itemStackIsValidAuxValue(this as any as StaticPointer, aux);
+    },
+    () => procHacker.js("?isValidAuxValue@ItemStackBase@@QEBA_NH@Z", bool_t, { this: ItemStackBase }, int32_t),
+);
 // next-steps Q1-B-4, docs/findings-containers.md 10 ("Q1-B-4: two addresses the audit disproved"):
 // the propagation candidates for isDamageableItem/getMaxStackSize (40 0xed330/0x1bc1d60) were real
 // ItemStackBase members but the wrong ones -- no 1.26 out-of-line copy of either 2024 shape

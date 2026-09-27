@@ -14,7 +14,7 @@
  */
 import { NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
-import { bool_t } from "../../nativetype";
+import { bool_t, int32_t } from "../../nativetype";
 import { engineLayout } from "./deps";
 
 export const ITEM_BLOCK_TYPE = engineLayout("Item", "blockType", 0x178);
@@ -116,6 +116,28 @@ export function itemCanDestroyInCreative(item: StaticPointer): boolean {
         canDestroyCalls.set(key, call);
     }
     return call(item);
+}
+
+/**
+ * ItemStackBase::isValidAuxValue(aux) (docs/findings-audit.md "The next audit batch"): 2024's body (0x1b657a0) is
+ * `item_ ? item->isValidAuxValue(aux) : false`, a tail call through the Item's vftable +0x1c0 (slot 56). 1.26 keeps no
+ * out-of-line copy on either build; the slot is 67 on both (Endstone item.h, and the overrides the walk named there).
+ */
+export const ITEM_IS_VALID_AUX_VALUE_SLOT = engineLayout("Item", "isValidAuxValueSlot", 56);
+const auxCalls = new Map<string, (item: VoidPointer, aux: number) => boolean>();
+export function itemStackIsValidAuxValue(stack: StaticPointer, aux: number): boolean {
+    const ref = stack.getPointer(8);
+    if (ref.isNull()) return false;
+    const item = ref.getPointer(0);
+    if (item.isNull()) return false;
+    const fn = item.getPointer(0).getPointer(ITEM_IS_VALID_AUX_VALUE_SLOT * 8);
+    const key = fn.toString();
+    let call = auxCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, bool_t, null, VoidPointer, int32_t);
+        auxCalls.set(key, call);
+    }
+    return call(item, aux);
 }
 
 /**
