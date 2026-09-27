@@ -4960,8 +4960,13 @@ NetworkItemStackDescriptor.prototype[NativeType.dtor] = derived(
     })(),
     () => procHacker.js("??1NetworkItemStackDescriptor@@UEAA@XZ", void_t, { this: NetworkItemStackDescriptor }),
 );
+// The engine's copy constructor, out of line on both builds (docs/findings-nbt.md section 27; 40 0x2431a0 / 51 0x2dbb80):
+// 2024's ??0NetworkItemStackDescriptor@@QEAA@AEBV0@@Z (0x551160) with ItemDescriptor's copy inlined. impl_ is cloned
+// through its slot 0, then the count, include_net_ids, the net-id variant, the runtime id and the user-data string are
+// copied. Upstream bound ctor_copy to the conversion from ItemStackDescriptor instead, which in 2024 (0x1b4a1e0) kept
+// only the descriptor and count and reset the rest: not a copy. 1.26 has no known address for that conversion.
 NetworkItemStackDescriptor.prototype[NativeType.ctor_copy] = procHacker.js(
-    "??0NetworkItemStackDescriptor@@QEAA@AEBVItemStackDescriptor@@@Z",
+    "??0NetworkItemStackDescriptor@@QEAA@AEBV0@@Z",
     void_t,
     { this: NetworkItemStackDescriptor },
     NetworkItemStackDescriptor,
