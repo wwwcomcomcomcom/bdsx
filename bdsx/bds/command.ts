@@ -36,7 +36,7 @@ import { Singleton } from "../singleton";
 import { bdsxEqualsAssert } from "../warning";
 import { Actor, ActorDefinitionIdentifier } from "./actor";
 import { Block } from "./block";
-import { BlockPos, Vec3 } from "./blockpos";
+import { BlockPos, RelativeFloat, Vec3 } from "./blockpos";
 import { CommandSymbols } from "./cmdsymbolloader";
 import { CommandName } from "./commandname";
 import { CommandOrigin } from "./commandorigin";
@@ -47,7 +47,16 @@ import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
 import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
-import { commandAllocVftable, commandParseRule } from "./engine/command";
+import {
+    COMMAND_OUTPUT_SUCCESS_COUNT,
+    commandAllocVftable,
+    commandOutputAddMessage,
+    commandOutputError,
+    commandOutputSuccess,
+    commandParseRule,
+    commandParseRuleFor,
+    commandSelectorConstruct,
+} from "./engine/command";
 import { updateSoftEnumOwn } from "./engine/softenum";
 import { derived, proc, procConst } from "./symbols";
 import { HasTypeId, type_id, typeid_t } from "./typeid";
@@ -386,8 +395,14 @@ export class CommandSelectorBase<TARGET extends Actor = Actor> extends AbstractC
     }
 }
 
-/** @param args_1 forcePlayer */
-const CommandSelectorBaseCtor = procHacker.js("??0CommandSelectorBase@@IEAA@_N@Z", void_t, null, CommandSelectorBase, bool_t);
+/** @param args_1 forcePlayer. 1.26 inlines it into every allocateCommand<T> (engine/command.ts) */
+const CommandSelectorBaseCtor = derived<(selector: CommandSelectorBase, forcePlayer: boolean) => void>(
+    "??0CommandSelectorBase@@IEAA@_N@Z",
+    function (selector: CommandSelectorBase, forcePlayer: boolean): void {
+        commandSelectorConstruct(selector as any as StaticPointer, forcePlayer);
+    },
+    () => procHacker.js("??0CommandSelectorBase@@IEAA@_N@Z", void_t, null, CommandSelectorBase, bool_t) as any,
+);
 CommandSelectorBase.prototype[NativeType.dtor] = procHacker.js("??1CommandSelectorBase@@QEAA@XZ", void_t, { this: CommandSelectorBase });
 (CommandSelectorBase.prototype as any)._newResults = procHacker.js(
     "?newResults@CommandSelectorBase@@IEBA?AV?$shared_ptr@V?$vector@PEAVActor@@V?$allocator@PEAVActor@@@std@@@std@@@std@@AEBVCommandOrigin@@@Z",
@@ -614,6 +629,26 @@ export class CommandWildcardInt extends NativeStruct {
     @nativeField(int32_t)
     value: int32_t;
 }
+
+/**
+ * bdsx's parameter types -> the label of the engine's ParseRuleFor<T>::instance (engine/command.ts). A type not here
+ * falls back to matching its parse<T> address against the rules' parse functions (a CommandMappedValue that parses as
+ * a string, like a soft enum). 2024 parsed PlayerWildcardCommandSelector with the Actor wildcard parser, and so does this.
+ */
+const PARSE_RULE_LABELS = new Map<Type<any>, string>([
+    [int32_t, "int"],
+    [CxxString, "std::string"],
+    [float32_t, "float"],
+    [RelativeFloat, "RelativeFloat"],
+    [CommandWildcardInt, "CommandWildcardInt"],
+    [CommandPosition, "CommandPosition"],
+    [CommandPositionFloat, "CommandPositionFloat"],
+    [CommandRawText, "CommandRawText"],
+    [ActorCommandSelector, "CommandSelector<Actor>"],
+    [PlayerCommandSelector, "CommandSelector<Player>"],
+    [ActorWildcardCommandSelector, "WildcardCommandSelector<Actor>"],
+    [PlayerWildcardCommandSelector, "WildcardCommandSelector<Actor>"],
+]);
 
 // It is a special enum that cannot be used in `command.enum`, it is just a uint8_t.
 // However, it might be confusing with only numbers, so I tried to create some methods for it.
@@ -1530,7 +1565,7 @@ export class Command extends NativeClass {
         }
         // 1.26: +8 is the engine's ParseRuleFor<T>::instance, found by its parse function (engine/command.ts). An enum
         // parameter needs none: registerOverloadInternal gives it the enum's symbol and parse function.
-        param.parseRule = commandParseRule(commandParser.get(paramType));
+        param.parseRule = commandParseRuleFor(PARSE_RULE_LABELS.get(paramType)) ?? commandParseRule(commandParser.get(paramType));
         if (param.parseRule === null && type !== CommandParameterDataType.ENUM) {
             param.destruct();
             throw Error(`${paramType.name}: no command parse rule for this type on this BDS build (bdsx/bds/engine/command.ts)`);
@@ -1569,8 +1604,21 @@ function constptr<T extends NativeClass>(cls: new () => T): CommandParameterNati
     return constptr!;
 }
 
-CommandOutput.prototype.getSuccessCount = procHacker.js("?getSuccessCount@CommandOutput@@QEBAHXZ", int32_t, { this: CommandOutput });
-CommandOutput.prototype.getType = procHacker.js("?getType@CommandOutput@@QEBA?AW4CommandOutputType@@XZ", int32_t, { this: CommandOutput });
+// 1.26 inlines both readers; CommandOutput keeps 2024's layout (type +0, success count +0x28; Endstone command_output.h)
+CommandOutput.prototype.getSuccessCount = derived(
+    "?getSuccessCount@CommandOutput@@QEBAHXZ",
+    function (this: CommandOutput): number {
+        return (this as any as StaticPointer).getInt32(COMMAND_OUTPUT_SUCCESS_COUNT);
+    },
+    () => procHacker.js("?getSuccessCount@CommandOutput@@QEBAHXZ", int32_t, { this: CommandOutput }),
+);
+CommandOutput.prototype.getType = derived(
+    "?getType@CommandOutput@@QEBA?AW4CommandOutputType@@XZ",
+    function (this: CommandOutput): CommandOutputType {
+        return (this as any as StaticPointer).getInt32(0);
+    },
+    () => procHacker.js("?getType@CommandOutput@@QEBA?AW4CommandOutputType@@XZ", int32_t, { this: CommandOutput }),
+);
 CommandOutput.prototype.constructWith = procHacker.js("??0CommandOutput@@QEAA@W4CommandOutputType@@@Z", void_t, { this: CommandOutput }, int32_t);
 CommandOutput.prototype.empty = function () {
     if (this.getType() === CommandOutputType.DataSet) return false;
@@ -1603,28 +1651,60 @@ CommandOutput.prototype.set_Vec3 = function (k, v) {
     });
 };
 
-(CommandOutput.prototype as any)._successNoMessage = procHacker.js("?success@CommandOutput@@QEAAXXZ", void_t, { this: CommandOutput });
-(CommandOutput.prototype as any)._success = procHacker.js(
+// 1.26 (docs/findings-scoreboard.md section 10.1): success() is `inc dword [output+0x28]` wherever it is used, and
+// success(id, params) / error(id, params) are inlined into every command; the one out-of-line member left is
+// addMessage, whose message id is now a std::string_view (engine/command.ts). The 2024 names below stay first in line:
+// a build whose table resolves one goes back to the binary.
+(CommandOutput.prototype as any)._successNoMessage = derived(
+    "?success@CommandOutput@@QEAAXXZ",
+    function (this: CommandOutput): void {
+        const ptr = this as any as StaticPointer;
+        ptr.setInt32(ptr.getInt32(COMMAND_OUTPUT_SUCCESS_COUNT) + 1, COMMAND_OUTPUT_SUCCESS_COUNT);
+    },
+    () => procHacker.js("?success@CommandOutput@@QEAAXXZ", void_t, { this: CommandOutput }),
+);
+(CommandOutput.prototype as any)._success = derived(
     "?success@CommandOutput@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@@Z",
-    void_t,
-    { this: CommandOutput },
-    CxxString,
-    CommandOutputParameterVector,
+    function (this: CommandOutput, message: string, params: CxxVector<CommandOutputParameter>): void {
+        commandOutputSuccess(this as any as StaticPointer, message, params as any as StaticPointer);
+    },
+    () =>
+        procHacker.js(
+            "?success@CommandOutput@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@@Z",
+            void_t,
+            { this: CommandOutput },
+            CxxString,
+            CommandOutputParameterVector,
+        ),
 );
-(CommandOutput.prototype as any)._error = procHacker.js(
+(CommandOutput.prototype as any)._error = derived(
     "?error@CommandOutput@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@@Z",
-    void_t,
-    { this: CommandOutput },
-    CxxString,
-    CommandOutputParameterVector,
+    function (this: CommandOutput, message: string, params: CxxVector<CommandOutputParameter>): void {
+        commandOutputError(this as any as StaticPointer, message, params as any as StaticPointer);
+    },
+    () =>
+        procHacker.js(
+            "?error@CommandOutput@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@@Z",
+            void_t,
+            { this: CommandOutput },
+            CxxString,
+            CommandOutputParameterVector,
+        ),
 );
-(CommandOutput.prototype as any)._addMessage = procHacker.js(
+(CommandOutput.prototype as any)._addMessage = derived(
     "?addMessage@CommandOutput@@AEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@W4CommandOutputMessageType@@@Z",
-    void_t,
-    { this: CommandOutput },
-    CxxString,
-    CommandOutputParameterVector,
-    int32_t,
+    function (this: CommandOutput, message: string, params: CxxVector<CommandOutputParameter>, type: CommandOutputMessageType): void {
+        commandOutputAddMessage(this, message, params, type);
+    },
+    () =>
+        procHacker.js(
+            "?addMessage@CommandOutput@@AEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@VCommandOutputParameter@@V?$allocator@VCommandOutputParameter@@@std@@@3@W4CommandOutputMessageType@@@Z",
+            void_t,
+            { this: CommandOutput },
+            CxxString,
+            CommandOutputParameterVector,
+            int32_t,
+        ),
 );
 CommandOutput.prototype[NativeType.dtor] = procHacker.js("??1CommandOutput@@QEAA@XZ", void_t, { this: CommandOutput });
 
