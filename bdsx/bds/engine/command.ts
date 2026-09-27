@@ -196,6 +196,44 @@ export function commandOutputDeleteBag(output: StaticPointer): void {
     call(bag, 1);
 }
 
+// ---- MinecraftCommands::getOutputType (section 14) ----
+
+/**
+ * The inlined MinecraftCommands::getOutputType(origin), as executeCommand writes it right before it constructs its
+ * output (40 0x38b5cb..0x38b6f9, 51 0x3da53b..0x3da669; 2024's out-of-line body is 0xd0a020). Origin types 4, 5, 6 and
+ * 14 (Test, AutomationPlayer, ClientAutomation, Scripting) are DataSet and 7 (DedicatedServer) is AllOutput: a table
+ * indexed by type - 4 under the mask 0x40f (40 0xa5dfaf0, 51 0xa6fe9f0, both { 4, 4, 4, 3, 0 x6, 4 }). Every other
+ * type reads the origin's level's game rules: command blocks (1, 2) are AllOutput with commandblockoutput on and
+ * LastOutput with it off, the rest AllOutput with sendcommandfeedback on and Silent with it off. A rule index past the
+ * end of the rule vector counts as off; no level is AllOutput. Endstone's re-implementation (minecraft_commands.cpp)
+ * is the same. `ruleOn` is null when the origin has no level.
+ */
+export function commandOutputTypeFor(originType: number, ruleOn: ((rule: "commandblockoutput" | "sendcommandfeedback") => boolean) | null): number {
+    switch (originType) {
+        case 4:
+        case 5:
+        case 6:
+        case 14:
+            return 4;
+        case 7:
+            return 3;
+    }
+    if (ruleOn === null) return 3;
+    if (originType === 1 || originType === 2) return ruleOn("commandblockoutput") ? 3 : 1;
+    return ruleOn("sendcommandfeedback") ? 3 : 2;
+}
+
+/**
+ * A bool game rule's value as the inlined getOutputType reads it: GameRule::value_ is a std::variant<monostate, bool,
+ * int, float> at +4 whose index byte is at +8 (Endstone game_rules.h); the engine takes the byte at +4 after checking
+ * the index is 1 (std::get, which throws bad_variant_access otherwise).
+ */
+export function gameRuleBoolValue(rule: StaticPointer): boolean {
+    const index = rule.getUint8(8);
+    if (index !== 1) throw Error(`GameRule: not a bool (variant index ${index})`);
+    return rule.getUint8(4) !== 0;
+}
+
 // ---- CommandSelectorBase (section 10.3) ----
 
 /**

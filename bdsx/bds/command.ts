@@ -42,6 +42,7 @@ import { CommandName } from "./commandname";
 import { CommandOrigin } from "./commandorigin";
 import { JsonValue } from "./connreq";
 import { MobEffect } from "./effects";
+import { GameRuleId } from "./gamerules";
 import { HashedString } from "./hashedstring";
 import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
@@ -61,10 +62,12 @@ import {
     commandOutputDeleteBag,
     commandOutputError,
     commandOutputSuccess,
+    commandOutputTypeFor,
     commandParseRule,
     commandParseRuleFor,
     commandSelectorConstruct,
     findEnum,
+    gameRuleBoolValue,
 } from "./engine/command";
 import { updateSoftEnumOwn } from "./engine/softenum";
 import { derived, proc, procConst } from "./symbols";
@@ -1814,6 +1817,8 @@ CommandOutputSender.prototype.sendToAdmins = procHacker.js(
     int32_t,
 );
 
+// 1.26 keeps handleOutput out of line with 2024's three arguments (docs/findings-scoreboard.md section 14): a local or
+// unassigned source id goes to the CommandOutputSender, any other gets a CommandOutputPacket; then sendToAdmins.
 MinecraftCommands.prototype.handleOutput = procHacker.js(
     "?handleOutput@MinecraftCommands@@QEBAXAEBVCommandOrigin@@AEBVCommandOutput@@@Z",
     void_t,
@@ -1822,7 +1827,26 @@ MinecraftCommands.prototype.handleOutput = procHacker.js(
     CommandOutput,
 );
 // MinecraftCommands.prototype.executeCommand is defined at bdsx/command.ts
-MinecraftCommands.getOutputType = procHacker.js("?getOutputType@MinecraftCommands@@SA?AW4CommandOutputType@@AEBVCommandOrigin@@@Z", int32_t, null, CommandOrigin);
+// 1.26 inlines getOutputType into executeCommand (engine/command.ts commandOutputTypeFor, section 14).
+MinecraftCommands.getOutputType = derived(
+    "?getOutputType@MinecraftCommands@@SA?AW4CommandOutputType@@AEBVCommandOrigin@@@Z",
+    function getOutputType(origin: CommandOrigin): CommandOutputType {
+        const level = origin.getLevel();
+        return commandOutputTypeFor(
+            origin.getOriginType(),
+            level == null
+                ? null
+                : rule => {
+                      const r = level.getGameRules().getRule(rule === "commandblockoutput" ? GameRuleId.CommandBlockOutput : GameRuleId.SendCommandFeedback);
+                      return r != null && gameRuleBoolValue(r as any as StaticPointer);
+                  },
+        );
+    },
+    () => {
+        const native = procHacker.js("?getOutputType@MinecraftCommands@@SA?AW4CommandOutputType@@AEBVCommandOrigin@@@Z", int32_t, null, CommandOrigin);
+        return (origin: CommandOrigin): CommandOutputType => native(origin);
+    },
+);
 
 CommandRegistry.abstract({
     enumValues: [CxxVector.make(CxxString), 0xc8],
