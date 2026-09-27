@@ -46,6 +46,7 @@ import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
 import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
+import { updateSoftEnumOwn } from "./engine/softenum";
 import { derived, proc, procConst } from "./symbols";
 import { HasTypeId, type_id, typeid_t } from "./typeid";
 import commandParser = commandparser.commandParser;
@@ -1715,15 +1716,21 @@ CommandRegistry.Parser.prototype.getErrorParams = procHacker.js(
 Command.prototype.run = procHacker.js("?run@Command@@QEBAXAEBVCommandOrigin@@AEAVCommandOutput@@@Z", void_t, { this: Command }, CommandOrigin, CommandOutput);
 
 // CommandSoftEnumRegistry is a class with only one field, which is a pointer to CommandRegistry.
-// I can only find one member function so I am not sure if a dedicated class is needed.
-const CommandSoftEnumRegistry$updateSoftEnum = procHacker.js(
+// 1.26 inlines its updateSoftEnum everywhere (ServerScoreboard::onObjectiveAdded calls addSoftEnumValues itself), so
+// without an address the engine layer dispatches to CommandRegistry::add/remove/setSoftEnumValues (engine/softenum.ts).
+const CommandSoftEnumRegistry$updateSoftEnum = derived<(registry: CommandRegistry, type: SoftEnumUpdateType, name: string, values: string[]) => void>(
     "?updateSoftEnum@CommandSoftEnumRegistry@@QEAAXW4SoftEnumUpdateType@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@4@@Z",
-    void_t,
-    null,
-    CommandRegistry.ref().ref(),
-    uint8_t,
-    CxxString,
-    CxxVectorToArray.make(CxxString),
+    updateSoftEnumOwn,
+    () =>
+        procHacker.js(
+            "?updateSoftEnum@CommandSoftEnumRegistry@@QEAAXW4SoftEnumUpdateType@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@4@@Z",
+            void_t,
+            null,
+            CommandRegistry.ref().ref(),
+            uint8_t,
+            CxxString,
+            CxxVectorToArray.make(CxxString),
+        ),
 );
 
 // list for not implemented
