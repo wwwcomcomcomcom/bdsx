@@ -24,6 +24,7 @@ import { TickingAreaList } from "./tickingarea";
 import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import { teleportActor } from "./engine/teleport";
 import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
+import { applyEnchantOwn } from "./engine/enchant";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -136,7 +137,7 @@ import { Certificate, ConnectionRequest, JsonValue } from "./connreq";
 import { CxxOptional, CxxOptionalToUndefUnion } from "./cxxoptional";
 import { Dimension } from "./dimension";
 import { MobEffect, MobEffectInstance } from "./effects";
-import { EnchantUtils, ItemEnchants } from "./enchants";
+import { EnchantUtils, Enchantments, ItemEnchants } from "./enchants";
 import { GameMode } from "./gamemode";
 import { GameRule, GameRuleId, GameRules } from "./gamerules";
 import { computeHashOf, HashedString, HashedStringToString } from "./hashedstring";
@@ -6150,18 +6151,22 @@ MobEffectInstance.load = function (tag) {
 };
 
 // enchants.ts
-EnchantUtils.applyEnchant = procHacker.js(
+// 1.26 inlines the (type, level) overload into its callers; bdsx builds the EnchantmentInstance and calls the
+// out-of-line instance overload (engine/enchant.ts, docs/findings-nbt.md "applyEnchant")
+EnchantUtils.applyEnchant = derived(
     "?applyEnchant@EnchantUtils@@SA_NAEAVItemStackBase@@W4Type@Enchant@@H_N@Z",
-    bool_t,
-    null,
-    ItemStack,
-    int16_t,
-    int32_t,
-    bool_t,
+    (itemStack: ItemStack, enchant: Enchantments, level: number, allowUnsafe: boolean): boolean => applyEnchantOwn(itemStack, enchant, level, allowUnsafe),
+    () =>
+        procHacker.js("?applyEnchant@EnchantUtils@@SA_NAEAVItemStackBase@@W4Type@Enchant@@H_N@Z", bool_t, null, ItemStack, int16_t, int32_t, bool_t),
 );
 EnchantUtils.getEnchantLevel = procHacker.js("?getEnchantLevel@EnchantUtils@@SAHW4Type@Enchant@@AEBVItemStackBase@@@Z", int32_t, null, uint8_t, ItemStack);
 EnchantUtils.hasCurse = procHacker.js("?hasCurse@EnchantUtils@@SA_NAEBVItemStackBase@@@Z", bool_t, null, ItemStack);
-EnchantUtils.hasEnchant = procHacker.js("?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z", bool_t, null, int16_t, ItemStack);
+// 2024's hasEnchant (0x1ae8650) is getEnchantLevel's body (0x1ae3740) ending in `setg`: the level is above 0
+EnchantUtils.hasEnchant = derived(
+    "?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z",
+    (enchant: Enchantments, itemStack: ItemStack): boolean => EnchantUtils.getEnchantLevel(enchant, itemStack) > 0,
+    () => procHacker.js("?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z", bool_t, null, int16_t, ItemStack),
+);
 
 // nbt.ts
 const tagTypes: NativeClassType<Tag>[] = [
