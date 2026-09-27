@@ -43,6 +43,7 @@ import { constructPlayerListEntry, PlayerListRecord, readPlayerListRecords } fro
 import { derived } from "./symbols";
 import { DisplaySlot, ObjectiveSortOrder, ScoreboardId } from "./scoreboard";
 import { SerializedSkin } from "./skin";
+import { engineLayout } from "./engine/deps";
 
 const CxxVector$string = CxxVector.make(CxxString);
 
@@ -1561,11 +1562,18 @@ export class PurchaseReceiptPacket extends Packet {
 export class PlayerSkinPacket extends Packet {
     @nativeField(mce.UUID)
     uuid: mce.UUID;
-    @nativeField(SerializedSkin)
-    readonly skin: SerializedSkin;
-    @nativeField(CxxString)
+    /**
+     * 2024 held the SerializedSkin by value at +0x40; 1.26 holds a SerializedSkinRef there (a shared_ptr, control
+     * block at +8) and the skin is its object (docs/findings-layouts.md "SerializedSkin").
+     */
+    get skin(): SerializedSkin {
+        const off = engineLayout("PlayerSkinPacket", "skin", -1);
+        if (off < 0) return (this as unknown as StaticPointer).addAs(SerializedSkin, 0x40);
+        return (this as unknown as StaticPointer).getPointerAs(SerializedSkin, off);
+    }
+    @nativeField(CxxString, engineLayout("PlayerSkinPacket", "localizedNewSkinName", 0x2a0))
     localizedNewSkinName: CxxString;
-    @nativeField(CxxString)
+    @nativeField(CxxString, engineLayout("PlayerSkinPacket", "localizedOldSkinName", 0x2c0))
     localizedOldSkinName: CxxString;
 }
 
