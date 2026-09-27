@@ -1808,10 +1808,14 @@ CommandOutput.prototype[NativeType.dtor] = derived(
 CommandOutputSender.prototype._toJson = function () {
     return JsonValue.constructWith({ error: "REMOVED FUNCTION" });
 };
+// 1.26 keeps 2024's sendToAdmins out of line (docs/findings-scoreboard.md section 15): every Success message goes, as a
+// gray "[name: message]" text object, to each player other than the origin's entity whose command permission level is
+// at least the given one -- only for player, command block, virtual and entity-server origins, and only while the
+// origin's gamerule (sendcommandfeedback, commandblockoutput for command blocks) is on. The body never reads `this`.
 CommandOutputSender.prototype.sendToAdmins = procHacker.js(
     "?sendToAdmins@CommandOutputSender@@QEAAXAEBVCommandOrigin@@AEBVCommandOutput@@W4CommandPermissionLevel@@@Z",
     void_t,
-    { this: MinecraftCommands },
+    { this: CommandOutputSender },
     CommandOrigin,
     CommandOutput,
     int32_t,

@@ -15,6 +15,7 @@ import { RakNetConnector } from "./bds/raknetinstance";
 import * as bd_server from "./bds/server";
 import { copyLevelServerNetworkHandler } from "./bds/engine/networkhandler";
 import { levelStructureManager } from "./bds/engine/structure";
+import { engineLayout } from "./bds/engine/deps";
 import { StructureManager } from "./bds/structure";
 import { proc } from "./bds/symbols";
 import type { CommandResult, CommandResultType } from "./commandresult";
@@ -133,7 +134,7 @@ function patchForStdio(): void {
         procHacker.write("?BedrockLogOut@@YAXIPEBDZZ", 0, asm().jmp64(asmcode.logHook, Register.rax));
     }
 
-    asmcode.CommandOutputSenderHookCallback = makefunc.np(
+    const commandOutputSenderHookCallback = makefunc.np(
         line => {
             // void(*callback)(std::string* line)
             const lines = line.split("\n");
@@ -152,15 +153,14 @@ function patchForStdio(): void {
         },
         CxxString,
     );
+    asmcode.CommandOutputSenderHookCallback = commandOutputSenderHookCallback;
 
-    procHacker.patching(
-        // it's hard to replace with the normal hooking method because of it has the lambda call inside.
-        "hook-command-output",
-        "?send@CommandOutputSender@@UEAAXAEBVCommandOrigin@@AEBVCommandOutput@@@Z",
-        0xb8,
-        asmcode.CommandOutputSenderHook,
-        Register.rdx,
-        true,
+    // send joins the output's messages into one std::string on its frame and hands it to BedrockLog::log; the patch
+    // replaces that call with one to the callback above. Where the call sits, which frame slot holds the string and
+    // the call's bytes are per build (docs/findings-scoreboard.md section 15): 2024 send+0xb8, the string at rbp+7;
+    // 1.26.40/51 send+0x147, the string at rbp+0x18, the same log arguments set in another order. A table without
+    // the entry gets 2024's values, and procHacker.patching skips (red "code does not match") unless the bytes agree.
+    const sendLogCallForms: (number | null)[][] = [
         // prettier-ignore
         [
             0x41, 0xB9, 0x0C, 0x00, 0x00, 0x00, // mov r9d,C
@@ -169,7 +169,39 @@ function patchForStdio(): void {
             0x33, 0xC9,                         // xor ecx,ecx
             0xE8, null, null, null, null,       // call <bedrock_server.void __cdecl BedrockLog::log(enum BedrockLog::LogCat
         ],
-    );
+        // prettier-ignore
+        [
+            0x31, 0xC9,                         // xor ecx,ecx
+            0xBA, 0x01, 0x00, 0x00, 0x00,       // mov edx,1
+            0x45, 0x31, 0xC0,                   // xor r8d,r8d (the 31 /r encoding; 2024's is 33 /r)
+            0x41, 0xB9, 0x0C, 0x00, 0x00, 0x00, // mov r9d,C
+            0xE8, null, null, null, null,       // call BedrockLog::log
+        ],
+    ];
+    const sendLogCall = engineLayout("CommandOutputSender::send", "logCall", 0xb8);
+    const sendLogCallForm = sendLogCallForms[engineLayout("CommandOutputSender::send", "logCallForm", 0)];
+    const sendText = engineLayout("CommandOutputSender::send", "text", 7);
+    if (sendLogCallForm === undefined) {
+        console.error(colors.red("hook-command-output: unknown layouts[CommandOutputSender::send].logCallForm, skip"));
+    } else {
+        const commandOutputSenderHook = asm()
+            .sub_r_c(Register.rsp, 0x28)
+            .lea_r_rp(Register.rcx, Register.rbp, 1, sendText)
+            .call64(commandOutputSenderHookCallback, Register.rax)
+            .add_r_c(Register.rsp, 0x28)
+            .ret()
+            .alloc("hook-command-output");
+        procHacker.patching(
+            // it's hard to replace with the normal hooking method because of it has the lambda call inside.
+            "hook-command-output",
+            "?send@CommandOutputSender@@UEAAXAEBVCommandOrigin@@AEBVCommandOutput@@@Z",
+            sendLogCall,
+            commandOutputSenderHook,
+            Register.rdx,
+            true,
+            sendLogCallForm,
+        );
+    }
 
     // hook stdin
     asmcode.commandQueue = commandQueue;
@@ -607,7 +639,11 @@ function _launch(asyncResolve: () => void): void {
             } else if (serverNetworkSystem != null) {
                 console.error(colors.yellow("[bdsx] connector: no ServerNetworkSystem.connector layout in this build's table"));
             }
-            const commandOutputSender = minecraftCommands != null ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, 0x8) : null;
+            // 1.26: +8 the context provider, +0x10 the registry, +0x18 the sender (handleOutput; Endstone minecraft_commands.h)
+            const commandOutputSender =
+                minecraftCommands != null
+                    ? (minecraftCommands as any as StaticPointer).getPointerAs(CommandOutputSender, engineLayout("MinecraftCommands", "commandOutputSender", 0x8))
+                    : null;
             // the handler is updateServerAnnouncement's `this`; the NonOwnerPointer's object must be the same one, and the
             // handler's second base (NetEventCallback, +0x10: its constructor, 40 0xa58530 / 51 0x96b9b0) its own vftable
             let serverNetworkHandler: nimodule.ServerNetworkHandler | null = serverNetworkHandlerFromAnnounce;
