@@ -21,6 +21,7 @@ import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREB
 import { pistonAttachedBlocks } from "./engine/piston";
 import { TickingAreaList } from "./tickingarea";
 import { setOnFireNoEffectsOwn } from "./engine/onfire";
+import { teleportActor } from "./engine/teleport";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -90,7 +91,7 @@ import { AttributeId, AttributeInstance, BaseAttributeMap } from "./attribute";
 import { Bedrock } from "./bedrock";
 import { Biome } from "./biome";
 import { Block, BlockActor, BlockLegacy, BlockSource, BlockUtils, ChestBlockActor, PistonBlockActor } from "./block";
-import { BlockPos, ChunkBlockPos, ChunkPos, RelativeFloat, Vec2, Vec3 } from "./blockpos";
+import { BlockPos, ChunkBlockPos, ChunkPos, Vec2, Vec3 } from "./blockpos";
 import { ChunkSource, LevelChunk } from "./chunk";
 import { CommandSymbols } from "./cmdsymbolloader";
 import * as command from "./command";
@@ -929,34 +930,10 @@ Actor.prototype.getOffhandSlot = derived(
 );
 Actor.prototype.setOffhandSlot = procHacker.js("?setOffhandSlot@Actor@@UEAAXAEBVItemStack@@@Z", void_t, { this: Actor }, ItemStack);
 
-@nativeClass()
-class TeleportRotationData extends NativeClass {
-    @nativeField(RelativeFloat)
-    rx: RelativeFloat;
-    @nativeField(RelativeFloat)
-    ry: RelativeFloat;
-    @nativeField(Vec2)
-    pos: Vec2;
-}
-
-const TeleportCommand$computeTarget = procHacker.js(
-    "?computeTarget@TeleportCommand@@SA?AVTeleportTarget@@AEAVActor@@VVec3@@PEAV4@V?$AutomaticID@VDimension@@H@@AEBV?$optional@VRotationData@RotationCommandUtils@@@std@@H@Z",
-    void_t,
-    null,
-    StaticPointer,
-    Actor,
-    Vec3,
-    Vec3,
-    int32_t,
-    CxxOptionalToUndefUnion.make(TeleportRotationData),
-    int32_t,
-);
-const TeleportCommand$applyTarget = procHacker.js("?applyTarget@TeleportCommand@@SAXAEAVActor@@VTeleportTarget@@_N@Z", void_t, null, Actor, StaticPointer, bool_t);
+// TeleportCommand::computeTarget + applyTarget, both still out of line on 1.26 (applyTarget takes the command version
+// on 51): engine/teleport.ts, docs/findings-layouts.md "Actor.teleport"
 Actor.prototype.teleport = function (pos: Vec3, dimensionId: DimensionId = DimensionId.Overworld, facePosition: Vec3 | null = null) {
-    const target = new AllocatedPointer(0x80);
-    const unknownParam = false;
-    TeleportCommand$computeTarget(target, this, pos, facePosition, dimensionId, undefined, 0); // it allocates `target`
-    TeleportCommand$applyTarget(this, target, unknownParam); // it deletes `target`
+    teleportActor(this, pos.x, pos.y, pos.z, dimensionId, facePosition);
 };
 // 1.26 keeps no out-of-line Actor::getArmor. The 2024 body (0x19b0680) is the whole definition:
 // `addq $8, %rcx` (ctxbase), call ActorEquipment::getArmorContainer, then tail-jump [vftable + 0x38]
