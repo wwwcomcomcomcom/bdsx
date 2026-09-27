@@ -171,6 +171,17 @@ function makeNotFoundFunc(key: string): any {
     };
     return errfn;
 }
+/**
+ * BDSX_SKIP_HOOKS=<substring>[,<substring>...]: a hook, patch or write whose symbol contains one of these
+ * is not installed, as if the symbol were missing (calls through js() are unaffected). A bisect switch:
+ * docs/findings-gamethread.md "The fresh-boot bisect".
+ */
+const skipHooks = (process.env.BDSX_SKIP_HOOKS || "").split(",").filter(s => s !== "");
+function skippedHook(key: string): boolean {
+    if (skipHooks.length === 0 || !skipHooks.some(s => key.includes(s))) return false;
+    console.error(colors.yellow(`[bdsx] BDSX_SKIP_HOOKS: not installing ${key}`));
+    return true;
+}
 function notFoundNp(key: string, stackIndex: number = 0): any {
     const line = getCurrentStackLine(stackIndex + 2);
     console.error(colors.red(`Symbol not found: ${key}`));
@@ -199,7 +210,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
     private _get(subject: string, key: Extract<keyof T, string>, offset: number): NativePointer | null {
         try {
             const ptr = this.map[key];
-            if (ptr == null || ptr.isNull()) throw CANCEL;
+            if (ptr == null || ptr.isNull() || skippedHook(key)) throw CANCEL;
             return ptr.add(offset);
         } catch (err) {
             console.error(colors.red(`${subject}: skip, symbol "${key}" not found`));
@@ -274,7 +285,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
         let origin: StaticPointer;
         try {
             origin = this.map[key];
-            if (origin == null || origin.isNull()) return notFoundNp(key, opts?.stackIndex);
+            if (origin == null || origin.isNull() || skippedHook(key)) return notFoundNp(key, opts?.stackIndex);
         } catch (err) {
             return notFoundNp(key, opts?.stackIndex);
         }
@@ -386,7 +397,7 @@ export class ProcHacker<T extends Record<string, NativePointer>> {
             // "original" throws when called, as js() does
             try {
                 const ptr = this.map[key];
-                if (ptr == null || ptr.isNull()) return makeNotFoundFunc(key);
+                if (ptr == null || ptr.isNull() || skippedHook(key)) return makeNotFoundFunc(key);
             } catch (err) {
                 return makeNotFoundFunc(key);
             }

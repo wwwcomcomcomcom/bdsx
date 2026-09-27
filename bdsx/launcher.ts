@@ -468,6 +468,11 @@ function _launch(asyncResolve: () => void): void {
     // cost one field, not the whole of serverOpen. Fields that could not be
     // filled keep the "BDS is not loaded yet" abstract object.
     const attempt = <T>(what: string, fn: () => T): T | null => {
+        // BDSX_SKIP=open:<what> leaves that field unfilled without running its acquisition (a Q8 bisect switch)
+        if (skip.includes(`open:${what}`)) {
+            console.error(colors.yellow(`[bdsx] BDSX_SKIP=open:${what}: not acquired`));
+            return null;
+        }
         try {
             return fn();
         } catch (err) {
@@ -476,9 +481,17 @@ function _launch(asyncResolve: () => void): void {
         }
     };
     const onServerOpen = (levelFromTick: Level | null): void => {
+        // BDSX_SKIP=open-late runs serverOpen's reads of the engine objects but none of what hands control to
+        // JavaScript: no node loop pump, no serverOpen/afterOpen listeners, launch() never resolves (a Q8
+        // bisect switch: docs/findings-gamethread.md "The fresh-boot bisect")
+        const openStart = Date.now();
+        const runLate = !skip.includes("open-late");
+        if (!runLate) console.error(colors.yellow("[bdsx] BDSX_SKIP=open-late: serverOpen reads the engine objects only"));
         try {
-            _tickCallback();
-            cgate.nodeLoopOnce();
+            if (runLate) {
+                _tickCallback();
+                cgate.nodeLoopOnce();
+            }
 
             const Minecraft$getLevel = procHacker.js("?getLevel@Minecraft@@QEBAPEAVLevel@@XZ", Level, null, bd_server.Minecraft);
             const Minecraft$getCommands = procHacker.js(
@@ -682,6 +695,8 @@ function _launch(asyncResolve: () => void): void {
                 });
             }
 
+            if (process.env.BDSX_LOG_OPEN_TIME === "1") console.error(`[bdsx] serverOpen reads took ${Date.now() - openStart} ms`);
+            if (!runLate) return;
             openIsFired.resolve();
             events.serverOpen.fire();
             events.serverOpen.clear(); // it will never fire again, clear it
@@ -711,7 +726,10 @@ function _launch(asyncResolve: () => void): void {
         // _firstTickHook; a second hook on the same function is what took
         // the server down on 1.26.40.8.
         console.error(colors.yellow("[bdsx] sendServerThreadStarted is not in the symbol table; serverOpen fires on the first Level::tick instead"));
-        pendingOpenFromTick = onServerOpen;
+        // BDSX_SKIP=open leaves the Level::tick hook in place and never runs serverOpen (a Q8 bisect switch:
+        // docs/findings-gamethread.md "The fresh-boot bisect")
+        if (skip.includes("open")) console.error(colors.yellow("[bdsx] BDSX_SKIP=open: serverOpen will not fire"));
+        else pendingOpenFromTick = onServerOpen;
     }
 
     procHacker.hookingRawWithCallOriginal(
