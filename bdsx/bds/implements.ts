@@ -27,6 +27,7 @@ import { teleportActor } from "./engine/teleport";
 import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
 import { applyEnchantOwn } from "./engine/enchant";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct } from "./engine/itemdescriptor";
+import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -181,6 +182,7 @@ import {
     RecordItemComponent,
     RenderOffsetsItemComponent,
     RepairableItemComponent,
+    RepairItemResult,
     ShooterItemComponent,
     ThrowableItemComponent,
     WeaponItemComponent,
@@ -6802,13 +6804,15 @@ WearableItemComponent.getIdentifier = itemComponentIdentifier("?getIdentifier@We
 //     Vec3,
 //     BlockLegacy,
 // );
-EntityPlacerItemComponent.prototype.setActorCustomName = procHacker.js(
-    "?_setActorCustomName@EntityPlacerItemComponent@@AEBAXAEAVActor@@AEBVItemStack@@@Z",
-    void_t,
-    { this: EntityPlacerItemComponent },
-    Actor,
-    ItemStack,
-);
+// 1.26 made _setActorCustomName a static (Actor&, const ItemStack&): its two callers, the entity placer's use-on callback
+// and its dispense, pass the actor in rcx and the item in rdx (40 0x3f77080 / 51 0x302a020), so the 2024 decoration
+// (a const member) does not describe it and it ships under a bdsx: key. The body is 2024's: the NameableComponent
+// lookup (fnv1a "NameableComponent"), the item's custom-name check (Item vftable +0x300), the name, nameEntity
+// (docs/findings-nbt.md section 24).
+const EntityPlacerItemComponent$setActorCustomName = procHacker.js("bdsx:EntityPlacerItemComponent::_setActorCustomName", void_t, null, Actor, ItemStack);
+EntityPlacerItemComponent.prototype.setActorCustomName = function (this: EntityPlacerItemComponent, actor: Actor, itemStack: ItemStack): void {
+    EntityPlacerItemComponent$setActorCustomName(actor, itemStack);
+};
 // canAlwaysEat is an IFoodItemComponent virtual: its `this` is the interface subobject, not the component the
 // item's component map returns (docs/findings-audit.md "Audit leftovers"). Both builds' body is
 // `movzbl 0x20(%rcx),%eax; ret`, slot 3 of the IFoodItemComponent table the component's constructor stores at +0x10.
@@ -6816,18 +6820,43 @@ const FoodItemComponent$canAlwaysEat = procHacker.js("?canAlwaysEat@FoodItemComp
 FoodItemComponent.prototype.canAlwaysEat = function (this: FoodItemComponent): boolean {
     return FoodItemComponent$canAlwaysEat(this.add(FOOD_ITEM_COMPONENT_INTERFACE));
 };
-FoodItemComponent.prototype.getUsingConvertsToItemDescriptor = procHacker.js(
+// 1.26 inlines it into its one caller, the script API's usingConvertsTo getter (engine/itemcomponent.ts): a copy of the
+// ItemDescriptor at +0x20, 2024's body (1.21.3.01 0x1e050c0) as written.
+FoodItemComponent.prototype.getUsingConvertsToItemDescriptor = derived(
     "?getUsingConvertsToItemDescriptor@FoodItemComponent@@QEBA?AVItemDescriptor@@XZ",
-    ItemDescriptor,
-    { this: FoodItemComponent },
+    function (this: FoodItemComponent): ItemDescriptor {
+        return ItemDescriptor.construct(this.addAs(ItemDescriptor, FOOD_USING_CONVERTS_TO));
+    },
+    () =>
+        procHacker.js("?getUsingConvertsToItemDescriptor@FoodItemComponent@@QEBA?AVItemDescriptor@@XZ", ItemDescriptor, {
+            this: FoodItemComponent,
+            structureReturn: true,
+        }),
 );
-ProjectileItemComponent.prototype.getShootDir = procHacker.js(
+// Actor::getPassengerYRotation, a virtual (Boat overrides it): the slot the inlined getShootDir reads (40 +0x390, 51 +0x388)
+const Actor$getPassengerYRotation = procHacker.jsv("??_7Actor@@6B@", "?getPassengerYRotation@Actor@@UEBAMAEBV1@@Z", float32_t, { this: Actor }, Actor);
+// 1.26 inlines getShootDir into the throw (engine/itemcomponent.ts, docs/findings-nbt.md section 24)
+ProjectileItemComponent.prototype.getShootDir = derived(
     "?getShootDir@ProjectileItemComponent@@QEBA?AVVec3@@AEBVPlayer@@M@Z",
-    Vec3,
-    { this: ProjectileItemComponent },
-    Player,
-    float32_t,
+    function (this: ProjectileItemComponent, player: Player, angleOffset: number): Vec3 {
+        const rot = player.getRotation();
+        let yaw = rot.y;
+        const vehicle = player.getVehicle();
+        if (vehicle !== null) yaw = Actor$getPassengerYRotation.call(vehicle, player);
+        const [x, y, z] = projectileShootDir(rot.x, yaw, angleOffset);
+        return Vec3.create(x, y, z);
+    },
+    () =>
+        procHacker.js(
+            "?getShootDir@ProjectileItemComponent@@QEBA?AVVec3@@AEBVPlayer@@M@Z",
+            Vec3,
+            { this: ProjectileItemComponent, structureReturn: true },
+            Player,
+            float32_t,
+        ),
 );
+// still out of line on both builds, 2024's prototype (40 0x62a6a40 / 51 0x717fbd0; the throw calls it with the aim
+// position, the direction, the power and the player)
 ProjectileItemComponent.prototype.shootProjectile = procHacker.js(
     "?shootProjectile@ProjectileItemComponent@@QEBAPEAVActor@@AEAVBlockSource@@AEBVVec3@@1MPEAVPlayer@@@Z",
     Actor,
@@ -6844,20 +6873,26 @@ ProjectileItemComponent.prototype.shootProjectile = procHacker.js(
 //     CxxString,
 //     { this: RecordItemComponent },
 // );
-RepairableItemComponent.prototype.handleItemRepair = procHacker.js(
+// RepairItemResult is returned through a hidden pointer (rdx); the fifth argument is the allow-same-item bool
+// (40 0x62b2d90 / 51 0x718bc80, reached from the anvil, the grindstone and the repair recipe as in 2024)
+const RepairableItemComponent$handleItemRepair = procHacker.js(
     "?handleItemRepair@RepairableItemComponent@@QEBA?AURepairItemResult@@AEAVItemStack@@0_N@Z",
-    int32_t,
-    { this: RepairableItemComponent },
-    ItemStackBase,
-    ItemStackBase,
+    RepairItemResult,
+    { this: RepairableItemComponent, structureReturn: true },
+    ItemStack,
+    ItemStack,
+    bool_t,
 );
-ThrowableItemComponent.prototype.getLaunchPower = procHacker.js(
+RepairableItemComponent.prototype.handleItemRepair = function (this: RepairableItemComponent, item: ItemStack, material: ItemStack, allowSameItem: boolean = false): RepairItemResult {
+    return RepairableItemComponent$handleItemRepair.call(this, item, material, allowSameItem);
+};
+// 1.26 inlines it into both throwable callbacks (engine/itemcomponent.ts)
+ThrowableItemComponent.prototype.getLaunchPower = derived(
     "?_getLaunchPower@ThrowableItemComponent@@AEBAMHHH@Z",
-    float32_t,
-    { this: ThrowableItemComponent },
-    int32_t,
-    int32_t,
-    int32_t,
+    function (this: ThrowableItemComponent, durationLeft: number, maxDrawTicks: number, maxUseDuration: number): number {
+        return throwableLaunchPower(this as unknown as StaticPointer, durationLeft, maxDrawTicks, maxUseDuration);
+    },
+    () => procHacker.js("?_getLaunchPower@ThrowableItemComponent@@AEBAMHHH@Z", float32_t, { this: ThrowableItemComponent }, int32_t, int32_t, int32_t),
 );
 
 // command.ts
