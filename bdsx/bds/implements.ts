@@ -3,6 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
+import { mobEffectById, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
@@ -6195,8 +6196,23 @@ ScoreboardIdentityRef.prototype.isPlayerType = function () {
 };
 
 // effects.ts
-MobEffect.create = procHacker.js("?getById@MobEffect@@SAPEAV1@I@Z", MobEffect, null, int32_t);
-MobEffect.prototype.getId = procHacker.js("?getId@MobEffect@@QEBAIXZ", uint32_t, { this: MobEffect });
+// 1.26 inlines both leaves everywhere (engine/mobeffect.ts): getById is the registry slot under the 38-entry bound,
+// getId the +8 read Actor::getEffect's key lookup also does.
+MobEffect.create = derived(
+    "?getById@MobEffect@@SAPEAV1@I@Z",
+    function getById(id: number): MobEffect | null {
+        const p = mobEffectById(id);
+        return p === null ? null : p.as(MobEffect);
+    },
+    () => procHacker.js("?getById@MobEffect@@SAPEAV1@I@Z", MobEffect, null, int32_t) as (id: number) => MobEffect | null,
+);
+MobEffect.prototype.getId = derived(
+    "?getId@MobEffect@@QEBAIXZ",
+    function getId(this: MobEffect): number {
+        return (this as any as StaticPointer).getUint32(MOB_EFFECT_ID);
+    },
+    () => procHacker.js("?getId@MobEffect@@QEBAIXZ", uint32_t, { this: MobEffect }),
+);
 
 (MobEffectInstance.prototype as any)._create = procHacker.js(
     "??0MobEffectInstance@@QEAA@IHH_N00@Z",

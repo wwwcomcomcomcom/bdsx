@@ -1041,6 +1041,7 @@ export class Actor extends AbstractClass {
      */
     hasEffect(id: MobEffectIds): boolean {
         const effect = MobEffect.create(id);
+        if (effect === null) return false; // no such effect id in this build's registry
         return this._hasEffect(effect);
     }
 
@@ -1052,6 +1053,7 @@ export class Actor extends AbstractClass {
      */
     getEffect(id: MobEffectIds): MobEffectInstance | null {
         const effect = MobEffect.create(id);
+        if (effect === null) return null; // no such effect id in this build's registry
         return this._getEffect(effect);
     }
     removeAllEffects(): void {

@@ -79,9 +79,10 @@ export class MobEffect extends NativeClass {
     }
 
     /**
+     * The engine's registered MobEffect for the id (MobEffect::getById), or null when the id is not one.
      * @remark DO NOT DESTRUCT
      */
-    static create(id: MobEffectIds): MobEffect {
+    static create(id: MobEffectIds): MobEffect | null {
         abstract();
     }
     getId(): number {
