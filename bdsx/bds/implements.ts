@@ -189,7 +189,7 @@ import {
     Tag,
     TagPointer,
 } from "./nbt";
-import { NetworkConnection, NetworkIdentifier, NetworkSystem, ServerNetworkHandler } from "./networkidentifier";
+import { NetworkConnection, NetworkIdentifier, NetworkIdentifierType, NetworkSystem, ServerNetworkHandler } from "./networkidentifier";
 import { Packet } from "./packet";
 import {
     AnimateEntityPacket,
@@ -3259,10 +3259,19 @@ if (pdbcache.layouts.PlayerListEntry?.skin !== undefined) {
 NetworkIdentifier.prototype.getActor = function (): ServerPlayer | null {
     return bedrockServer.serverNetworkHandler._getServerPlayer(this, 0);
 };
+// "ip|port". A RakNet connection is looked up by its GUID, as Endstone's EndstoneSocketAddress does (1.26 dropped
+// RakPeer::GetSystemAddressFromIndex); an Address/Address6 identifier carries its own sockaddr, which is a
+// SystemAddress's first part. A NetherNet identifier has no IP address: "" (docs/findings-packets.md "IP and ping").
 NetworkIdentifier.prototype.getAddress = function (): string {
-    const idx = this.address.GetSystemIndex();
-    const rakpeer = bedrockServer.rakPeer;
-    return rakpeer.GetSystemAddressFromIndex(idx).toString();
+    switch (this.type) {
+        case NetworkIdentifierType.RakNet:
+            return bedrockServer.rakPeer.GetSystemAddressFromGuid(this.address.rakNetGuid).toString();
+        case NetworkIdentifierType.Address:
+        case NetworkIdentifierType.Address6:
+            return this.address.systemAddress.toString();
+        default:
+            return "";
+    }
 };
 // Both comparisons are spelled out from the type when the build has no
 // address for them (docs/findings-instances.md, "The full launcher and a
@@ -3361,6 +3370,9 @@ Object.defineProperties(RakNetConnector.prototype, {
 });
 RakNetConnector.prototype.getPort = procHacker.js("?getPort@RakNetConnector@@UEBAGXZ", uint16_t, { this: RakNetConnector });
 
+// The three read the connection found by AddressOrGUID (by GUID unless it is UNASSIGNED, then by address) and
+// return -1 when there is none. 1.26 bodies (slots 39/40/41 of RakPeer's table): the mean of the valid entries of
+// the five-entry ping history, the entry before the write index, and the lowest ping field.
 RakNet.RakPeer.prototype.GetAveragePing = procHacker.js(
     "?GetAveragePing@RakPeer@RakNet@@UEAAHUAddressOrGUID@2@@Z",
     int32_t,

@@ -145,8 +145,13 @@ export enum NetworkIdentifierType {
 export class NetworkIdentifier extends NativeStruct implements Hashable {
     @nativeField(bin64_t)
     unknown: bin64_t;
-    /** the 2024 position; on 1.26 the GUID is at networkIdentifierLayout.guid */
-    @nativeField(RakNet.AddressOrGUID)
+    /**
+     * The GUID and, right after it, the socket address: RakNet's AddressOrGUID shape. At
+     * networkIdentifierLayout.guid (+8 in 2024, +0x18 on 1.26, where the NetherNet id grew); the socket
+     * address follows the GUID's 16 bytes on both (layout.sock). On 1.26 the tail of the embedded
+     * SystemAddress (debugPort/systemIndex, +0x80) overlaps `type`: only the sockaddr part is meaningful.
+     */
+    @nativeField(RakNet.AddressOrGUID, networkIdentifierLayout.guid)
     address: RakNet.AddressOrGUID;
 
     get type(): NetworkIdentifierType {

@@ -49,7 +49,12 @@ export namespace RakNet {
         @nativeField(VoidPointer)
         vftable: VoidPointer;
 
-        GetSystemAddressFromIndex(idx: number): SystemAddress {
+        /**
+         * The address of the connection whose GUID is given (UNASSIGNED_SYSTEM_ADDRESS when none has it).
+         * 1.26 has no GetSystemAddressFromIndex: the slot is gone from RakPeer's table, between
+         * GetIndexFromSystemAddress and GetGUIDFromIndex (docs/findings-packets.md "IP and ping").
+         */
+        GetSystemAddressFromGuid(guid: RakNetGUID): SystemAddress {
             abstract();
         }
         GetAveragePing(address: RakNet.AddressOrGUID): number {
@@ -92,11 +97,13 @@ export namespace RakNet {
         makefunc.Buffer,
         int32_t,
     );
-    RakPeer.prototype.GetSystemAddressFromIndex = procHacker.jsv(
+    // SystemAddress GetSystemAddressFromGuid(const RakNetGUID input) const: rcx this, rdx the returned
+    // SystemAddress (0x88), r8 a pointer to the caller's copy of the GUID (g at +0, systemIndex hint at +8).
+    RakPeer.prototype.GetSystemAddressFromGuid = procHacker.jsv(
         "??_7RakPeer@RakNet@@6BRakPeerInterface@1@@",
-        "?GetSystemAddressFromIndex@RakPeer@RakNet@@UEAA?AUSystemAddress@2@I@Z",
+        "?GetSystemAddressFromGuid@RakPeer@RakNet@@UEBA?AUSystemAddress@2@URakNetGUID@2@@Z",
         RakNet.SystemAddress,
         { this: RakNet.RakPeer, structureReturn: true },
-        int32_t,
+        RakNet.RakNetGUID,
     );
 }
