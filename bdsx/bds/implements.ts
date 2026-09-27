@@ -245,13 +245,33 @@ const CxxVector$ItemStackRequestActionRef = CxxVector.make(ItemStackRequestActio
 
 // utils
 namespace CommandUtils {
-    export const createItemStack = procHacker.js(
+    export const createItemStack = derived(
         "?createItemStack@CommandUtils@@YA?AVItemStack@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@HH@Z",
-        ItemStack,
-        { structureReturn: true },
-        CxxString,
-        int32_t,
-        int32_t,
+        // 2024 0xcf9d40 (docs/findings-nbt.md "createItemStack"): count clamped to [1, 64], an aux above 0x7fff
+        // (unsigned, so a negative one too) becomes 0, ItemRegistryRef::lookupByName(HashedString(name)); no item ->
+        // ItemStack(); else ItemStack(item, count, aux, nullptr) and set(min(count, getMaxStackSize())). 1.26 has no
+        // out-of-line copy on either build, so bdsx builds the same stack through the engine's own load path:
+        // ItemStack::fromTag over {Name, Count, Damage} -- the keys and tag types ItemStackBase::save writes -- runs
+        // _loadItem's registry lookup by name, then the max-stack clamp is the derived getMaxStackSize.
+        function (name: string, amount: number, data: number): ItemStack {
+            const count = amount > 64 ? 64 : amount < 1 ? 1 : amount | 0;
+            const aux = data >>> 0 > 0x7fff ? 0 : data;
+            const stack = ItemStack.fromTag({ Name: name, Count: NBT.byte(count), Damage: NBT.short(aux) });
+            if (!stack.isNull()) {
+                const max = stack.getMaxStackSize();
+                if (count > max) stack.setAmount(max);
+            }
+            return stack;
+        },
+        (): ((name: string, amount: number, data: number) => ItemStack) =>
+            procHacker.js(
+                "?createItemStack@CommandUtils@@YA?AVItemStack@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@HH@Z",
+                ItemStack,
+                { structureReturn: true },
+                CxxString,
+                int32_t,
+                int32_t,
+            ),
     );
     export const spawnEntityAt = procHacker.js(
         "?spawnEntityAt@CommandUtils@@YAPEAVActor@@AEAVBlockSource@@AEBVVec3@@AEBUActorDefinitionIdentifier@@AEAUActorUniqueID@@PEAV2@@Z",
