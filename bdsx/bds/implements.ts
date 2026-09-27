@@ -138,7 +138,7 @@ import { Certificate, ConnectionRequest, JsonValue } from "./connreq";
 import { CxxOptional, CxxOptionalToUndefUnion } from "./cxxoptional";
 import { Dimension } from "./dimension";
 import { MobEffect, MobEffectInstance } from "./effects";
-import { EnchantUtils, Enchantments, ItemEnchants } from "./enchants";
+import { EnchantmentNames, EnchantUtils, Enchantments, ItemEnchants } from "./enchants";
 import { GameMode } from "./gamemode";
 import { GameRule, GameRuleId, GameRules } from "./gamerules";
 import { computeHashOf, HashedString, HashedStringToString } from "./hashedstring";
@@ -4140,7 +4140,19 @@ ItemStackBase.prototype.setNull = procHacker.js(
     CxxOptionalToUndefUnion.make(CxxString),
 );
 ItemStackBase.prototype.getEnchantValue = procHacker.js("?getEnchantValue@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
-ItemStackBase.prototype.isEnchanted = procHacker.js("?isEnchanted@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024's isEnchanted (0x1b64970): the user tag exists and contains("ench", List). 1.26 inlines it into every user of
+// "ench" on both builds (ThrownTrident::isEnchanted, getEnchantLevel, hasEnchant, ...): the user tag at +0x10, the
+// "ench" tag, its getId() against 9 (docs/findings-nbt.md section 21)
+ItemStackBase.prototype.isEnchanted = derived(
+    "?isEnchanted@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const userData = (this as any as StaticPointer).getNullablePointerAs(CompoundTag, 16); // user_data_
+        if (userData === null) return false;
+        const tag = userData.get("ench");
+        return tag !== null && tag.getId() === Tag.Type.List;
+    },
+    () => procHacker.js("?isEnchanted@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.setDamageValue = procHacker.js("?setDamageValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t);
 ItemStackBase.prototype.setItem = procHacker.js("?_setItem@ItemStackBase@@AEAA_NH_N@Z", bool_t, { this: ItemStackBase }, int32_t);
 ItemStackBase.prototype.startCoolDown = procHacker.js("?startCoolDown@ItemStackBase@@QEBAXPEAVPlayer@@@Z", void_t, { this: ItemStackBase }, ServerPlayer);
@@ -6174,12 +6186,21 @@ EnchantUtils.applyEnchant = derived(
         procHacker.js("?applyEnchant@EnchantUtils@@SA_NAEAVItemStackBase@@W4Type@Enchant@@H_N@Z", bool_t, null, ItemStack, int16_t, int32_t, bool_t),
 );
 EnchantUtils.getEnchantLevel = procHacker.js("?getEnchantLevel@EnchantUtils@@SAHW4Type@Enchant@@AEBVItemStackBase@@@Z", int32_t, null, uint8_t, ItemStack);
-EnchantUtils.hasCurse = procHacker.js("?hasCurse@EnchantUtils@@SA_NAEBVItemStackBase@@@Z", bool_t, null, ItemStack);
-// 2024's hasEnchant (0x1ae8650) is getEnchantLevel's body (0x1ae3740) ending in `setg`: the level is above 0
+// 2024's hasCurse (0x1ae8610) is hasEnchant(BindingCurse) || hasEnchant(VanishingCurse); 1.26 inlines it (the only two
+// such pairs per build call the out-of-line hasEnchant, docs/findings-nbt.md section 21)
+EnchantUtils.hasCurse = derived(
+    "?hasCurse@EnchantUtils@@SA_NAEBVItemStackBase@@@Z",
+    (itemStack: ItemStack): boolean =>
+        EnchantUtils.hasEnchant(EnchantmentNames.BindingCurse, itemStack) || EnchantUtils.hasEnchant(EnchantmentNames.VanishingCurse, itemStack),
+    () => procHacker.js("?hasCurse@EnchantUtils@@SA_NAEBVItemStackBase@@@Z", bool_t, null, ItemStack),
+);
+// 2024's hasEnchant (0x1ae8650) is getEnchantLevel's body (0x1ae3740) ending in `setg`: the level is above 0. Both 1.26
+// builds keep it out of line (40 0x1c73a00 / 51 0x1b62680, the type read as a byte from cl; docs/findings-nbt.md
+// section 21), so the table serves it; the derived body is the fallback for a build that does not
 EnchantUtils.hasEnchant = derived(
     "?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z",
     (enchant: Enchantments, itemStack: ItemStack): boolean => EnchantUtils.getEnchantLevel(enchant, itemStack) > 0,
-    () => procHacker.js("?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z", bool_t, null, int16_t, ItemStack),
+    () => procHacker.js("?hasEnchant@EnchantUtils@@SA_NW4Type@Enchant@@AEBVItemStackBase@@@Z", bool_t, null, uint8_t, ItemStack),
 );
 
 // nbt.ts
