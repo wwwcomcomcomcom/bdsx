@@ -10,6 +10,7 @@ import { procHacker } from "../prochacker";
 import { Actor, DimensionId } from "./actor";
 import type { CommandPermissionLevel, CommandPositionFloat } from "./command";
 import { Dimension } from "./dimension";
+import { commandOriginWorldPosition } from "./engine/commandorigin";
 import { Level, ServerLevel } from "./level";
 import { CompoundTag } from "./nbt";
 import { derived, proc } from "./symbols";
@@ -234,11 +235,10 @@ CommandOrigin.prototype.getBlockPosition = procHacker.jsv("??_7ServerCommandOrig
     structureReturn: true,
 });
 
-// Vec3 CommandOrigin::getWorldPosition();
-CommandOrigin.prototype.getWorldPosition = procHacker.jsv("??_7ServerCommandOrigin@@6B@", "?getWorldPosition@ServerCommandOrigin@@UEBA?AVVec3@@XZ", Vec3, {
-    this: CommandOrigin,
-    structureReturn: true,
-});
+// Vec3 CommandOrigin::getWorldPosition(); by slot: its address is also getBlockPosition's on 1.26 (engine/commandorigin.ts)
+CommandOrigin.prototype.getWorldPosition = function (this: CommandOrigin): Vec3 {
+    return commandOriginWorldPosition.call(this);
+};
 
 // std::optional<Vec2> CommandOrigin::getRotation();
 
