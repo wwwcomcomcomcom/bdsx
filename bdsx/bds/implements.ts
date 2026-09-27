@@ -10,6 +10,7 @@ import { authenticationType, IdentityClaims, identityClaims, uuidFromString } fr
 import {
     blockTypeName,
     commandNames,
+    FOOD_ITEM_COMPONENT_INTERFACE,
     isHumanoidWearableBlockItemOwn,
     itemCanDestroyInCreative,
     itemCommandNames,
@@ -4899,7 +4900,20 @@ PlayerInventory.prototype.dropAllOnDeath = derived(
 ItemDescriptor.prototype[NativeType.ctor] = procHacker.js("??0ItemDescriptor@@QEAA@XZ", void_t, { this: ItemDescriptor });
 ItemDescriptor.prototype[NativeType.dtor] = procHacker.js("??1ItemDescriptor@@UEAA@XZ", void_t, { this: ItemDescriptor });
 ItemDescriptor.prototype[NativeType.ctor_copy] = procHacker.js("??0ItemDescriptor@@QEAA@AEBV0@@Z", void_t, { this: ItemDescriptor }, ItemDescriptor);
-NetworkItemStackDescriptor.prototype[NativeType.dtor] = procHacker.js("??1NetworkItemStackDescriptor@@UEAA@XZ", void_t, { this: NetworkItemStackDescriptor });
+// 1.26 keeps no out-of-line complete-object destructor (docs/findings-audit.md "Audit leftovers"): every copy is inlined
+// into the scalar deleting destructor, vftable slot 0 (40 0x23e230 / 51 0x2d6bc0), which frees the user-data string
+// at +0x40 and the net-id variant at +0x20, restores ItemDescriptor's vptr, releases its impl, and calls
+// operator delete(this, 0x60) only when its flag is nonzero. With 0 it is exactly ~NetworkItemStackDescriptor().
+NetworkItemStackDescriptor.prototype[NativeType.dtor] = derived(
+    "??1NetworkItemStackDescriptor@@UEAA@XZ",
+    (() => {
+        const deleting = procHacker.js("??_GNetworkItemStackDescriptor@@UEAAPEAXI@Z", VoidPointer, { this: NetworkItemStackDescriptor }, int32_t);
+        return function (this: NetworkItemStackDescriptor): void {
+            deleting.call(this, 0);
+        };
+    })(),
+    () => procHacker.js("??1NetworkItemStackDescriptor@@UEAA@XZ", void_t, { this: NetworkItemStackDescriptor }),
+);
 NetworkItemStackDescriptor.prototype[NativeType.ctor_copy] = procHacker.js(
     "??0NetworkItemStackDescriptor@@QEAA@AEBVItemStackDescriptor@@@Z",
     void_t,
@@ -6745,7 +6759,13 @@ EntityPlacerItemComponent.prototype.setActorCustomName = procHacker.js(
     Actor,
     ItemStack,
 );
-FoodItemComponent.prototype.canAlwaysEat = procHacker.js("?canAlwaysEat@FoodItemComponent@@UEBA_NXZ", bool_t, { this: FoodItemComponent });
+// canAlwaysEat is an IFoodItemComponent virtual: its `this` is the interface subobject, not the component the
+// item's component map returns (docs/findings-audit.md "Audit leftovers"). Both builds' body is
+// `movzbl 0x20(%rcx),%eax; ret`, slot 3 of the IFoodItemComponent table the component's constructor stores at +0x10.
+const FoodItemComponent$canAlwaysEat = procHacker.js("?canAlwaysEat@FoodItemComponent@@UEBA_NXZ", bool_t, null, VoidPointer);
+FoodItemComponent.prototype.canAlwaysEat = function (this: FoodItemComponent): boolean {
+    return FoodItemComponent$canAlwaysEat(this.add(FOOD_ITEM_COMPONENT_INTERFACE));
+};
 FoodItemComponent.prototype.getUsingConvertsToItemDescriptor = procHacker.js(
     "?getUsingConvertsToItemDescriptor@FoodItemComponent@@QEBA?AVItemDescriptor@@XZ",
     ItemDescriptor,

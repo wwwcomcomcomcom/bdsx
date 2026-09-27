@@ -151,3 +151,12 @@ export function componentItemReflectionCtx(item: StaticPointer): NativePointer |
 }
 /** where ComponentItem.getComponent leaves its item's context on the component it returns */
 export const REFLECTION_CTX_OF = Symbol("reflectionCtx");
+
+/**
+ * FoodItemComponent's IFoodItemComponent base (docs/findings-audit.md "Audit leftovers"). The component the item's
+ * component map hands out starts with the NetworkedItemComponent<FoodItemComponent> vptr; the IFoodItemComponent vptr
+ * sits at +0x10, and IFoodItemComponent's virtuals (getNutrition, getSaturationModifier, canAlwaysEat, ...) take that
+ * subobject as `this`. ComponentItem::getFood returns `component + 0x10` on both builds (40 0x33c1060 / 51 0x20b5b50,
+ * `lea 0x10(%rax),%rcx; cmovne`), as 2024's constructor stored it (0x1da3f50).
+ */
+export const FOOD_ITEM_COMPONENT_INTERFACE = engineLayout("FoodItemComponent", "foodInterface", 0x10);
