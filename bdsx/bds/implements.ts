@@ -3,7 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
-import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, setMaxNumPlayersOwn } from "./engine/networkhandler";
+import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
@@ -3569,6 +3569,13 @@ ServerNetworkHandler.prototype.setMaxNumPlayers = derived(
 Object.defineProperty(ServerNetworkHandler.prototype, "maxPlayers", {
     get(this: ServerNetworkHandler): number {
         return serverMaxNumPlayers(this as unknown as StaticPointer);
+    },
+    configurable: true,
+});
+// 2024's serverName at +0x2c8 moved (40 +0x398 / 51 +0x3a0, engine/networkhandler.ts, docs/findings-packets.md "getMotd")
+Object.defineProperty(ServerNetworkHandler.prototype, "motd", {
+    get(this: ServerNetworkHandler): string {
+        return serverNetworkHandlerServerName(this as unknown as StaticPointer);
     },
     configurable: true,
 });

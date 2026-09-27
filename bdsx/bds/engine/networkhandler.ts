@@ -51,6 +51,17 @@ const UPDATE_ANNOUNCEMENT = engineSymbol("?updateServerAnnouncement@ServerNetwor
 let playerCount: ((snh: VoidPointer, uuid: VoidPointer) => number) | null = null;
 let updateAnnouncement: ((snh: VoidPointer) => void) | null = null;
 
+/**
+ * serverName_, the announced server name (docs/findings-packets.md "getMotd"). 2024's allowIncomingConnections
+ * (1.21.3.01 0x883a30) set the incoming flag at +0x2b8, stored the name (or "" when not announcing) at +0x2c8 and
+ * tail-called updateServerAnnouncement. 1.26 keeps that function (40 0xa62e60 / 51 0x9761b0) with the flag at
+ * +0x388 / +0x390 and the name at +0x398 / +0x3a0, the string updateServerAnnouncement hands to the locator.
+ */
+const SNH_SERVER_NAME = engineLayout("ServerNetworkHandler", "serverName", 0x2c8);
+export function serverNetworkHandlerServerName(snh: StaticPointer): string {
+    return snh.getCxxString(SNH_SERVER_NAME);
+}
+
 /** max_num_players_ */
 export function serverMaxNumPlayers(snh: StaticPointer): number {
     return snh.getInt32(SNH_MAX_NUM_PLAYERS);

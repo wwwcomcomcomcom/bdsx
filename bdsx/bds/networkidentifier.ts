@@ -6,7 +6,7 @@ import { events } from "../event";
 import { HashSet, Hashable } from "../hashset";
 import { makefunc } from "../makefunc";
 import { AbstractClass, NativeClass, NativeStruct, nativeClass, nativeField } from "../nativeclass";
-import { CxxString, NativeType, bin64_t, bool_t, int32_t, void_t } from "../nativetype";
+import { NativeType, bin64_t, bool_t, int32_t, void_t } from "../nativetype";
 import { CxxStringWrapper } from "../pointer";
 import { procHacker } from "../prochacker";
 import { remapAndPrintError } from "../source-map-support";
@@ -66,8 +66,10 @@ class ServerNetworkHandler$Client extends AbstractClass {}
 export class ServerNetworkHandler extends AbstractClass {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
-    @nativeField(CxxString, 0x2c8) // serverName, accessed in ServerNetworkHandler::allowIncomingConnections
-    readonly motd: CxxString;
+    /** serverName, written by allowIncomingConnections (implements.ts: at the build's layouts.ServerNetworkHandler.serverName; 2024 had +0x2c8) */
+    get motd(): string {
+        return abstract();
+    }
     /** max_num_players_ (implements.ts: at the build's layouts.ServerNetworkHandler.maxNumPlayers; 2024 had +0x320) */
     get maxPlayers(): number {
         return abstract();
