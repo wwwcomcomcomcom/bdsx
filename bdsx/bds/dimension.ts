@@ -9,6 +9,7 @@ import { BlockPos, ChunkPos, Vec3 } from "./blockpos";
 import { ChunkSource, LevelChunk } from "./chunk";
 import { HashedStringToString } from "./hashedstring";
 import type { Player } from "./player";
+import type { TickingAreaList } from "./tickingarea";
 
 @nativeClass(null)
 export class Dimension extends NativeClass {
@@ -23,6 +24,10 @@ export class Dimension extends NativeClass {
         abstract();
     }
     getChunkSource(): ChunkSource {
+        abstract();
+    }
+    /** the dimension's ticking areas (the /tickingarea list) */
+    getTickingAreas(): TickingAreaList {
         abstract();
     }
     getDimensionId(): DimensionId {

@@ -19,6 +19,7 @@ import {
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
+import { TickingAreaList } from "./tickingarea";
 import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -658,6 +659,16 @@ Dimension.prototype.fetchNearestAttackablePlayer = function (actor: Actor, dista
     }
     return fetchNearestAttackablePlayer$nonBlockPos.call(this, actor, distance);
 };
+// 2024's Dimension::getTickingAreas is `mov 0x2d8(%rcx),%rax`. 1.26 keeps the TickingAreaList pointer at +0x300 on both
+// builds (ServerPlayer::moveView reads it and walks the areas) with no out-of-line copy (docs/findings-blocks.md "Ticking areas").
+const DIMENSION_TICKING_AREAS = engineLayout("Dimension", "tickingAreas", 0x2d8);
+Dimension.prototype.getTickingAreas = derived(
+    "?getTickingAreas@Dimension@@QEAAAEAVTickingAreaList@@XZ",
+    function (this: Dimension): TickingAreaList {
+        return (this as unknown as StaticPointer).getPointerAs(TickingAreaList, DIMENSION_TICKING_AREAS);
+    },
+    () => procHacker.js("?getTickingAreas@Dimension@@QEAAAEAVTickingAreaList@@XZ", TickingAreaList, { this: Dimension }),
+);
 Dimension.prototype.getSunAngle = procHacker.js("?getSunAngle@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
 Dimension.prototype.getTimeOfDay = procHacker.js("?getTimeOfDay@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
 Dimension.prototype.isDay = procHacker.jsv("??_7OverworldDimension@@6BIDimension@@@", "?isDay@Dimension@@UEBA_NXZ", bool_t, { this: Dimension });
