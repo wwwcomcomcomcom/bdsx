@@ -946,7 +946,22 @@ Actor.prototype.teleport = function (pos: Vec3, dimensionId: DimensionId = Dimen
     TeleportCommand$computeTarget(target, this, pos, facePosition, dimensionId, undefined, 0); // it allocates `target`
     TeleportCommand$applyTarget(this, target, unknownParam); // it deletes `target`
 };
-Actor.prototype.getArmor = procHacker.js("?getArmor@Actor@@QEBAAEBVItemStack@@W4ArmorSlot@@@Z", ItemStack, { this: Actor }, int32_t);
+// 1.26 keeps no out-of-line Actor::getArmor. The 2024 body (0x19b0680) is the whole definition:
+// `addq $8, %rcx` (ctxbase), call ActorEquipment::getArmorContainer, then tail-jump [vftable + 0x38]
+// (Container::getItem) with the slot -- and both 1.26 builds inline exactly that into
+// ServerPlayer::sendArmor (40 0x68df09, 51 0x751599: `leaq 0x8(%rsi),%rcx; call <getArmorContainer>`,
+// then `+0x38` with the slot). The address the propagation route shipped for this name (40 0x1acb8e0,
+// 51 0x1cd2170) IS ActorEquipment::getArmorContainer: called as `getArmor(this=Actor, slot)` it walks the
+// EnTT pools from Actor+8 instead of the EntityContext's registry at Actor+0x10 and killed the server.
+// That was the "console-command landmine" once blamed on Mob::sendArmorSlot (docs/findings-audit.md,
+// "sendArmor: the crash was getArmor").
+Actor.prototype.getArmor = derived(
+    "?getArmor@Actor@@QEBAAEBVItemStack@@W4ArmorSlot@@@Z",
+    function getArmor(this: Actor, slot: number): ItemStack {
+        return this.getArmorContainer().getItem(slot);
+    },
+    () => procHacker.js("?getArmor@Actor@@QEBAAEBVItemStack@@W4ArmorSlot@@@Z", ItemStack, { this: Actor }, int32_t),
+);
 
 const Actor$hasType = (Actor.prototype.hasType = procHacker.js("?hasType@Actor@@QEBA_NW4ActorType@@@Z", bool_t, { this: Actor }, int32_t));
 Actor.prototype.isType = procHacker.js("?isType@Actor@@QEBA_NW4ActorType@@@Z", bool_t, { this: Actor }, int32_t);
@@ -1914,41 +1929,17 @@ Mob.prototype.setSpeed = procHacker.js("?setSpeed@Mob@@UEAAXM@Z", void_t, { this
 // `sendArmorSlot`'s decorated 2024 body calls with a `std::bitset` argument) is exactly
 // `?sendArmor@Mob@@UEAAXV?$bitset@$03@std@@@Z`. Three routes -- the call site, the base-class
 // vtable slot, and the 2024 PDB's name for that same slot -- agree on both the slot and its
-// signature (`this`, one scalar bitmask by value). A first attempt at `derived()` here (an earlier
-// session, not committed) crashed the server with 0xC0000005 on both builds on the very first
-// console-triggered call, no `[ Fault Capture ]` block in either .err. Reading the callee itself
-// this time (40 0x68de60, the address actually in `ServerPlayer`'s own vtable at this offset, i.e.
-// what a live `ServerPlayer*` really dispatches to -- distinct from the base `Mob::sendArmor`
-// above, which 1.26 keeps as a separate, presumably simpler override) rules out the leading
-// suspects: it is a real, sane function (`.pdata`-backed, standard prologue), it treats `edx==0` as
-// a no-op early return (so a slot=0/bitmask=0 mix-up cannot be what crashed the observed first call,
-// which was `head`=`ArmorSlot.Head`=0), and everything past that gate is a `weak_ptr<T>::lock()`-style
-// CAS refcount loop on a member at `this+0x1d0`/`this+0x1c8` (null-gated at every step) feeding a
-// per-bit loop over up to 5 armor slots that builds an `InventorySlotPacket` per changed slot and a
-// final `MobArmorEquipmentPacket` -- a full network-broadcast routine, not a plain setter, and one
-// this project has no independent way to prove behaves safely when invoked outside BDS's own normal
-// call chain (the `Mob::_hurt` lesson: a body-correct, prototype-correct virtual dispatch can still
-// crash when its preconditions -- here, plausibly a subscription/viewer-list member this project has
-// not named or verified non-null for a bot connection -- are not the ones BDS's own callers already
-// guarantee). With the bitmask computed correctly (`1 << slot`, matching 2024's body one
-// instruction for one, not forwarded raw) the *console command* call still crashed identically on
-// both builds (0xC0000005, right after `head`/slot=0, no `[ Fault Capture ]`) -- so the bitmask was
-// never the bug. Isolating the calling *context* instead was: the identical call, same offset, same
-// bitmask, same object, made once from inside `events.levelTick` (the game thread's own tick loop)
-// instead of from the console command's own JS callback, returns cleanly on both builds
-// (`itemprobe sendarmortick`, `tools/host/drivers/armortick40/51.ps1`, both PASS + `Quit correctly`
-// + exit 0). Console commands and level ticks are the same OS thread in this architecture
-// (`docs/findings-gamethread.md`), so this is not a cross-thread bug -- it is a precondition this
-// particular vtable override has (plausibly the `this+0x1d0`/`this+0x1c8` weak-ref member above,
-// which the engine's own tick-driven callers may guarantee is populated in a way the
-// synchronous console-command dispatch path does not) that this project has not named. Ships
-// `derived()` as the correct, address- and prototype-confirmed dispatch; a caller from a console
-// command context specifically is the one known landmine (`tools/item-probe.ts`'s `sendarmor` case
-// documents and still exercises it, `sendarmortick` is the safe one) -- ordinary plugin code calling
-// this from an event handler, which runs in the same tick-driven context `sendarmortick` proved
-// safe, is not expected to hit it. Not root-caused further: naming the `this+0x1d0` member live
-// (`instance-probe-launcher.js` member scan on a connected `ServerPlayer`, comparing it between a
-// console-command tick and an ordinary tick) is the next step if this ever needs to be console-safe.
+// signature (`this`, one scalar bitmask by value). The callee a live `ServerPlayer*` reaches (40
+// 0x68de60, 51 0x7514f0: `ServerPlayer::sendArmor`) bails out on a zero mask or an expired
+// `this+0x1c8`/`+0x1d0` weak ref, then sends an `InventorySlotPacket` per set bit (armor container 120)
+// to the player and a `MobArmorEquipmentPacket` to the dimension's other players.
+// This was once shipped with a "console-command landmine": `itemprobe sendarmor` crashed both builds
+// while the same call from `events.levelTick` passed, and the crash was blamed on a precondition of
+// this override. It was the probe's `getArmor()` call just before it: `?getArmor@Actor@@` carried
+// `ActorEquipment::getArmorContainer`'s address (see Actor.getArmor above). A first-chance dump
+// names it (40 read at +0x1acb910, 51 at +0x1cd21a0: getArmorContainer's pool walk). With getArmor
+// fixed, the console call passes on both builds and BDS sends the packet during it; there is no
+// console-context precondition (docs/findings-audit.md "sendArmor: the crash was getArmor").
 const MOB_SEND_ARMOR_VFT_OFFSET = pdbcache.layouts.Mob?.sendArmorSlotVftableOffset ?? 0x560;
 const Mob$sendArmor = makefunc.js(
     asm()
@@ -4169,9 +4160,8 @@ ItemStackBase.prototype.isArmorItem = procHacker.js("?isArmorItem@ItemStackBase@
 // the slot and its meaning. `derived()`: the item_ chase is duplicated here (not calling
 // `_getItem`, which is `protected`) and the vtable-slot-9 dispatch reuses `Packet::getId`'s
 // raw-asm-stub trick above in this file (vft[1] there, vft[9]/0x48 here -- the same slot on
-// both builds, and confirmed not to crash on either -- the attempt at the same trick for
-// `Mob::sendArmorSlot` above did crash, with an extra argument and a per-build slot; see that
-// comment for what was ruled out and what was not).
+// both builds, and confirmed not to crash on either; `Mob::sendArmorSlot` above uses it too -- its
+// old crash was the probe's `getArmor`, not the stub).
 const Item$isComponentBased = makefunc.js(
     asm().mov_r_rp(Register.rax, Register.rcx, 1, 0).jmp_rp(Register.rax, 1, 0x48).alloc("Item::isComponentBased via vft[9]"),
     bool_t,
