@@ -162,7 +162,7 @@ export class ServerInstance extends AbstractClass {
     /**
      * Disconnects a specific client with the given message
      */
-    disconnectClient(client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected", skipMessage: boolean = false): void {
+    disconnectClient(client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected"): void {
         abstract();
     }
     /**

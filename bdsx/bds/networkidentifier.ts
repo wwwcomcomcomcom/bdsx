@@ -71,7 +71,7 @@ export class ServerNetworkHandler extends AbstractClass {
     @nativeField(int32_t, 0x320) // accessed in ServerNetworkHandler::setMaxNumPlayers
     readonly maxPlayers: int32_t;
 
-    disconnectClient(client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected", skipMessage: boolean = false): void {
+    disconnectClient(client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected"): void {
         abstract();
     }
     /**

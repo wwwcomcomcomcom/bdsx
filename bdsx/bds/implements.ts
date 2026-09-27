@@ -3482,8 +3482,12 @@ ServerNetworkHandler.prototype._getServerPlayer = procHacker.js(
     NetworkIdentifier,
     uint8_t,
 );
-const ServerNetworkHandler$disconnectClient = procHacker.js(
-    "?disconnectClient@ServerNetworkHandler@@QEAAXAEBVNetworkIdentifier@@W4SubClientId@@W4DisconnectFailReason@Connection@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@_N@Z",
+// 1.26 renamed disconnectClient to disconnectClientWithMessage and replaced the 2024 trailing `bool skipMessage`
+// with a by-value std::optional<std::string> filtered message (passed as a pointer to a caller copy the callee
+// moves from and destroys; +0x20 is the engaged flag). The body always sends the message: no skip path is reachable
+// from here, so skipMessage left the API. docs/findings-packets.md "Kick".
+const ServerNetworkHandler$disconnectClientWithMessage = procHacker.js(
+    "?disconnectClientWithMessage@ServerNetworkHandler@@QEAAXAEBVNetworkIdentifier@@W4SubClientId@@W4DisconnectFailReason@Connection@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$optional@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@7@@Z",
     void_t,
     null,
     ServerNetworkHandler,
@@ -3491,14 +3495,10 @@ const ServerNetworkHandler$disconnectClient = procHacker.js(
     uint8_t,
     int32_t,
     CxxString,
-    bool_t,
+    CxxOptionalToUndefUnion.make(CxxString),
 );
-ServerNetworkHandler.prototype.disconnectClient = function (
-    client: NetworkIdentifier,
-    message: string = "disconnectionScreen.disconnected",
-    skipMessage: boolean = false,
-): void {
-    ServerNetworkHandler$disconnectClient(this, client, /** subClientId */ 0, /** disconnectFailReason */ 0, message, skipMessage);
+ServerNetworkHandler.prototype.disconnectClient = function (client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected"): void {
+    ServerNetworkHandler$disconnectClientWithMessage(this, client, /** subClientId */ 0, /** disconnectFailReason */ 0, message, undefined);
 };
 ServerNetworkHandler.prototype.allowIncomingConnections = procHacker.js(
     "?allowIncomingConnections@ServerNetworkHandler@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@_N@Z",
@@ -3741,12 +3741,8 @@ ServerInstance.prototype.createDimension = function (id: DimensionId): Dimension
 ServerInstance.prototype.getActivePlayerCount = function (): number {
     return bedrockServer.level.getActivePlayerCount();
 };
-ServerInstance.prototype.disconnectClient = function (
-    client: NetworkIdentifier,
-    message: string = "disconnectionScreen.disconnected",
-    skipMessage: boolean = false,
-): void {
-    return bedrockServer.serverNetworkHandler.disconnectClient(client, message, skipMessage);
+ServerInstance.prototype.disconnectClient = function (client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected"): void {
+    return bedrockServer.serverNetworkHandler.disconnectClient(client, message);
 };
 ServerInstance.prototype.getMotd = function (): string {
     return bedrockServer.serverNetworkHandler.motd;
