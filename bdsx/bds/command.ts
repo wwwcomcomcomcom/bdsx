@@ -9,6 +9,7 @@ import { StaticPointer, VoidPointer } from "../core";
 import { CxxMap } from "../cxxmap";
 import { CxxPair } from "../cxxpair";
 import { CxxVector, CxxVectorToArray } from "../cxxvector";
+import { dll } from "../dll";
 import { makefunc } from "../makefunc";
 import { mangle } from "../mangle";
 import { AbstractClass, KeysFilter, NativeClass, NativeClassType, NativeStruct, nativeClass, nativeField, vectorDeletingDestructor } from "../nativeclass";
@@ -46,6 +47,7 @@ import { ItemStack } from "./inventory";
 import { InvertableFilter } from "./invertablefilter";
 import { AvailableCommandsPacket } from "./packets";
 import { ServerPlayer } from "./player";
+import { commandAllocVftable, commandParseRule } from "./engine/command";
 import { updateSoftEnumOwn } from "./engine/softenum";
 import { derived, proc, procConst } from "./symbols";
 import { HasTypeId, type_id, typeid_t } from "./typeid";
@@ -1055,46 +1057,50 @@ export enum CommandParameterOption {
     HasSemanticConstraint,
 }
 
-@nativeClass()
+/**
+ * 1.26's shape (0x78 bytes; Endstone command_registry.h, and the parameter constructors the engine inlines, 40
+ * 0x3fb230 / 51 0x1213d60): `parse_override` was inserted at +0x10, so everything from the name on moved by 8,
+ * and two custom-storage function pointers were added at the end. docs/findings-scoreboard.md section 9.
+ */
+@nativeClass(0x78)
 export class CommandParameterData extends NativeClass {
     @nativeField(typeid_t)
     tid: typeid_t<CommandRegistry>; // 0x00
+    /** `const CommandRegistry::ParamParseRule*` -- `{ parse function, grammar symbol }`, the engine's ParseRuleFor<T>::instance */
+    @nativeField(VoidPointer, 0x08)
+    parseRule: VoidPointer | null; // 0x08
+    /** @deprecated 1.26 holds a ParamParseRule* here, not the parse function: use {@link parseRule} */
+    @nativeField(VoidPointer, { ghost: true, offset: 0x08 })
+    parser: VoidPointer | null;
+    /** bool (CommandRegistry::*)(void*, ParseToken const&, CommandOrigin const&, int, std::string&, std::vector<std::string>&) const; the engine sets it for enums */
     @nativeField(VoidPointer)
-    parser: VoidPointer | null; // 0x08, bool (CommandRegistry::*)(void *, CommandRegistry::ParseToken const &, CommandOrigin const &, int, std::string &,std::vector<std::string> &) const;
+    parseOverride: VoidPointer | null; // 0x10
     @nativeField(CxxString)
-    name: CxxString; // 0x10
-
-    /** @deprecated Use {@link enumNameOrPostfix} instead */
-    @nativeField(VoidPointer, { ghost: true })
-    desc: VoidPointer | null; // 0x30
+    name: CxxString; // 0x18
     @nativeField(VoidPointer)
-    enumNameOrPostfix: VoidPointer | null; // 0x30, char*
-
-    /** @deprecated Use {@link enumOrPostfixSymbol} instead */
-    @nativeField(int32_t, { ghost: true, offset: 0x48 })
-    unk56: int32_t; // 0x38
+    enumNameOrPostfix: VoidPointer | null; // 0x38, char*
     @nativeField(int32_t)
-    enumOrPostfixSymbol: int32_t; // 0x38
-
-    @nativeField(VoidPointer)
-    unk40_string: VoidPointer | null; // 0x40, char*
+    enumOrPostfixSymbol: int32_t; // 0x40
+    @nativeField(VoidPointer, 0x48)
+    chainedSubcommand: VoidPointer | null; // 0x48, char*
     @nativeField(int32_t)
-    unk48_offset: int32_t; // 0x48
-
+    chainedSubcommandSymbol: int32_t; // 0x50
     @nativeField(int32_t)
-    type: CommandParameterDataType; // 0x4c
+    type: CommandParameterDataType; // 0x54
     @nativeField(int32_t)
-    offset: int32_t; // 0x50
+    offset: int32_t; // 0x58
     @nativeField(int32_t)
-    flag_offset: int32_t; // 0x54
+    flag_offset: int32_t; // 0x5c
     @nativeField(bool_t)
-    optional: bool_t; // 0x58
-
-    /** @deprecated Use {@link options} instead */
-    @nativeField(bool_t, { ghost: true })
-    pad73: bool_t;
+    optional: bool_t; // 0x60
     @nativeField(uint8_t)
-    options: CommandParameterOption; // 0x59
+    options: CommandParameterOption; // 0x61
+    /** void* (*)(Command*, int), custom storage */
+    @nativeField(VoidPointer, 0x68)
+    valueGetFn: VoidPointer | null; // 0x68
+    /** bool* (*)(Command*, int) */
+    @nativeField(VoidPointer)
+    valueIsSetFn: VoidPointer | null; // 0x70
 }
 
 @nativeClass()
@@ -1166,12 +1172,15 @@ export class CommandRegistry extends HasTypeId {
         const sig = this.findCommand(name);
         if (sig === null) throw Error(`${name}: command not found`);
         const overload = sig.overloads.prepare();
+        dll.vcruntime140.memset(overload, 0, CommandRegistry.Overload[NativeType.size]);
         overload.construct();
         overload.commandVersion = bin.make64(1, 0x7fffffff);
+        // 1.26: a brstd::copyable_function whose target is the allocator (engine/command.ts)
+        overload.allocatorVftable = commandAllocVftable();
         overload.allocator = allocator;
         overload.parameters.setFromArray(params);
         overload.commandVersionOffset = -1;
-        overload.u7 = 0;
+        overload.isChaining = false;
         this.registerOverloadInternal(sig, overload);
 
         for (const param of params) {
@@ -1292,23 +1301,32 @@ export namespace CommandRegistry {
         value: int32_t;
     }
 
-    @nativeClass()
+    /**
+     * 1.26's shape (0x80 bytes; Endstone command_registry.h, and the engine's own emplace, 40 0x1157d0 / 51
+     * 0x115530): `alloc` became a 64-byte brstd::copyable_function. Its target slot (+0x10) holds what 2024's
+     * plain function pointer held, and +0x08 the vtable for that target (engine/command.ts).
+     */
+    @nativeClass(0x80)
     export class Overload extends NativeClass {
         @nativeField(bin64_t)
-        commandVersion: bin64_t;
+        commandVersion: bin64_t; // 0x00, { from, to }
+        /** copyable_function vfptr: `{ move_to, destroy, invoke, copy_to }` */
         @nativeField(VoidPointer)
-        allocator: VoidPointer;
-        @nativeField(CxxVector.make(CommandParameterData))
-        parameters: CxxVector<CommandParameterData>;
+        allocatorVftable: VoidPointer | null; // 0x08
+        /** the copyable_function's target: `std::unique_ptr<Command>(*)()`, called with the return slot in rcx */
+        @nativeField(VoidPointer)
+        allocator: VoidPointer | null; // 0x10
+        @nativeField(CxxVector.make(CommandParameterData), 0x48)
+        parameters: CxxVector<CommandParameterData>; // 0x48
         @nativeField(int32_t)
-        commandVersionOffset: int32_t;
-        /** @deprecated */
-        @nativeField(int32_t, 0x28)
-        u6: int32_t;
-        @nativeField(uint8_t)
+        commandVersionOffset: int32_t; // 0x60
+        @nativeField(bool_t)
+        isChaining: bool_t; // 0x64
+        /** @deprecated use {@link isChaining} */
+        @nativeField(uint8_t, { ghost: true, offset: 0x64 })
         u7: uint8_t;
-        @nativeField(CxxVector.make(CommandRegistry.Symbol))
-        symbols: CxxVector<CommandRegistry.Symbol>;
+        @nativeField(CxxVector.make(CommandRegistry.Symbol), 0x68)
+        symbols: CxxVector<CommandRegistry.Symbol>; // 0x68
     }
 
     @nativeClass(null)
@@ -1395,6 +1413,15 @@ export namespace CommandRegistry {
         }
     }
 }
+
+// CxxVector relocates overloads with ctor_move + the old element's dtor. The generated move would copy only the
+// declared words of the 64-byte copyable_function, so relocate the whole element and leave the source empty (its
+// vectors then free nothing), which is what the engine's move_to does for a function-pointer target.
+CommandRegistry.Overload.prototype[NativeType.ctor_move] = function (this: CommandRegistry.Overload, from: CommandRegistry.Overload): void {
+    const size = CommandRegistry.Overload[NativeType.size];
+    dll.vcruntime140.memcpy(this, from, size);
+    dll.vcruntime140.memset(from, 0, size);
+};
 
 @nativeClass()
 export class Command extends NativeClass {
@@ -1501,12 +1528,21 @@ export class Command extends NativeClass {
                 }
             }
         }
-        param.parser = commandParser.get(paramType);
+        // 1.26: +8 is the engine's ParseRuleFor<T>::instance, found by its parse function (engine/command.ts). An enum
+        // parameter needs none: registerOverloadInternal gives it the enum's symbol and parse function.
+        param.parseRule = commandParseRule(commandParser.get(paramType));
+        if (param.parseRule === null && type !== CommandParameterDataType.ENUM) {
+            param.destruct();
+            throw Error(`${paramType.name}: no command parse rule for this type on this BDS build (bdsx/bds/engine/command.ts)`);
+        }
+        param.parseOverride = null;
         param.name = name;
         param.type = type;
 
-        param.unk40_string = null;
-        param.unk48_offset = -1;
+        param.chainedSubcommand = null;
+        param.chainedSubcommandSymbol = -1;
+        param.valueGetFn = null;
+        param.valueIsSetFn = null;
 
         param.enumOrPostfixSymbol = -1;
         param.offset = offset;
