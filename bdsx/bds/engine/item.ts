@@ -59,6 +59,48 @@ export function isHumanoidWearableBlockItemOwn(stack: StaticPointer): boolean {
 }
 
 /**
+ * Item::full_name_ ("minecraft:diamond"), a HashedString: the 64-bit hash, then the std::string at +8. 2024 kept it at
+ * +0x118 (?getFullItemName@Item@@ 0x1cacd80 is `add $0x118,%rcx; jmp HashedString::getString`, getFullNameHash
+ * 0x1cacd90 `lea 0x118(%rcx),%rax`); 1.26 keeps it at +0x120 on both builds, where ItemStackBase::isNull (40 0x1bc2260 /
+ * 51 0x1a549d0, byte for byte the same there) compares it with the air name: the hash at +0x120, the string's
+ * data/size/capacity at +0x128/+0x138/+0x140, the last-match pointer at +0x148 (docs/findings-nbt.md "Item names").
+ */
+export const ITEM_FULL_NAME = engineLayout("Item", "fullName", 0x118);
+export function itemFullName(item: StaticPointer): string {
+    return item.getCxxString(ITEM_FULL_NAME + 8);
+}
+
+/**
+ * The list Item::getCommandNames and BlockLegacy::getCommandNames build (2024 0x1cab320 / 0x1bedcc0, read in full):
+ * the lowercased full name with the flag byte set; then, when the namespace is "minecraft", that flag cleared and the
+ * lowercased raw name appended with it set. The namespace and the raw name are the two halves of the full name, which
+ * is how the engine composes it. Each entry is a CommandName {std::string, bool at +0x20}, 0x28 bytes.
+ */
+export function commandNames(fullName: string): [string, boolean][] {
+    const full = fullName.toLowerCase();
+    const colon = full.indexOf(":");
+    if (colon === -1 || full.slice(0, colon) !== "minecraft") return [[full, true]];
+    return [
+        [full, false],
+        [full.slice(colon + 1), true],
+    ];
+}
+/** Item::getCommandNames: an item that places a block answers with its block's names (2024 tested getLegacyBlock first) */
+export function itemCommandNames(item: StaticPointer): [string, boolean][] {
+    const blockType = itemBlockType(item);
+    return commandNames(blockType !== null ? blockTypeName(blockType) : itemFullName(item));
+}
+
+/** ItemStackBase::isBlock, 2024's body (0x1b64660): item_ (a WeakPtr<Item> at +8) is set and its Item places a block */
+export function itemStackIsBlockOwn(stack: StaticPointer): boolean {
+    const ref = stack.getPointer(8);
+    if (ref.isNull()) return false;
+    const item = ref.getPointer(0);
+    if (item.isNull()) return false;
+    return itemBlockType(item) !== null;
+}
+
+/**
  * Item::canDestroyInCreative through the item's own vftable. bdsx found the slot by looking the address up in
  * ??_7ComponentItem@@6B@, which 1.26's tables do not name; the slot is 48 on both builds (2024: 43), read off the
  * component item's table, whose slot holds the same bit-1-of-the-flags-byte leaf 2024's had.

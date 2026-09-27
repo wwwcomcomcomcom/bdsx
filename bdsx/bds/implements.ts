@@ -7,7 +7,15 @@ import { copyLevelServerNetworkHandler } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
-import { isHumanoidWearableBlockItemOwn, itemCanDestroyInCreative, REFLECTION_CTX_OF } from "./engine/item";
+import {
+    blockTypeName,
+    commandNames,
+    isHumanoidWearableBlockItemOwn,
+    itemCanDestroyInCreative,
+    itemCommandNames,
+    itemStackIsBlockOwn,
+    REFLECTION_CTX_OF,
+} from "./engine/item";
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
@@ -3854,15 +3862,44 @@ Item.prototype.getSerializedName = procHacker.js("?getSerializedName@Item@@QEBA?
     this: Item,
     structureReturn: true,
 });
-Item.prototype.getCommandNames = procHacker.js(
+/**
+ * The vector Item::getCommandNames / BlockLegacy::getCommandNames return: CommandName {std::string, bool at +0x20}, 0x28
+ * bytes each. 1.26 has neither function out of line on either build, so bdsx fills one with the names engine/item.ts
+ * derives from the full name (docs/findings-nbt.md "Item names"); the caller owns it and destructs it, as before.
+ */
+function commandNameVector<V extends CxxVector<any>>(type: { construct(): V }, names: [string, boolean][]): V {
+    const out = type.construct();
+    out.resize(names.length);
+    const begin = (out as any as StaticPointer).getPointer(0);
+    for (let i = 0; i < names.length; i++) {
+        begin.setCxxString(names[i][0], i * 0x28);
+        begin.setUint8(names[i][1] ? 1 : 0, i * 0x28 + 0x20);
+    }
+    return out;
+}
+Item.prototype.getCommandNames = derived(
     "?getCommandNames@Item@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
-    CxxVector$CxxStringWith8Bytes,
-    { this: Item, structureReturn: true },
+    function (this: Item): CxxVector<CxxStringWith8Bytes> {
+        return commandNameVector(CxxVector$CxxStringWith8Bytes, itemCommandNames(this as any as StaticPointer));
+    },
+    () =>
+        procHacker.js(
+            "?getCommandNames@Item@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
+            CxxVector$CxxStringWith8Bytes,
+            { this: Item, structureReturn: true },
+        ),
 );
-Item.prototype.getCommandNames2 = procHacker.js(
+Item.prototype.getCommandNames2 = derived(
     "?getCommandNames@Item@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
-    CxxVector$CommandName,
-    { this: Item, structureReturn: true },
+    function (this: Item): CxxVector<CommandName> {
+        return commandNameVector(CxxVector$CommandName, itemCommandNames(this as any as StaticPointer));
+    },
+    () =>
+        procHacker.js(
+            "?getCommandNames@Item@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
+            CxxVector$CommandName,
+            { this: Item, structureReturn: true },
+        ),
 );
 Item.prototype.getCreativeCategory = procHacker.js("?getCreativeCategory@Item@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: Item });
 
@@ -4041,7 +4078,14 @@ ItemStackBase.prototype.setCustomName = derived(
 );
 ItemStackBase.prototype.getUserData = procHacker.js("?getUserData@ItemStackBase@@QEAAPEAVCompoundTag@@XZ", CompoundTag, { this: ItemStackBase });
 ItemStackBase.prototype.hasCustomName = procHacker.js("?hasCustomHoverName@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isBlock = procHacker.js("?isBlock@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// no out-of-line copy on either 1.26 build: 2024's body (0x1b64660) over Item::block_type_ (engine/item.ts)
+ItemStackBase.prototype.isBlock = derived(
+    "?isBlock@ItemStackBase@@QEBA_NXZ",
+    function isBlock(this: ItemStackBase): boolean {
+        return itemStackIsBlockOwn(this as any as StaticPointer);
+    },
+    () => procHacker.js("?isBlock@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isNull = procHacker.js("?isNull@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.setNull = procHacker.js(
     "?setNull@ItemStackBase@@UEAAXV?$optional@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@std@@@Z",
@@ -4848,15 +4892,30 @@ namespace BlockTypeRegistry {
     );
 }
 
-BlockLegacy.prototype.getCommandNames = procHacker.js(
+// the same list over the block type's own full name (engine/item.ts commandNames, docs/findings-nbt.md "Item names")
+BlockLegacy.prototype.getCommandNames = derived(
     "?getCommandNames@BlockLegacy@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
-    CxxVector$CxxStringWith8Bytes,
-    { this: BlockLegacy, structureReturn: true },
+    function (this: BlockLegacy): CxxVector<CxxStringWith8Bytes> {
+        return commandNameVector(CxxVector$CxxStringWith8Bytes, commandNames(blockTypeName(this as any as StaticPointer)));
+    },
+    () =>
+        procHacker.js(
+            "?getCommandNames@BlockLegacy@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
+            CxxVector$CxxStringWith8Bytes,
+            { this: BlockLegacy, structureReturn: true },
+        ),
 );
-BlockLegacy.prototype.getCommandNames2 = procHacker.js(
+BlockLegacy.prototype.getCommandNames2 = derived(
     "?getCommandNames@BlockLegacy@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
-    CxxVector$CommandName,
-    { this: BlockLegacy, structureReturn: true },
+    function (this: BlockLegacy): CxxVector<CommandName> {
+        return commandNameVector(CxxVector$CommandName, commandNames(blockTypeName(this as any as StaticPointer)));
+    },
+    () =>
+        procHacker.js(
+            "?getCommandNames@BlockLegacy@@QEBA?AV?$vector@UCommandName@@V?$allocator@UCommandName@@@std@@@std@@XZ",
+            CxxVector$CommandName,
+            { this: BlockLegacy, structureReturn: true },
+        ),
 );
 BlockLegacy.prototype.getCreativeCategory = procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy });
 BlockLegacy.prototype.setDestroyTime = procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t);
