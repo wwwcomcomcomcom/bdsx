@@ -3,7 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
-import { copyLevelServerNetworkHandler } from "./engine/networkhandler";
+import { copyLevelServerNetworkHandler, serverMaxNumPlayers, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
@@ -3547,7 +3547,20 @@ ServerNetworkHandler.prototype.allowIncomingConnections = procHacker.js(
 ServerNetworkHandler.prototype.updateServerAnnouncement = procHacker.js("?updateServerAnnouncement@ServerNetworkHandler@@QEAAXXZ", void_t, {
     this: ServerNetworkHandler,
 });
-ServerNetworkHandler.prototype.setMaxNumPlayers = procHacker.js("?setMaxNumPlayers@ServerNetworkHandler@@QEAAHH@Z", void_t, { this: ServerNetworkHandler }, int32_t);
+// 1.26 inlined setMaxNumPlayers into SetMaxPlayersCommand::execute (engine/networkhandler.ts, docs/findings-packets.md "setMaxNumPlayers")
+ServerNetworkHandler.prototype.setMaxNumPlayers = derived(
+    "?setMaxNumPlayers@ServerNetworkHandler@@QEAAHH@Z",
+    function (this: ServerNetworkHandler, n: number): number {
+        return setMaxNumPlayersOwn(this as unknown as StaticPointer, n);
+    },
+    () => procHacker.js("?setMaxNumPlayers@ServerNetworkHandler@@QEAAHH@Z", int32_t, { this: ServerNetworkHandler }, int32_t),
+);
+Object.defineProperty(ServerNetworkHandler.prototype, "maxPlayers", {
+    get(this: ServerNetworkHandler): number {
+        return serverMaxNumPlayers(this as unknown as StaticPointer);
+    },
+    configurable: true,
+});
 ServerNetworkHandler.prototype.fetchConnectionRequest = procHacker.js(
     "?fetchConnectionRequest@ServerNetworkHandler@@QEAAAEBVConnectionRequest@@AEBVNetworkIdentifier@@@Z",
     ConnectionRequest,

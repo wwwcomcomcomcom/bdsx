@@ -68,8 +68,10 @@ export class ServerNetworkHandler extends AbstractClass {
     vftable: VoidPointer;
     @nativeField(CxxString, 0x2c8) // serverName, accessed in ServerNetworkHandler::allowIncomingConnections
     readonly motd: CxxString;
-    @nativeField(int32_t, 0x320) // accessed in ServerNetworkHandler::setMaxNumPlayers
-    readonly maxPlayers: int32_t;
+    /** max_num_players_ (implements.ts: at the build's layouts.ServerNetworkHandler.maxNumPlayers; 2024 had +0x320) */
+    get maxPlayers(): number {
+        return abstract();
+    }
 
     disconnectClient(client: NetworkIdentifier, message: string = "disconnectionScreen.disconnected"): void {
         abstract();
@@ -92,7 +94,8 @@ export class ServerNetworkHandler extends AbstractClass {
     updateServerAnnouncement(): void {
         abstract();
     }
-    setMaxNumPlayers(n: number): void {
+    /** @return 1 when capped at the network's limit, -1 when raised to the players already connected, else 0 */
+    setMaxNumPlayers(n: number): number {
         abstract();
     }
     /**
