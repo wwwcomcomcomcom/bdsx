@@ -26,7 +26,7 @@ import { setOnFireNoEffectsOwn } from "./engine/onfire";
 import { teleportActor } from "./engine/teleport";
 import { constructActorDefinitionIdentifier } from "./engine/actordefinition";
 import { applyEnchantOwn } from "./engine/enchant";
-import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct } from "./engine/itemdescriptor";
+import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
@@ -4492,6 +4492,11 @@ ItemStack.prototype.clone = function (target: ItemStack = new ItemStack(true)) {
     ItemStack$clone(this, target);
     return target;
 };
+// ItemStack(const ItemStack&) (docs/findings-nbt.md sections 25-26; 40 0x1bbd390 / 51 0x1a4fbb0): ItemStackBase's copy
+// constructor (a deep copy of the user data), the vptr, the net id. Without it bdsx's generated field copy shared
+// user_data_ with the source. A copy is also a valid move, so the move goes through it too.
+ItemStack.prototype[NativeType.ctor_copy] = procHacker.js("??0ItemStack@@QEAA@AEBV0@@Z", void_t, { this: ItemStack }, ItemStack);
+ItemStack.prototype[NativeType.ctor_move] = ItemStack.prototype[NativeType.ctor_copy];
 ItemStack.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@ItemStack@@QEBAMAEBVBlock@@@Z", float32_t, { this: ItemStack }, Block);
 ItemStack.constructWith = function (itemName: CxxString, amount: int32_t = 1, data: int32_t = 0): ItemStack {
     return CommandUtils.createItemStack(itemName, amount, data);
@@ -4511,11 +4516,13 @@ NetworkItemStackDescriptor.constructWith = procHacker.js(
     ItemStack,
 );
 
-NetworkItemStackDescriptor.prototype[NativeType.ctor_move] = procHacker.js(
+// 1.26 inlines the move constructor on both builds (docs/findings-nbt.md section 26): bdsx moves the 0x60 bytes itself.
+NetworkItemStackDescriptor.prototype[NativeType.ctor_move] = derived(
     "??0NetworkItemStackDescriptor@@QEAA@$$QEAV0@@Z",
-    void_t,
-    { this: NetworkItemStackDescriptor },
-    NetworkItemStackDescriptor,
+    function (this: NetworkItemStackDescriptor, from: NetworkItemStackDescriptor): void {
+        networkItemStackDescriptorMove(this as unknown as StaticPointer, from as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0NetworkItemStackDescriptor@@QEAA@$$QEAV0@@Z", void_t, { this: NetworkItemStackDescriptor }, NetworkItemStackDescriptor),
 );
 
 const ItemStack$fromTag = procHacker.js("?fromTag@ItemStack@@SA?AV1@AEBVCompoundTag@@@Z", ItemStack, { structureReturn: true }, CompoundTag);

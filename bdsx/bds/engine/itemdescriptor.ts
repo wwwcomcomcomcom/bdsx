@@ -72,3 +72,35 @@ export function itemDescriptorDestruct(self: StaticPointer): void {
     }
     deleting(self, 0);
 }
+
+/**
+ * NetworkItemStackDescriptor(NetworkItemStackDescriptor&&) (docs/findings-nbt.md section 26).
+ *
+ * The class is 0x60 bytes on both builds (Endstone's network_item_stack_descriptor.h, Apache-2.0): ItemDescriptor
+ * (vptr, impl_ +8), uint16 count +0x10, bool include_net_ids +0x18, the ItemStackNetIdVariant +0x20 (0x10 bytes of
+ * storage, its index byte at +0x30), BlockRuntimeId +0x38, the user-data std::string +0x40. 2024's move constructor
+ * (1.21.3.01 0x85ee90) is ItemDescriptor's move (impl_ taken, the source's nulled), the count, the byte, the variant
+ * copied, the runtime id, and the string moved (the source left an empty SSO string). 1.26 keeps no out-of-line copy
+ * on either build: the only small functions that store both ??_7ItemDescriptor and ??_7NetworkItemStackDescriptor
+ * without freeing anything are the copy constructor (40 0x2431a0, which clones impl_ and copies the string) and a
+ * relocation that also destroys the source (40 0x2734790). Both copy the variant member by member: the server id is
+ * an int at +0x20, and each client id alternative is a static vptr at +0x20 and an int at +0x28, so a byte copy of
+ * the variant is the same thing. So: the table's vptr, the other 0x58 bytes as they are, then the source's impl_
+ * nulled and its string emptied. Nothing is allocated or freed; the moved-from object still destructs normally.
+ */
+const NISD_VFTABLE = engineSymbol("??_7NetworkItemStackDescriptor@@6B@");
+const NISD_SIZE = 0x60;
+const NISD_USERDATA = 0x40;
+
+/** NetworkItemStackDescriptor::NetworkItemStackDescriptor(NetworkItemStackDescriptor&&) */
+export function networkItemStackDescriptorMove(self: StaticPointer, other: StaticPointer): void {
+    if (NISD_VFTABLE === null) throw Error("??_7NetworkItemStackDescriptor@@6B@: no address in this build");
+    self.copyFrom(other, NISD_SIZE);
+    self.setPointer(NISD_VFTABLE, 0);
+    other.setPointer(null, IMPL);
+    // std::string: buffer/pointer +0x00, size +0x10, capacity +0x18 -> an empty SSO string
+    other.setPointer(null, NISD_USERDATA + 0x10);
+    other.setPointer(null, NISD_USERDATA + 0x18);
+    other.setInt32(0xf, NISD_USERDATA + 0x18);
+    other.setUint8(0, NISD_USERDATA);
+}
