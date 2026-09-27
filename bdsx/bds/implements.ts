@@ -6642,6 +6642,12 @@ VirtualCommandOrigin.constructWith = function (origin: CommandOrigin, actor: Act
 Biome.prototype.getBiomeType = procHacker.js("?getBiomeType@Biome@@QEBA?AW4VanillaBiomeTypes@@XZ", uint32_t, { this: Biome });
 
 // item_component.ts
+// Each 1.26 table is NetworkedItemComponent<T>'s, at the component's +0; its buildNetworkTag (slot 4) stores
+// fnv1a(T's bare name) into the cereal descriptor it builds, which is how each one is named (docs/findings-nbt.md
+// section 22). FoodItemComponent is the only one with a second table (IFoodItemComponent, +0x10).
+// WeaponItemComponent and OnUseItemComponent are not here: they were never ItemComponents. 2024's tables for them
+// hold only a destructor (the item's component map cannot return one), and they lived as std::optional data in the
+// legacy factory data; 1.26 has no ItemComponent-shaped table carrying either type hash.
 const itemComponents = new Map<bin64_t, new () => ItemComponent>([
     [proc["??_7CooldownItemComponent@@6B@"].getAddressBin(), CooldownItemComponent], // CooldownItemComponent$vftable
     [proc["??_7ArmorItemComponent@@6B@"].getAddressBin(), ArmorItemComponent], // ArmorItemComponent$vftable
@@ -6652,7 +6658,6 @@ const itemComponents = new Map<bin64_t, new () => ItemComponent>([
     [proc["??_7FoodItemComponent@@6B?$NetworkedItemComponent@VFoodItemComponent@@@@@"].getAddressBin(), FoodItemComponent], // FoodItemComponent$vftable
     [proc["??_7FuelItemComponent@@6B@"].getAddressBin(), FuelItemComponent], // FuelItemComponent$vftable
     [proc["??_7IconItemComponent@@6B@"].getAddressBin(), IconItemComponent], // IconItemComponent$vftable
-    [proc["??_7OnUseItemComponent@@6B@"].getAddressBin(), OnUseItemComponent], // OnUseItemComponent$vftable
     [proc["??_7PlanterItemComponent@@6B@"].getAddressBin(), PlanterItemComponent], // PlanterItemComponent$vftable
     [proc["??_7ProjectileItemComponent@@6B@"].getAddressBin(), ProjectileItemComponent], // ProjectileItemComponent$vftable
     [proc["??_7RecordItemComponent@@6B@"].getAddressBin(), RecordItemComponent], // RecordItemComponent$vftable
@@ -6660,7 +6665,6 @@ const itemComponents = new Map<bin64_t, new () => ItemComponent>([
     [proc["??_7RepairableItemComponent@@6B@"].getAddressBin(), RepairableItemComponent], // RepairableItemComponent$vftable
     [proc["??_7ShooterItemComponent@@6B@"].getAddressBin(), ShooterItemComponent], // ShooterItemComponent$vftable
     [proc["??_7ThrowableItemComponent@@6B@"].getAddressBin(), ThrowableItemComponent], // ThrowableItemComponent$vftable
-    [proc["??_7WeaponItemComponent@@6B@"].getAddressBin(), WeaponItemComponent], // WeaponItemComponent$vftable
     [proc["??_7WearableItemComponent@@6B@"].getAddressBin(), WearableItemComponent], // WearableItemComponent$vftable
 ]);
 
