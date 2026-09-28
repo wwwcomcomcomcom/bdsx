@@ -42,34 +42,48 @@ export enum MobEffectIds {
     BadOmen,
     HeroOfTheVillage,
     Darkness,
+    // 31..37 are named by the resourceName each registered 1.26 MobEffect carries (read on both builds,
+    // docs/findings-components.md "MobEffect's fields and getComponentName")
+    TrialOmen,
+    WindCharged,
+    Weaving,
+    Oozing,
+    Infested,
+    RaidOmen,
+    BreathOfTheNautilus,
 }
 
+// MobEffect's fields are the constructor's stores, the same on both 1.26 builds as in 2024 (1.21.3.01 0x189e390, 40 0x2c753d0,
+// 51 0x1c4d480): vftable, mId +8, harmful +0xc, the colour +0x10, two particle HashedStrings +0x20 / +0x50, the description
+// id +0x80 (the fourth argument; what the hover text passes to I18n), the icon index +0xa0, the duration modifier +0xa4 (0.5
+// when harmful, else 1), a zeroed byte +0xa8, the resource name +0xb0 (the third argument), the icon name +0xd0, the
+// show-particles byte +0xf0, and the component name +0x100, the HashedString "minecraft:effect." + resourceName that the
+// inlined getComponentName returns. bdsx's offsets before (0x20 / 0x50 / 0x98) were older than 2024.
+// docs/findings-components.md "MobEffect's fields and getComponentName".
 @nativeClass(null)
 export class MobEffect extends NativeClass {
     @nativeField(uint32_t, 0x08)
     id: uint32_t;
-    @nativeField(bool_t)
+    @nativeField(bool_t, 0x0c)
     harmful: bool_t;
     // @nativeField(mce.Color, 0x10)
     // color: mce.Color;
-    @nativeField(CxxString, 0x20)
+    @nativeField(CxxString, engineLayout("MobEffect", "descriptionId", 0x80))
     descriptionId: CxxString;
-    @nativeField(int32_t)
+    @nativeField(int32_t, engineLayout("MobEffect", "icon", 0xa0))
     icon: int32_t;
-    @nativeField(float32_t)
+    @nativeField(float32_t, engineLayout("MobEffect", "durationModifier", 0xa4))
     durationModifier: float32_t;
-    @nativeField(bool_t) // 0x48
+    @nativeField(bool_t, engineLayout("MobEffect", "disabled", 0xa8))
     disabled: bool_t;
-    @nativeField(CxxString, 0x50)
+    @nativeField(CxxString, engineLayout("MobEffect", "resourceName", 0xb0))
     resourceName: CxxString;
-    @nativeField(CxxString)
+    @nativeField(CxxString, engineLayout("MobEffect", "iconName", 0xd0))
     iconName: CxxString;
-    @nativeField(bool_t)
+    @nativeField(bool_t, engineLayout("MobEffect", "showParticles", 0xf0))
     showParticles: bool_t;
-    @nativeField(HashedString, 0x98)
+    @nativeField(HashedString, engineLayout("MobEffect", "componentName", 0x100))
     readonly componentName: HashedString;
-    // @nativeField(VoidPointer, 0xF8) // std::vector<std::pair<Attribute const*,std::shared_ptr<AttributeModifier>>>
-    // attributeModifiers: CxxVector<CxxPair<Attribute.ref(), CxxSharedPtr<AttributeModifier>>;
 
     /**
      * @deprecated

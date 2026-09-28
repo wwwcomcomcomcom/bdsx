@@ -3,7 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
-import { mobEffectById, MOB_EFFECT_ID } from "./engine/mobeffect";
+import { mobEffectById, mobEffectInstanceComponentName, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
@@ -6225,9 +6225,17 @@ MobEffect.prototype.getId = derived(
     bool_t,
     bool_t,
 );
-(MobEffectInstance.prototype as any)._getComponentName = procHacker.js("?getComponentName@MobEffectInstance@@QEBAAEBVHashedString@@XZ", HashedString, {
-    this: MobEffectInstance,
-});
+// 1.26 inlines it (Mob::hasComponent): the registry slot's HashedString at +0x100, else HashedString::defaultErrorValue
+(MobEffectInstance.prototype as any)._getComponentName = derived(
+    "?getComponentName@MobEffectInstance@@QEBAAEBVHashedString@@XZ",
+    function getComponentName(this: MobEffectInstance): HashedString {
+        return mobEffectInstanceComponentName(this as any as StaticPointer).as(HashedString);
+    },
+    () =>
+        procHacker.js("?getComponentName@MobEffectInstance@@QEBAAEBVHashedString@@XZ", HashedString, {
+            this: MobEffectInstance,
+        }),
+);
 MobEffectInstance.prototype.getAmplifier = procHacker.js("?getAmplifier@MobEffectInstance@@QEBAHXZ", int32_t, { this: MobEffectInstance });
 MobEffectInstance.prototype.allocateAndSave = procHacker.js(
     "?save@MobEffectInstance@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",

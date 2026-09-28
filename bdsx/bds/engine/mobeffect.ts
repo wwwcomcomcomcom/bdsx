@@ -8,7 +8,7 @@
  * an unsigned `cmpq $0x25; ja` on the id, then the 8-byte slot, then a null test. 38 slots (0..37) is also Endstone's
  * `MobEffect::NUM_EFFECTS` (mob_effect.h, Apache-2.0). Slot 0 is UNKNOWN_EFFECT.
  */
-import { VoidPointer } from "../../core";
+import { StaticPointer, VoidPointer } from "../../core";
 import { engineLayout, engineSymbol } from "./deps";
 
 const MOB_EFFECTS = engineSymbol("?mMobEffects@MobEffect@@2PAV?$unique_ptr@VMobEffect@@U?$default_delete@VMobEffect@@@std@@@std@@A");
@@ -24,4 +24,22 @@ export function mobEffectById(id: number): VoidPointer | null {
     if (index >= EFFECT_COUNT) return null;
     const p = MOB_EFFECTS.getPointer(index * 8);
     return p.isNull() ? null : p;
+}
+
+/** MobEffect::mComponentName: the constructor builds "minecraft:effect." + resourceName into +0x100 on both builds, as in 2024 */
+const COMPONENT_NAME = engineLayout("MobEffect", "componentName", 0x100);
+/** HashedString::defaultErrorValue, a copy of the empty HashedString made by its dynamic initializer (40 0x1f0840, 51 0x28d720) */
+const DEFAULT_ERROR_VALUE = engineSymbol("?defaultErrorValue@HashedString@@2V1@A");
+
+/**
+ * MobEffectInstance::getComponentName. 2024 kept it out of line (1.21.3.01 0x18aea60): mMobEffects[id] (id at the instance's
+ * +0) and its HashedString at +0x100, or HashedString::defaultErrorValue for an id out of range or an empty slot. 1.26 has
+ * no copy of it; Mob::hasComponent(const HashedString&) (40 0x23f79e0, 51 0x29e31d0) inlines the same body once per
+ * instance of the effects vector: `cmpl $0x25; ja default; movq (mMobEffects,%rax,8); leaq 0x100(%rax); cmoveq default`.
+ */
+export function mobEffectInstanceComponentName(inst: StaticPointer): VoidPointer {
+    const effect = mobEffectById(inst.getUint32(0));
+    if (effect !== null) return effect.add(COMPONENT_NAME);
+    if (DEFAULT_ERROR_VALUE === null) throw Error("HashedString::defaultErrorValue: no address in this build");
+    return DEFAULT_ERROR_VALUE;
 }
