@@ -15,6 +15,7 @@ import {
     isHumanoidWearableBlockItemOwn,
     itemCanDestroyInCreative,
     itemCommandNames,
+    itemCreativeCategory,
     itemStackIsBlockOwn,
     itemStackIsValidAuxValue,
     REFLECTION_CTX_OF,
@@ -3945,7 +3946,15 @@ Item.prototype.getCommandNames2 = derived(
             { this: Item, structureReturn: true },
         ),
 );
-Item.prototype.getCreativeCategory = procHacker.js("?getCreativeCategory@Item@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: Item });
+// 1.26 inlined the 2024 leaf (`movl 0x1d0(%rcx),%eax; ret`) everywhere: bdsx reads Item::creative_category_, a one-byte
+// enum at +0x180 on both builds (engine/item.ts, docs/findings-containers.md section 17)
+Item.prototype.getCreativeCategory = derived(
+    "?getCreativeCategory@Item@@QEBA?AW4CreativeItemCategory@@XZ",
+    function (this: Item): number {
+        return itemCreativeCategory(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getCreativeCategory@Item@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: Item }),
+);
 
 ItemStackBase.prototype[NativeType.dtor] = vectorDeletingDestructor;
 

@@ -71,6 +71,20 @@ export function itemFullName(item: StaticPointer): string {
 }
 
 /**
+ * Item::creative_category_ (SharedTypes::CreativeItemCategory; a one-byte enum in 1.26: All 0, Construction 1, Nature 2,
+ * Equipment 3, Items 4, ItemCommandOnly 5, Undefined 6). 2024's ?getCreativeCategory@Item@@ (0x1cab790) was the leaf
+ * `movl 0x1d0(%rcx),%eax; ret` over a four-byte enum; 1.26 keeps no out-of-line copy. The field is +0x180 on both builds:
+ * the Item constructor (40 0x24cb9c0 / 51 0x1a790c0) stores `movb $0x4,0x180(%rcx)` between block_type_ (+0x178) and
+ * crafting_remaining_item_ (+0x188), 2024's `movl $0x4,0x1d0`; the inlined "Undefined takes the group's category" in
+ * the creative-group add (40 0x37520c0 / 51 0x36ea0c0) is `cmpb $0x6,0x180(%rax)` / `movb %dl,0x180(%rax)`
+ * (docs/findings-containers.md section 17). One byte is also right over 2024's layout (little endian, values < 7).
+ */
+export const ITEM_CREATIVE_CATEGORY = engineLayout("Item", "creativeCategory", 0x1d0);
+export function itemCreativeCategory(item: StaticPointer): number {
+    return item.getUint8(ITEM_CREATIVE_CATEGORY);
+}
+
+/**
  * The list Item::getCommandNames and BlockLegacy::getCommandNames build (2024 0x1cab320 / 0x1bedcc0, read in full):
  * the lowercased full name with the flag byte set; then, when the namespace is "minecraft", that flag cleared and the
  * lowercased raw name appended with it set. The namespace and the raw name are the two halves of the full name, which
