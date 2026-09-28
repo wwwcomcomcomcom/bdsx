@@ -1805,9 +1805,6 @@ CommandOutput.prototype[NativeType.dtor] = derived(
     () => procHacker.js("??1CommandOutput@@QEAA@XZ", void_t, { this: CommandOutput }),
 );
 
-CommandOutputSender.prototype._toJson = function () {
-    return JsonValue.constructWith({ error: "REMOVED FUNCTION" });
-};
 // 1.26 keeps 2024's sendToAdmins out of line (docs/findings-scoreboard.md section 15): every Success message goes, as a
 // gray "[name: message]" text object, to each player other than the origin's entity whose command permission level is
 // at least the given one -- only for player, command block, virtual and entity-server origins, and only while the

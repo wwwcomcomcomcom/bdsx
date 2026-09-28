@@ -20,6 +20,7 @@ import {
     REFLECTION_CTX_OF,
 } from "./engine/item";
 import { itemStackLoad, itemStackSave } from "./engine/itemsave";
+import { translateText } from "./engine/textobject";
 import { MAP_NODE_VALUE, mapNodes, OBJECTIVE_SCORES, SCOREBOARD_CRITERIA, SCOREBOARD_DISPLAY_OBJECTIVES, SCOREBOARD_IDENTITY_ENTITIES, SCOREBOARD_IDENTITY_FAKES, SCOREBOARD_IDENTITY_PLAYERS, SCOREBOARD_IDENTITY_REFS, SCOREBOARD_OBJECTIVES, SCOREBOARD_ON_PLAYER_SCORE_REMOVED_SLOT } from "./engine/scoreboard";
 import { pistonAttachedBlocks } from "./engine/piston";
 import { TickingAreaList } from "./tickingarea";
@@ -7021,45 +7022,6 @@ function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: 
     }
 }
 
-/**
- * internal class
- */
-@nativeClass(0x30) // allocated in CommandUtils::displayLocalizableMessage
-class TextObjectLocalizedTextWithParams extends NativeClass {
-    asString(): CxxStringWrapper {
-        abstract();
-    }
-    static _constructWith(messageId: string, params: CxxVector<CxxString>): TextObjectLocalizedTextWithParams {
-        abstract();
-    }
-}
-TextObjectLocalizedTextWithParams.prototype.asString = procHacker.js(
-    "?asString@TextObjectLocalizedTextWithParams@@UEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-    CxxStringWrapper,
-    { this: TextObjectLocalizedTextWithParams, structureReturn: true },
-);
-TextObjectLocalizedTextWithParams._constructWith = function (messageId: string, params: CxxVector<CxxString>) {
-    const object = new TextObjectLocalizedTextWithParams(true);
-    TextObjectLocalizedTextWithParams$Ctor(object, messageId, params);
-    return object;
-};
-const TextObjectLocalizedTextWithParams$Ctor = procHacker.js(
-    "??0TextObjectLocalizedTextWithParams@@QEAA@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@2@@Z",
-    TextObjectLocalizedTextWithParams,
-    null,
-    TextObjectLocalizedTextWithParams,
-    CxxString,
-    CxxVector$string,
-);
-const translateText = (rawtext: string, params: CxxVector<CxxString>): string => {
-    const textObject = TextObjectLocalizedTextWithParams._constructWith(rawtext, params);
-    const str = textObject.asString();
-    const translated = str.value;
-    str.destruct();
-    textObject.destruct();
-    return translated;
-};
-
 CommandOutputSender.prototype._toJson = function (output) {
     const len = output.messages.size();
     let statusMessage = "";
@@ -7073,6 +7035,9 @@ CommandOutputSender.prototype._toJson = function (output) {
             statusMessage += translated;
         }
     }
-    const value = Object.assign({ statusCode: output.getSuccessCount() > 0 ? 0 : -1 }, output.propertyBag.json.value());
+    // upstream bdsx's executeCommand put statusMessage beside statusCode, and its _toJson built the text and dropped it
+    // the property bag at +8 exists only for a DataSet output (docs/findings-scoreboard.md section 13)
+    const hasBag = (output as any as StaticPointer).getNullablePointer(8) !== null;
+    const value = Object.assign({ statusCode: output.getSuccessCount() > 0 ? 0 : -1, statusMessage }, hasBag ? output.propertyBag.json.value() : {});
     return JsonValue.constructWith(value);
 };
