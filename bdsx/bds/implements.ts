@@ -10,12 +10,17 @@ import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
 import {
     blockTypeName,
+    blockTypeRawName,
     commandNames,
     FOOD_ITEM_COMPONENT_INTERFACE,
     isHumanoidWearableBlockItemOwn,
+    itemBlockType,
     itemCanDestroyInCreative,
     itemCommandNames,
     itemCreativeCategory,
+    itemIsExplodable,
+    itemIsFireResistant,
+    itemRawNameId,
     itemStackIsBlockOwn,
     itemStackIsValidAuxValue,
     REFLECTION_CTX_OF,
@@ -4117,10 +4122,22 @@ ItemStackBase.prototype.getId = derived(
     },
     () => procHacker.js("?getId@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.getRawNameId = procHacker.js(
+// 2024 0x1b61f20: the item's block type's raw name when it has one, else the item's own raw name, else "" (1.26 inlined
+// it; engine/item.ts reads both names)
+ItemStackBase.prototype.getRawNameId = derived(
     "?getRawNameId@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-    CxxString,
-    { this: ItemStackBase, structureReturn: true },
+    function (this: ItemStackBase): string {
+        const item = this.getItem();
+        if (item === null) return "";
+        const blockType = itemBlockType(item as any as StaticPointer);
+        return blockType !== null ? blockTypeRawName(blockType) : itemRawNameId(item as any as StaticPointer);
+    },
+    () =>
+        procHacker.js(
+            "?getRawNameId@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+            CxxString,
+            { this: ItemStackBase, structureReturn: true },
+        ),
 );
 ItemStackBase.prototype.getCustomName = procHacker.js("?getName@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
     this: ItemStackBase,
@@ -4219,8 +4236,23 @@ ItemStackBase.prototype.isLiquidClipItem = procHacker.js("?isLiquidClipItem@Item
 ItemStackBase.prototype.isHorseArmorItem = procHacker.js("?isHorseArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isGlint = procHacker.js("?isGlint@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isFullStack = procHacker.js("?isFullStack@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isFireResistant = procHacker.js("?isFireResistant@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isExplodable = procHacker.js("?isExplodable@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024: a tail call to Item::isFireResistant / isExplodable, one-bit fields of the item's flag byte (engine/item.ts)
+ItemStackBase.prototype.isFireResistant = derived(
+    "?isFireResistant@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item !== null && itemIsFireResistant(item as any as StaticPointer);
+    },
+    () => procHacker.js("?isFireResistant@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
+ItemStackBase.prototype.isExplodable = derived(
+    "?isExplodable@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item !== null && itemIsExplodable(item as any as StaticPointer);
+    },
+    () => procHacker.js("?isExplodable@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isDamaged = procHacker.js("?isDamaged@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 // Q1-B-4, docs/findings-containers.md 10 (see the getMaxStackSize comment above
 // isValidAuxValue for the full route): 2024's isDamageableItem is item_+8, double deref, Item

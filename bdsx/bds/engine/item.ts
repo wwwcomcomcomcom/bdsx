@@ -174,3 +174,36 @@ export const REFLECTION_CTX_OF = Symbol("reflectionCtx");
  * `lea 0x10(%rax),%rcx; cmovne`), as 2024's constructor stored it (0x1da3f50).
  */
 export const FOOD_ITEM_COMPONENT_INTERFACE = engineLayout("FoodItemComponent", "foodInterface", 0x10);
+
+/**
+ * Item::raw_name_id_ ("diamond"), a HashedString: Endstone item.h puts description_id_, raw_name_id_, namespace_,
+ * full_name_ in that order, so counted back from the confirmed full_name_ (+0x120): namespace_ (a std::string) +0x100,
+ * raw_name_id_ +0xd0 -- 2024's +0xc8 moved by the same 8 bytes as full_name_ (+0x118 -> +0x120). 2024
+ * getRawNameId@Item 0x1cae490 `add $0xc8,%rcx; jmp` the HashedString string getter. The BlockType's raw name is
+ * name_info_.raw_name, the first member of name_info_ (Endstone block_type.h +144), whose full_name (+224) is
+ * confirmed; 2024 getRawNameId@BlockLegacy 0x1bef940 `add $0x48,%rcx`. docs/findings-containers.md section 19.
+ */
+export const ITEM_RAW_NAME_ID = engineLayout("Item", "rawNameId", 0xc8);
+export const BLOCK_TYPE_RAW_NAME = engineLayout("BlockLegacy", "rawName", 0x48);
+export function itemRawNameId(item: StaticPointer): string {
+    return item.getCxxString(ITEM_RAW_NAME_ID + 8);
+}
+export function blockTypeRawName(blockType: StaticPointer): string {
+    return blockType.getCxxString(BLOCK_TYPE_RAW_NAME + 8);
+}
+
+/**
+ * Item's flag byte right after max_damage_ (Endstone item.h: is_glint_, hand_equipped_, is_stacked_by_data_,
+ * requires_world_builder_, explodable_, fire_resistant_, should_despawn_, allow_offhand_ as one-bit fields), +0x152 on
+ * both builds between the confirmed full_name_ (+0x120, a 0x30-byte HashedString, then max_damage_ +0x150) and
+ * max_use_duration_ (+0x154). 2024 +0x14a with the same bits: isExplodable@Item 0x1cb1cb0 `shr $4; and $1`,
+ * isFireResistant@Item 0x1cb1cc0 `shr $5; and $1`. 1.26's item-entity hurt (40 0x2d3b864 / 51 0x5989c54) skips an
+ * explosion (cause 10/11) unless `testb $0x10, 0x152(item)` and fire unless not `testb $0x20` -- 2024 ItemActor::_hurt.
+ */
+export const ITEM_FLAGS = engineLayout("Item", "flags", 0x14a);
+export function itemIsExplodable(item: StaticPointer): boolean {
+    return (item.getUint8(ITEM_FLAGS) & 0x10) !== 0;
+}
+export function itemIsFireResistant(item: StaticPointer): boolean {
+    return (item.getUint8(ITEM_FLAGS) & 0x20) !== 0;
+}
