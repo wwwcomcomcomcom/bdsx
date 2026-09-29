@@ -13,6 +13,13 @@ import { engineLayout } from "./deps";
 export const LEVEL_CHUNK_MIN = engineLayout("LevelChunk", "min", 0x60);
 export const LEVEL_CHUNK_MAX = engineLayout("LevelChunk", "max", 0x6c);
 export const LEVEL_CHUNK_POSITION = engineLayout("LevelChunk", "position", 0x78);
+/**
+ * LevelChunk's std::vector<WeakEntityRef> of the actors it holds (2024 +0x1028, getChunkEntities `lea 0x1028`): +0x1360 on
+ * both builds. The same 471-byte function walks it by 0x18 on each (40 0xba5840, 51 0x9f7d50: `movq 0x1360(%rcx),%rbx;
+ * movq 0x1368(%rcx),%r14; cmp`, then each element's entity id at +0x10), and on 40 a live chunk's +0x1360 held the pig
+ * summoned in it. Endstone level_chunk.h stops declaring members before it.
+ */
+export const LEVEL_CHUNK_ENTITIES = engineLayout("LevelChunk", "entities", 0x1028);
 
 /** LevelChunk::toWorldPos: min_ plus the chunk-local position */
 export function levelChunkToWorld(chunk: StaticPointer, x: number, y: number, z: number): [number, number, number] {

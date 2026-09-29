@@ -52,7 +52,7 @@ import {
     blockTypeTranslucency,
     lookupBlockType,
 } from "./engine/blocktype";
-import { LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkToWorld } from "./engine/chunk";
+import { LEVEL_CHUNK_ENTITIES, LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkToWorld } from "./engine/chunk";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -2318,6 +2318,14 @@ StackResultStorageEntity.prototype._getStackRef = procHacker.js("?_getStackRef@S
 });
 
 WeakEntityRef.prototype.tryUnwrap = function <T extends typeof Actor>(clazz: T, getRemoved: boolean = false): InstanceType<T> | null {
+    if (!("??0StackResultStorageEntity@@IEAA@AEBVWeakStorageEntity@@@Z" in proc)) {
+        // 1.26 has no StackResultStorageEntity constructor on either build: resolve the reference through
+        // ActorOwnerComponent (engine/entt.ts, as HitResult.getEntity does); an expired reference is null
+        const p = enttActorFromWeakRef(this as any as StaticPointer);
+        if (p === null) return null;
+        const actor = Actor.from(p);
+        return actor instanceof clazz ? (actor as InstanceType<T>) : null;
+    }
     const storage = new StackResultStorageEntity(true);
     storage.constructWith(this);
     if (!storage._hasValue()) return null;
@@ -7028,10 +7036,19 @@ LevelChunk.prototype.toWorldPos = derived(
 );
 LevelChunk.prototype.getEntity = procHacker.js("?getEntity@LevelChunk@@QEBAPEAVActor@@AEBUActorUniqueID@@@Z", Actor, { this: LevelChunk }, ActorUniqueID.ref());
 // std::vector<WeakEntityRef>& LevelChunk::getChunkEntities();
-LevelChunk.prototype.getChunkEntities = procHacker.js(
+// 1.26 inlined 2024's `lea 0x1028` (engine/chunk.ts: the vector is +0x1360 on both builds)
+const LevelChunk$entities = CxxVector.make(WeakEntityRef);
+LevelChunk.prototype.getChunkEntities = derived(
     "?getChunkEntities@LevelChunk@@QEAAAEAV?$vector@VWeakEntityRef@@V?$allocator@VWeakEntityRef@@@std@@@std@@XZ",
-    CxxVectorToArray.make(WeakEntityRef),
-    { this: LevelChunk },
+    function (this: LevelChunk): WeakEntityRef[] {
+        return this.addAs(LevelChunk$entities, LEVEL_CHUNK_ENTITIES).toArray();
+    },
+    () =>
+        procHacker.js(
+            "?getChunkEntities@LevelChunk@@QEAAAEAV?$vector@VWeakEntityRef@@V?$allocator@VWeakEntityRef@@@std@@@std@@XZ",
+            CxxVectorToArray.make(WeakEntityRef),
+            { this: LevelChunk },
+        ),
 );
 
 ChunkSource.prototype.getLevel = procHacker.js("?getLevel@ChunkSource@@QEBAAEAVLevel@@XZ", Level, { this: ChunkSource });
