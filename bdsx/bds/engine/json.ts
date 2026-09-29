@@ -11,8 +11,19 @@
  *
  * These readers are what bdsx's JsonValue needs to read a parsed value back (`size`, `get`, `getMemberNames`,
  * `isMember`); no address of either build is involved.
+ *
+ * Inserting goes through the engine's two non-const lookups (docs/findings-scoreboard.md section 17). In 2024 the
+ * non-const operator[](int) and operator[](const char*) were bare jumps (0x27a1d80, 0x27a1f20) to operator[](unsigned)
+ * (0x27a1d90) and _resolveReference(const char*) (0x27a2480); 1.26 keeps no copy of the two jumps but ships both
+ * targets, with 2024's bodies: operator[](unsigned) (40 0x9fdae00, 51 0xa0fb3c0) makes the value an array if it is
+ * not one and resizes it to index + 1 when the index is past the end, each new element a null Value on the heap;
+ * _resolveReference (40 0x9fdb970, 51 0xa0fbf30) makes it an object if it is not one and inserts a null member when
+ * the key is absent. Both return the element in place.
  */
 import { NativePointer, VoidPointer } from "../../core";
+import { makefunc } from "../../makefunc";
+import { int32_t } from "../../nativetype";
+import { engineSymbol } from "./deps";
 
 const TYPE = 8;
 const ARRAY = 6;
@@ -65,4 +76,28 @@ export function jsonSize(value: VoidPointer): number {
         return map === null ? 0 : map.getInt32(8);
     }
     return 0;
+}
+
+const RESOLVE_REFERENCE = engineSymbol("?_resolveReference@Value@Json@@AEAAAEAV12@PEBD@Z");
+const INDEX_UNSIGNED = engineSymbol("??AValue@Json@@QEAAAEAV01@I@Z");
+let resolveReference: ((value: VoidPointer, key: string) => VoidPointer) | null = null;
+let indexUnsigned: ((value: VoidPointer, index: number) => VoidPointer) | null = null;
+
+/** the non-const operator[](const char*): the member `key`, inserted as null if absent; the value becomes an object */
+export function jsonObjectMemberInsert(value: VoidPointer, key: string): VoidPointer {
+    if (resolveReference === null) {
+        if (RESOLVE_REFERENCE === null) throw Error("Json::Value::_resolveReference: no address in this build");
+        resolveReference = makefunc.js(RESOLVE_REFERENCE, VoidPointer, null, VoidPointer, makefunc.Utf8);
+    }
+    return resolveReference(value, key);
+}
+
+/** the non-const operator[](unsigned): the element `index`, the array grown to hold it; the value becomes an array */
+export function jsonArrayElementInsert(value: VoidPointer, index: number): VoidPointer {
+    if (index < 0 || (index | 0) !== index) throw RangeError(`Json::Value: bad array index ${index}`);
+    if (indexUnsigned === null) {
+        if (INDEX_UNSIGNED === null) throw Error("Json::Value::operator[](unsigned): no address in this build");
+        indexUnsigned = makefunc.js(INDEX_UNSIGNED, VoidPointer, null, VoidPointer, int32_t);
+    }
+    return indexUnsigned(value, index);
 }

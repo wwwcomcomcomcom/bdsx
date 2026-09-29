@@ -5,7 +5,7 @@ import { makefunc } from "../makefunc";
 import { mce } from "../mce";
 import { AbstractClass, nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, int32_t, NativeType, uint8_t, void_t } from "../nativetype";
-import { jsonArrayElements, jsonObjectGet, jsonObjectMembers, jsonSize } from "./engine/json";
+import { jsonArrayElementInsert, jsonObjectGet, jsonObjectMemberInsert, jsonObjectMembers, jsonSize } from "./engine/json";
 import { derived, proc } from "./symbols";
 
 export enum JsonValueType {
@@ -232,25 +232,17 @@ const Json$Value$CtorWithString = makefunc.js(
     JsonValue,
     CxxString,
 );
-// 1.26 (docs/findings-scoreboard.md 11.3): neither build has an address for operator[](int), operator[](const char*),
-// getMemberNames or size, so bdsx reads the parsed value by its layout (engine/json.ts). These are read-only: a member
-// that is not there is not inserted, as the 2024 non-const operator[] did.
+// 1.26 (docs/findings-scoreboard.md 11.3 and 17): neither build has an address for operator[](int) or
+// operator[](const char*), which were bare jumps in 2024 to operator[](unsigned) and _resolveReference; both targets
+// ship, so these insert as before (engine/json.ts). getMemberNames and size are read by the layout.
 const Json$Value$GetByInt = derived(
     "??AValue@Json@@QEAAAEAV01@H@Z",
-    (self: JsonValue, index: number): JsonValue => {
-        const e = jsonArrayElements(self)[index];
-        if (e === undefined) throw RangeError(`Json::Value: no element ${index} (inserting is not available on BDS 1.26)`);
-        return e.as(JsonValue);
-    },
+    (self: JsonValue, index: number): JsonValue => jsonArrayElementInsert(self, index).as(JsonValue),
     () => makefunc.js(proc["??AValue@Json@@QEAAAEAV01@H@Z"], JsonValue, null, JsonValue, int32_t),
 );
 const Json$Value$GetByString = derived(
     "??AValue@Json@@QEAAAEAV01@PEBD@Z",
-    (self: JsonValue, key: string): JsonValue => {
-        const v = jsonObjectGet(self, key);
-        if (v === null) throw Error(`Json::Value: no member '${key}' (inserting is not available on BDS 1.26)`);
-        return v.as(JsonValue);
-    },
+    (self: JsonValue, key: string): JsonValue => jsonObjectMemberInsert(self, key).as(JsonValue),
     () => makefunc.js(proc["??AValue@Json@@QEAAAEAV01@PEBD@Z"], JsonValue, null, JsonValue, makefunc.Utf8),
 );
 const Json$Value$GetMemberNames = derived(
