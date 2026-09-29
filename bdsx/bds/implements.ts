@@ -20,6 +20,7 @@ import {
     itemCreativeCategory,
     itemFullName,
     itemIsExplodable,
+    itemIsHumanoidArmor,
     itemIsFireResistant,
     itemRawNameId,
     itemStackIsBlockOwn,
@@ -4012,7 +4013,15 @@ Item.prototype.getCreativeCategory = derived(
 
 ItemStackBase.prototype[NativeType.dtor] = vectorDeletingDestructor;
 
-Item.prototype.isArmor = procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?isHumanoidArmor@HumanoidArmorItem@@UEBA_NXZ", bool_t, { this: Item });
+// Item::isHumanoidArmor through the item's own vftable (slot 10 on both 1.26 builds, engine/item.ts); a build whose table
+// names HumanoidArmorItem's override keeps the 2024 lookup
+Item.prototype.isArmor = derived(
+    "?isHumanoidArmor@HumanoidArmorItem@@UEBA_NXZ",
+    function (this: Item): boolean {
+        return itemIsHumanoidArmor(this as any as StaticPointer);
+    },
+    () => procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?isHumanoidArmor@HumanoidArmorItem@@UEBA_NXZ", bool_t, { this: Item }),
+);
 Item.prototype.getArmorValue = procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?getArmorValue@HumanoidArmorItem@@UEBAHXZ", int32_t, { this: Item });
 Item.prototype.getToughnessValue = procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?getToughnessValue@HumanoidArmorItem@@UEBAHXZ", int32_t, { this: Item });
 Item.prototype.getCooldownType = procHacker.jsv("??_7Item@@6B@", "?getCooldownType@Item@@UEBAAEBVHashedString@@XZ", HashedString, { this: Item });
@@ -4509,7 +4518,14 @@ ItemStackBase.prototype.getDamageValue = derived(
     () => procHacker.js("?getDamageValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
 );
 ItemStackBase.prototype.getAttackDamage = procHacker.js("?getAttackDamage@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
-ItemStackBase.prototype.isHumanoidWearableItem = procHacker.js("?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024: isHumanoidArmorItem() || isHumanoidWearableBlockItem(); 1.26.51 keeps that body (the table has it), 1.26.40 inlines it
+ItemStackBase.prototype.isHumanoidWearableItem = derived(
+    "?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        return this.isHumanoidWearableArmorItem() || this.isHumanoidWearableBlockItem();
+    },
+    () => procHacker.js("?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // 1.26.51.1 inlines this into isHumanoidWearableItem, so bdsx runs the same membership test the 1.26.40.8 body does
 // (engine/item.ts, docs/findings-audit.md "isHumanoidWearableBlockItem")
 ItemStackBase.prototype.isHumanoidWearableBlockItem = derived(
@@ -4519,7 +4535,15 @@ ItemStackBase.prototype.isHumanoidWearableBlockItem = derived(
     },
     () => procHacker.js("?isHumanoidWearableBlockItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isHumanoidWearableArmorItem = procHacker.js("?isHumanoidArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b64b60: the item's isHumanoidArmor virtual (engine/item.ts)
+ItemStackBase.prototype.isHumanoidWearableArmorItem = derived(
+    "?isHumanoidArmorItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item !== null && itemIsHumanoidArmor(item as any as StaticPointer);
+    },
+    () => procHacker.js("?isHumanoidArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.allocateAndSave = derived(
     "?save@ItemStackBase@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
     // 1.26's save takes a SaveContext: engine/itemsave.ts calls it with SaveToDisk, as ItemActor's own save does

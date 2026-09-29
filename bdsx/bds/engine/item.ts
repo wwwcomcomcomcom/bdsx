@@ -207,3 +207,22 @@ export function itemIsExplodable(item: StaticPointer): boolean {
 export function itemIsFireResistant(item: StaticPointer): boolean {
     return (item.getUint8(ITEM_FLAGS) & 0x20) !== 0;
 }
+
+/**
+ * Item::isHumanoidArmor through the item's own vftable: slot 10 on both builds (2024: 9, +0x48). 1.26.51's
+ * isHumanoidWearableItem (0x1a59d80) calls vftable +0x50 before its wearable-block walk, and 1.26.40, which keeps no
+ * isHumanoidWearableItem, inlines the same +0x50 check into two callers (0x8f66a50, 0x1bc7a90); HumanoidArmorItem's
+ * slot 10 is the image's `return true` (docs/findings-audit.md "isHumanoidWearableItem").
+ */
+export const ITEM_IS_HUMANOID_ARMOR_SLOT = engineLayout("Item", "isHumanoidArmorSlot", 9);
+const humanoidArmorCalls = new Map<string, (item: VoidPointer) => boolean>();
+export function itemIsHumanoidArmor(item: StaticPointer): boolean {
+    const fn = item.getPointer(0).getPointer(ITEM_IS_HUMANOID_ARMOR_SLOT * 8);
+    const key = fn.toString();
+    let call = humanoidArmorCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, bool_t, null, VoidPointer);
+        humanoidArmorCalls.set(key, call);
+    }
+    return call(item);
+}
