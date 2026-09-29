@@ -136,6 +136,22 @@ export function commandAllocVftable(): NativePointer {
 /** CommandOutput::success_count_, the int every inlined success() increments (`inc dword [output+0x28]`) */
 export const COMMAND_OUTPUT_SUCCESS_COUNT = 0x28;
 
+/**
+ * CommandOutput::set<const char*>(key, value) (40 0xb5c40, 51 0xb6360; 2024 0xfb600): for a DataSet output,
+ * json[key] = Value(const char*) in the property bag, nothing otherwise -- set<int>'s body with the string constructor.
+ * 1.26 keeps no copy of set<std::string> (2024 0xfb6d0, which copied the string and did the same), so bdsx's set_string
+ * comes here (docs/findings-scoreboard.md section 18).
+ */
+const SET_CSTRING = engineSymbol("??$set@PEBD@CommandOutput@@QEAAXPEBD0@Z");
+let setCString: ((output: VoidPointer, key: string, value: string) => void) | null = null;
+export function commandOutputSetString(output: VoidPointer, key: string, value: string): void {
+    if (setCString === null) {
+        if (SET_CSTRING === null) throw Error("CommandOutput::set<const char*>: no address in this build");
+        setCString = makefunc.js(SET_CSTRING, void_t, null, VoidPointer, makefunc.Utf8, makefunc.Utf8);
+    }
+    setCString(output, key, value);
+}
+
 const ADD_MESSAGE = engineSymbol("bdsx:CommandOutput::addMessage");
 let addMessageCall: ((output: VoidPointer, messageId: string, params: VoidPointer, type: number) => void) | null = null;
 

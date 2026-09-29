@@ -61,6 +61,7 @@ import {
     commandOutputAddMessage,
     commandOutputDeleteBag,
     commandOutputError,
+    commandOutputSetString,
     commandOutputSuccess,
     commandOutputTypeFor,
     commandParseRule,
@@ -1713,22 +1714,36 @@ CommandOutput.prototype.empty = function () {
     const ptr = this as any as StaticPointer;
     return ptr.getPointer(0x10).equalsptr(ptr.getPointer(0x18));
 };
-CommandOutput.prototype.set_string = procHacker.js(
+// 1.26 (docs/findings-scoreboard.md section 18): set<bool>, set<int> and set<float> ship by address; set<std::string> is
+// gone and goes through set<const char*> (engine/command.ts); set<BlockPos> writes {x, y, z} as 2024's
+// CommandPropertyBag::set(key, BlockPos) did
+CommandOutput.prototype.set_string = derived(
     "??$set@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@CommandOutput@@QEAAXPEBDV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: CommandOutput },
-    makefunc.Utf8,
-    CxxString,
+    function (this: CommandOutput, key: string, value: string): void {
+        commandOutputSetString(this, key, value);
+    },
+    () =>
+        procHacker.js(
+            "??$set@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@CommandOutput@@QEAAXPEBDV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            void_t,
+            { this: CommandOutput },
+            makefunc.Utf8,
+            CxxString,
+        ),
 );
 CommandOutput.prototype.set_int = procHacker.js("??$set@H@CommandOutput@@QEAAXPEBDH@Z", void_t, { this: CommandOutput }, makefunc.Utf8, int32_t);
 CommandOutput.prototype.set_bool = procHacker.js("??$set@_N@CommandOutput@@QEAAXPEBD_N@Z", void_t, { this: CommandOutput }, makefunc.Utf8, bool_t);
 CommandOutput.prototype.set_float = procHacker.js("??$set@M@CommandOutput@@QEAAXPEBDM@Z", void_t, { this: CommandOutput }, makefunc.Utf8, float32_t);
-CommandOutput.prototype.set_BlockPos = procHacker.js(
+CommandOutput.prototype.set_BlockPos = derived(
     "??$set@VBlockPos@@@CommandOutput@@QEAAXPEBDVBlockPos@@@Z",
-    void_t,
-    { this: CommandOutput },
-    makefunc.Utf8,
-    BlockPos,
+    function (this: CommandOutput, key: string, value: BlockPos): void {
+        if (this.type !== CommandOutputType.DataSet) return;
+        const json = this.propertyBag.json.get(key);
+        json.get("x").setValue(value.x | 0);
+        json.get("y").setValue(value.y | 0);
+        json.get("z").setValue(value.z | 0);
+    },
+    () => procHacker.js("??$set@VBlockPos@@@CommandOutput@@QEAAXPEBDVBlockPos@@@Z", void_t, { this: CommandOutput }, makefunc.Utf8, BlockPos),
 );
 CommandOutput.prototype.set_Vec3 = function (k, v) {
     if (this.type !== CommandOutputType.DataSet) return;
