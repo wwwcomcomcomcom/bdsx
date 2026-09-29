@@ -41,10 +41,12 @@ export class Dimension extends NativeClass {
     fetchNearestAttackablePlayer(actor: Actor, distance: number, blockPos?: BlockPos): Player {
         abstract();
     }
-    getSunAngle(): number {
+    /** @param alpha the partial tick, 0..1 (2024 took it as a float argument; bdsx used to leave it unset) */
+    getSunAngle(alpha: number = 0): number {
         abstract();
     }
-    getTimeOfDay(): number {
+    /** 0 at noon, 0.5 at midnight; @param alpha the partial tick, 0..1 */
+    getTimeOfDay(alpha: number = 0): number {
         abstract();
     }
     isDay(): boolean {

@@ -2,7 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
-import { dimensionCloudHeight, dimensionIsDay } from "./engine/dimension";
+import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
@@ -699,8 +699,24 @@ Dimension.prototype.getTickingAreas = derived(
     },
     () => procHacker.js("?getTickingAreas@Dimension@@QEAAAEAVTickingAreaList@@XZ", TickingAreaList, { this: Dimension }),
 );
-Dimension.prototype.getSunAngle = procHacker.js("?getSunAngle@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
-Dimension.prototype.getTimeOfDay = procHacker.js("?getTimeOfDay@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
+// 1.26 inlines both (engine/dimension.ts): 2024 getTimeOfDay(alpha) zeroes alpha when DoDaylightCycle is off and calls the
+// dimension's getTimeOfDay(level time, alpha); getSunAngle is that times 2pi
+Dimension.prototype.getTimeOfDay = derived(
+    "?getTimeOfDay@Dimension@@QEBAMM@Z",
+    function (this: Dimension, alpha: number = 0): number {
+        const level = bedrockServer.level;
+        const cycle = level.getGameRules().getRule(GameRuleId.DoDaylightCycle).getValue() !== false;
+        return dimensionTimeOfDay(this as unknown as StaticPointer, level.getTime(), cycle ? alpha : 0);
+    },
+    () => procHacker.js("?getTimeOfDay@Dimension@@QEBAMM@Z", float32_t, { this: Dimension }),
+);
+Dimension.prototype.getSunAngle = derived(
+    "?getSunAngle@Dimension@@QEBAMM@Z",
+    function (this: Dimension, alpha: number = 0): number {
+        return Math.fround(this.getTimeOfDay(alpha) * Math.fround(Math.PI) * 2);
+    },
+    () => procHacker.js("?getSunAngle@Dimension@@QEBAMM@Z", float32_t, { this: Dimension }),
+);
 // 1.26 inlines isDay (sky_darken_ < 4; engine/dimension.ts)
 Dimension.prototype.isDay = derived(
     "?isDay@Dimension@@UEBA_NXZ",
