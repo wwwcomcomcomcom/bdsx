@@ -441,23 +441,44 @@ CommandSelectorBase.prototype.filter = procHacker.js(
     CommandOrigin,
     Actor,
 );
-CommandSelectorBase.prototype.getName = procHacker.js(
+// 1.26 inlined these four (docs/findings-scoreboard.md section 19); the selector keeps 2024's layout (section 10.3), so
+// they are 2024's bodies over bdsx's fields: the name filters are InvertableFilter<std::string> (CommandName, 0x28 bytes)
+CommandSelectorBase.prototype.getName = derived(
     "?getName@CommandSelectorBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-    CxxString,
-    { this: CommandSelectorBase, structureReturn: true },
+    function (this: CommandSelectorBase): string {
+        for (const filter of this.nameFilters) if (!filter.inverted) return filter.name;
+        return "";
+    },
+    () =>
+        procHacker.js(
+            "?getName@CommandSelectorBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+            CxxString,
+            { this: CommandSelectorBase, structureReturn: true },
+        ),
 );
-CommandSelectorBase.prototype.hasName = procHacker.js("?hasName@CommandSelectorBase@@QEBA_NXZ", bool_t, { this: CommandSelectorBase });
-CommandSelectorBase.prototype.setIncludeDeadPlayers = procHacker.js(
+CommandSelectorBase.prototype.hasName = derived(
+    "?hasName@CommandSelectorBase@@QEBA_NXZ",
+    function (this: CommandSelectorBase): boolean {
+        for (const filter of this.nameFilters) if (!filter.inverted) return true;
+        return false;
+    },
+    () => procHacker.js("?hasName@CommandSelectorBase@@QEBA_NXZ", bool_t, { this: CommandSelectorBase }),
+);
+CommandSelectorBase.prototype.setIncludeDeadPlayers = derived(
     "?setIncludeDeadPlayers@CommandSelectorBase@@QEAAX_N@Z",
-    void_t,
-    { this: CommandSelectorBase },
-    bool_t,
+    function (this: CommandSelectorBase, value: boolean): void {
+        this.includeDeadPlayers = value;
+        this.isExplicitIdSelector = false;
+    },
+    () => procHacker.js("?setIncludeDeadPlayers@CommandSelectorBase@@QEAAX_N@Z", void_t, { this: CommandSelectorBase }, bool_t),
 );
-CommandSelectorBase.prototype.setType = procHacker.js(
+CommandSelectorBase.prototype.setType = derived(
     "?setType@CommandSelectorBase@@QEAAXW4CommandSelectionType@@@Z",
-    void_t,
-    { this: CommandSelectorBase },
-    uint32_t,
+    function (this: CommandSelectorBase, type: CommandSelectionType): void {
+        this.type = type;
+        this.isExplicitIdSelector = false;
+    },
+    () => procHacker.js("?setType@CommandSelectorBase@@QEAAXW4CommandSelectionType@@@Z", void_t, { this: CommandSelectorBase }, uint32_t),
 );
 
 @nativeClass()
