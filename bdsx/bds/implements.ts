@@ -24,6 +24,7 @@ import {
     itemIsHumanoidArmor,
     ITEM_SLOTS,
     itemSlotCall,
+    itemDestroySpeed,
     itemIsFireResistant,
     itemRawNameId,
     itemStackIsBlockOwn,
@@ -4320,7 +4321,22 @@ ItemStackBase.prototype.isEnchanted = derived(
     },
     () => procHacker.js("?isEnchanted@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.setDamageValue = procHacker.js("?setDamageValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t);
+// 2024 0x1b6cf20 -> Item::setDamageValue 0x1cb4a10: with an item, user data (made if missing) gets Damage = the value as a
+// zero-extended short; 1.26 inlined both, bdsx writes it through the NBT layer (getDamageValue above reads the same tag)
+ItemStackBase.prototype.setDamageValue = derived(
+    "?setDamageValue@ItemStackBase@@QEAAXF@Z",
+    function (this: ItemStackBase, value: number): void {
+        if (this.getItem() === null) return;
+        const self = this as any as StaticPointer;
+        let userData = self.getNullablePointerAs(CompoundTag, 16);
+        if (userData === null) {
+            userData = CompoundTag.allocate();
+            self.setPointer(userData, 16);
+        }
+        userData.setAllocated("Damage", IntTag.allocateWith(value & 0xffff));
+    },
+    () => procHacker.js("?setDamageValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t),
+);
 ItemStackBase.prototype.setItem = procHacker.js("?_setItem@ItemStackBase@@AEAA_NH_N@Z", bool_t, { this: ItemStackBase }, int32_t);
 ItemStackBase.prototype.startCoolDown = procHacker.js("?startCoolDown@ItemStackBase@@QEBAXPEAVPlayer@@@Z", void_t, { this: ItemStackBase }, ServerPlayer);
 @nativeClass()
@@ -4743,7 +4759,15 @@ ItemStackBase.prototype.saveEnchantsToUserData = procHacker.js(
 //     CxxString,
 //     { this: ItemStackBase, structureReturn: true },
 // );
-ItemStackBase.prototype.canDestroySpecial = procHacker.js("?canDestroySpecial@ItemStackBase@@QEBA_NAEBVBlock@@@Z", bool_t, { this: ItemStackBase }, Block);
+// 2024 0x1b59f10: item_ ? item->canDestroySpecial(block) : false; the Item virtual is slot 33 (Item$canDestroySpecial above)
+ItemStackBase.prototype.canDestroySpecial = derived(
+    "?canDestroySpecial@ItemStackBase@@QEBA_NAEBVBlock@@@Z",
+    function (this: ItemStackBase, block: Block): boolean {
+        const item = this.getItem();
+        return item !== null && Item$canDestroySpecial.call(item, block);
+    },
+    () => procHacker.js("?canDestroySpecial@ItemStackBase@@QEBA_NAEBVBlock@@@Z", bool_t, { this: ItemStackBase }, Block),
+);
 const ItemStackBase$hurtAndBreak = procHacker.js("?hurtAndBreak@ItemStackBase@@QEAA_NHPEAVActor@@@Z", bool_t, { this: ItemStackBase }, int32_t, Actor);
 ItemStackBase.prototype.hurtAndBreak = function (count: number, actor: Actor | null = null): boolean {
     return ItemStackBase$hurtAndBreak.call(this, count, actor);
@@ -4782,7 +4806,16 @@ ItemStack.prototype.clone = function (target: ItemStack = new ItemStack(true)) {
 // user_data_ with the source. A copy is also a valid move, so the move goes through it too.
 ItemStack.prototype[NativeType.ctor_copy] = procHacker.js("??0ItemStack@@QEAA@AEBV0@@Z", void_t, { this: ItemStack }, ItemStack);
 ItemStack.prototype[NativeType.ctor_move] = ItemStack.prototype[NativeType.ctor_copy];
-ItemStack.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@ItemStack@@QEBAMAEBVBlock@@@Z", float32_t, { this: ItemStack }, Block);
+// 2024 0x1b5ffe0: item->getDestroySpeed(ItemInstance(*this), block), 1.0 without an item; the Item virtual is slot 88
+// (engine/item.ts) and takes the ItemStackBase itself
+ItemStack.prototype.getDestroySpeed = derived(
+    "?getDestroySpeed@ItemStack@@QEBAMAEBVBlock@@@Z",
+    function (this: ItemStack, block: Block): number {
+        const item = this.getItem();
+        return item === null ? 1 : itemDestroySpeed(item as any as StaticPointer, this, block);
+    },
+    () => procHacker.js("?getDestroySpeed@ItemStack@@QEBAMAEBVBlock@@@Z", float32_t, { this: ItemStack }, Block),
+);
 ItemStack.constructWith = function (itemName: CxxString, amount: int32_t = 1, data: int32_t = 0): ItemStack {
     return CommandUtils.createItemStack(itemName, amount, data);
 };

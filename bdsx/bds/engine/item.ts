@@ -14,7 +14,7 @@
  */
 import { NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
-import { bool_t, CxxString, int16_t, int32_t } from "../../nativetype";
+import { bool_t, CxxString, float32_t, int16_t, int32_t } from "../../nativetype";
 import { engineLayout } from "./deps";
 
 export const ITEM_BLOCK_TYPE = engineLayout("Item", "blockType", 0x178);
@@ -277,4 +277,22 @@ export function itemSlotCall<T>(item: StaticPointer, slot: number, ret: SlotRet,
         slotCalls.set(key, call);
     }
     return arg === undefined ? call(item) : call(item, arg);
+}
+
+/**
+ * Item::getDestroySpeed(ItemStackBase const&, Block const&): slot 88 on both builds (2024: 77, +0x268). The base Item's
+ * slot 88 is `movss 1.0f; ret` (MapItem, 40 0xdff460 / 51 0xd3f590), PickaxeItem's (40 0x3759800) reads the digger's tag
+ * at +0x218 as canDestroySpecial does. Endstone item.h counts 88; the one extra 1.26 virtual sits between it and 93.
+ */
+export const ITEM_GET_DESTROY_SPEED_SLOT = engineLayout("Item", "getDestroySpeedSlot", 77);
+const destroySpeedCalls = new Map<string, (item: VoidPointer, stack: VoidPointer, block: VoidPointer) => number>();
+export function itemDestroySpeed(item: StaticPointer, stack: VoidPointer, block: VoidPointer): number {
+    const fn = item.getPointer(0).getPointer(ITEM_GET_DESTROY_SPEED_SLOT * 8);
+    const key = fn.toString();
+    let call = destroySpeedCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, float32_t, null, VoidPointer, VoidPointer, VoidPointer);
+        destroySpeedCalls.set(key, call);
+    }
+    return call(item, stack, block);
 }
