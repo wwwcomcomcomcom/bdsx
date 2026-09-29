@@ -58,3 +58,17 @@ export function dimensionTimeOfDay(dimension: StaticPointer, time: number, alpha
     }
     return call(dimension, time, alpha);
 }
+
+/**
+ * The moon phase of a level time: (time / 24000) truncated, its absolute value, bit-inverted for a negative time, & 7 --
+ * 2024 LevelUtils::getMoonPhase (0x1abf870) and 1.26's inlined copy in the actor filter for moon brightness (40
+ * 0x23197a0: `imul $0x57619f1; sar $0x29; neg/cmovs; xor time>>31; and $7`). Dimension::MOON_BRIGHTNESS_PER_PHASE is the
+ * same eight floats in every build (2024 0x2e4b0e0, 40 0xa638530, 51 0xa75b000; the filter indexes it with the phase).
+ */
+export function moonPhaseOf(time: number): number {
+    const t = time | 0;
+    let day = Math.abs((t / 24000) | 0);
+    if (t < 0) day = ~day;
+    return day & 7;
+}
+export const MOON_BRIGHTNESS_PER_PHASE = [1, 0.75, 0.5, 0.25, 0, 0.25, 0.5, 0.75];

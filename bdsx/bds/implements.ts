@@ -2,7 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
-import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay } from "./engine/dimension";
+import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
@@ -770,7 +770,14 @@ Dimension.prototype.fetchNearestPlayerToPosition = function (x, y, z, distance, 
     }
     return found;
 };
-Dimension.prototype.getMoonBrightness = procHacker.js("?getMoonBrightness@Dimension@@QEBAMXZ", float32_t, { this: Dimension });
+// 1.26 inlines LevelUtils::getMoonPhase and the brightness table lookup (engine/dimension.ts)
+Dimension.prototype.getMoonBrightness = derived(
+    "?getMoonBrightness@Dimension@@QEBAMXZ",
+    function (this: Dimension): number {
+        return MOON_BRIGHTNESS_PER_PHASE[moonPhaseOf(bedrockServer.level.getTime())];
+    },
+    () => procHacker.js("?getMoonBrightness@Dimension@@QEBAMXZ", float32_t, { this: Dimension }),
+);
 Dimension.prototype.getHeight = procHacker.js("?getHeight@Dimension@@QEBAFXZ", int16_t, { this: Dimension });
 
 Dimension.prototype.tryGetClosestPublicRegion = function (chunkpos: ChunkPos) {
@@ -784,7 +791,13 @@ Dimension.prototype.getDefaultBiomeString = procHacker.jsv(
     HashedStringToString,
     { this: Dimension, structureReturn: true },
 );
-Dimension.prototype.getMoonPhase = procHacker.js("?getMoonPhase@Dimension@@QEBAHXZ", int32_t, { this: Dimension });
+Dimension.prototype.getMoonPhase = derived(
+    "?getMoonPhase@Dimension@@QEBAHXZ",
+    function (this: Dimension): number {
+        return moonPhaseOf(bedrockServer.level.getTime());
+    },
+    () => procHacker.js("?getMoonPhase@Dimension@@QEBAHXZ", int32_t, { this: Dimension }),
+);
 
 // actor.ts
 const actorMaps = new Map<string, Actor>();
