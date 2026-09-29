@@ -27,3 +27,14 @@ export function dimensionCloudHeight(dimension: StaticPointer): number {
     }
     return call(dimension);
 }
+
+/**
+ * Dimension::sky_darken_ (Brightness, one byte): Endstone dimension.h puts ultra_warm_ at +422, then has_ceiling_,
+ * has_skylight_, sky_darken_ (+425 = 0x1a9), then dispatcher_ at +432. 2024's isDay (0x1f4bd30) is
+ * `cmpb $0x4, 0x170(%rcx); setb %al`; 1.26 inlines it with the same constant at the new offset (40 0x215163,
+ * 51 0x2a2963: `cmpb $0x4, 0x1a9(%rbx); jb`). docs/findings-layouts.md "Dimension::isDay".
+ */
+const DIMENSION_SKY_DARKEN = engineLayout("Dimension", "skyDarken", 0x170);
+export function dimensionIsDay(dimension: StaticPointer): boolean {
+    return dimension.getUint8(DIMENSION_SKY_DARKEN) < 4;
+}

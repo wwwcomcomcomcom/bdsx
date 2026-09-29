@@ -2,7 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
-import { dimensionCloudHeight } from "./engine/dimension";
+import { dimensionCloudHeight, dimensionIsDay } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
@@ -18,6 +18,7 @@ import {
     itemCanDestroyInCreative,
     itemCommandNames,
     itemCreativeCategory,
+    itemFullName,
     itemIsExplodable,
     itemIsFireResistant,
     itemRawNameId,
@@ -700,7 +701,14 @@ Dimension.prototype.getTickingAreas = derived(
 );
 Dimension.prototype.getSunAngle = procHacker.js("?getSunAngle@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
 Dimension.prototype.getTimeOfDay = procHacker.js("?getTimeOfDay@Dimension@@QEBAMM@Z", float32_t, { this: Dimension });
-Dimension.prototype.isDay = procHacker.jsv("??_7OverworldDimension@@6BIDimension@@@", "?isDay@Dimension@@UEBA_NXZ", bool_t, { this: Dimension });
+// 1.26 inlines isDay (sky_darken_ < 4; engine/dimension.ts)
+Dimension.prototype.isDay = derived(
+    "?isDay@Dimension@@UEBA_NXZ",
+    function (this: Dimension): boolean {
+        return dimensionIsDay(this as unknown as StaticPointer);
+    },
+    () => procHacker.jsv("??_7OverworldDimension@@6BIDimension@@@", "?isDay@Dimension@@UEBA_NXZ", bool_t, { this: Dimension }),
+);
 Dimension.prototype.distanceToNearestPlayerSqr2D = procHacker.js("?distanceToNearestPlayerSqr2D@Dimension@@QEAAMVVec3@@@Z", float32_t, { this: Dimension }, Vec3);
 Dimension.prototype.transferEntityToUnloadedChunk = procHacker.js(
     "?transferEntityToUnloadedChunk@Dimension@@QEAAXAEAVActor@@PEAVLevelChunk@@@Z",
@@ -4238,12 +4246,29 @@ const ItemStackBase$isStackableWith = procHacker.js("?isStackable@ItemStackBase@
 ItemStackBase.prototype.isStackable = function (this: ItemStackBase, other?: ItemStackBase): boolean {
     return other === undefined ? ItemStackBase$isStackable.call(this) : ItemStackBase$isStackableWith.call(this, other);
 };
-ItemStackBase.prototype.isPotionItem = procHacker.js("?isPotionItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b653e0 compares the item's full name with VanillaItemNames Potion / SplashPotion / LingeringPotion; 1.26 inlined it
+ItemStackBase.prototype.isPotionItem = derived(
+    "?isPotionItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        if (item === null) return false;
+        const name = itemFullName(item as any as StaticPointer);
+        return name === "minecraft:potion" || name === "minecraft:splash_potion" || name === "minecraft:lingering_potion";
+    },
+    () => procHacker.js("?isPotionItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isPattern = procHacker.js("?isPattern@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isLiquidClipItem = procHacker.js("?isLiquidClipItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isHorseArmorItem = procHacker.js("?isHorseArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
 ItemStackBase.prototype.isGlint = procHacker.js("?isGlint@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isFullStack = procHacker.js("?isFullStack@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b64a70: count (+0x22) >= getMaxStackSize()
+ItemStackBase.prototype.isFullStack = derived(
+    "?isFullStack@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        return this.amount >= this.getMaxStackSize();
+    },
+    () => procHacker.js("?isFullStack@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // 2024: a tail call to Item::isFireResistant / isExplodable, one-bit fields of the item's flag byte (engine/item.ts)
 ItemStackBase.prototype.isFireResistant = derived(
     "?isFireResistant@ItemStackBase@@QEBA_NXZ",
@@ -4261,7 +4286,14 @@ ItemStackBase.prototype.isExplodable = derived(
     },
     () => procHacker.js("?isExplodable@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isDamaged = procHacker.js("?isDamaged@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b647c0: the item is damageable (vftable +0x68) and Item::getDamageValue(user data) > 0
+ItemStackBase.prototype.isDamaged = derived(
+    "?isDamaged@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        return this.isDamageableItem() && this.getDamageValue() > 0;
+    },
+    () => procHacker.js("?isDamaged@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // Q1-B-4, docs/findings-containers.md 10 (see the getMaxStackSize comment above
 // isValidAuxValue for the full route): 2024's isDamageableItem is item_+8, double deref, Item
 // vtable slot 13 (1.26 slot 14, 0x70). No 1.26 out-of-line copy on either build; ships as
