@@ -14,7 +14,7 @@
  */
 import { NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
-import { bool_t, CxxString, int32_t } from "../../nativetype";
+import { bool_t, CxxString, int16_t, int32_t } from "../../nativetype";
 import { engineLayout } from "./deps";
 
 export const ITEM_BLOCK_TYPE = engineLayout("Item", "blockType", 0x178);
@@ -245,4 +245,36 @@ export function itemBuildDescriptionName(item: StaticPointer, stack: VoidPointer
         descriptionNameCalls.set(key, call);
     }
     return call(item, stack);
+}
+
+/**
+ * Item virtuals ItemStackBase forwarded to in 2024 (`item_ ? item->vf(...) : 0`), all inlined by 1.26. Endstone item.h's
+ * count is exact in this range: it matches every slot confirmed on both builds (isHumanoidArmor 10, isDamageable 14,
+ * canDestroyInCreative 48, isValidAuxValue 67), and PickaxeItem's table shows the bodies (docs/findings-containers.md
+ * section 21): 35 isStackedByData `movzbl 0x152; and $4`, 36 getMaxDamage `movzwl 0x150`, 37 getAttackDamage (the digger's
+ * damage field), 40 isGlint(stack), 41 isPattern / 50 isLiquidClipItem (return 0 for a pickaxe), 57 getEnchantValue (the
+ * tier's +0x10). 2024 slots: 33, 34, 35, 38, 39, 45, 51.
+ */
+export const ITEM_SLOTS = {
+    isStackedByData: engineLayout("Item", "isStackedByDataSlot", 33),
+    getMaxDamage: engineLayout("Item", "getMaxDamageSlot", 34),
+    getAttackDamage: engineLayout("Item", "getAttackDamageSlot", 35),
+    isGlint: engineLayout("Item", "isGlintSlot", 38),
+    isPattern: engineLayout("Item", "isPatternSlot", 39),
+    isLiquidClipItem: engineLayout("Item", "isLiquidClipItemSlot", 45),
+    getEnchantValue: engineLayout("Item", "getEnchantValueSlot", 51),
+};
+type SlotRet = typeof bool_t | typeof int16_t | typeof int32_t;
+const slotCalls = new Map<string, (...args: any[]) => any>();
+/** call the item's own vftable slot with (item[, arg]) and the given return type */
+export function itemSlotCall<T>(item: StaticPointer, slot: number, ret: SlotRet, arg?: VoidPointer): T {
+    const fn = item.getPointer(0).getPointer(slot * 8);
+    // several slots share one body (the image's `xor eax,eax; ret`), so the wrapper is keyed by the return type too
+    const key = `${fn}:${(ret as any).name}:${arg === undefined ? 0 : 1}`;
+    let call = slotCalls.get(key);
+    if (call === undefined) {
+        call = arg === undefined ? makefunc.js(fn, ret as any, null, VoidPointer) : makefunc.js(fn, ret as any, null, VoidPointer, VoidPointer);
+        slotCalls.set(key, call);
+    }
+    return arg === undefined ? call(item) : call(item, arg);
 }

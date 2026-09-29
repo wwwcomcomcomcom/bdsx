@@ -22,6 +22,8 @@ import {
     itemFullName,
     itemIsExplodable,
     itemIsHumanoidArmor,
+    ITEM_SLOTS,
+    itemSlotCall,
     itemIsFireResistant,
     itemRawNameId,
     itemStackIsBlockOwn,
@@ -4296,7 +4298,15 @@ ItemStackBase.prototype.setNull = procHacker.js(
     { this: ItemStackBase },
     CxxOptionalToUndefUnion.make(CxxString),
 );
-ItemStackBase.prototype.getEnchantValue = procHacker.js("?getEnchantValue@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
+// 2024: item_ ? item->virtual : 0 for the seven below; 1.26 inlined them all (engine/item.ts ITEM_SLOTS)
+ItemStackBase.prototype.getEnchantValue = derived(
+    "?getEnchantValue@ItemStackBase@@QEBAHXZ",
+    function (this: ItemStackBase): number {
+        const item = this.getItem();
+        return item === null ? 0 : itemSlotCall<number>(item as any as StaticPointer, ITEM_SLOTS.getEnchantValue, int32_t);
+    },
+    () => procHacker.js("?getEnchantValue@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase }),
+);
 // 2024's isEnchanted (0x1b64970): the user tag exists and contains("ench", List). 1.26 inlines it into every user of
 // "ench" on both builds (ThrownTrident::isEnchanted, getEnchantLevel, hasEnchant, ...): the user tag at +0x10, the
 // "ench" tag, its getId() against 9 (docs/findings-nbt.md section 21)
@@ -4328,7 +4338,14 @@ ItemStackBase.prototype.sameItem = function (item) {
     return ItemStackBase$sameItem.call(this, item, opt);
 };
 ItemStackBase.prototype.sameItemAndAux = procHacker.js("?sameItemAndAux@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
-ItemStackBase.prototype.isStackedByData = procHacker.js("?isStackedByData@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+ItemStackBase.prototype.isStackedByData = derived(
+    "?isStackedByData@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item === null ? false : itemSlotCall<boolean>(item as any as StaticPointer, ITEM_SLOTS.isStackedByData, bool_t);
+    },
+    () => procHacker.js("?isStackedByData@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // Two overloads. Upstream bound the no-argument method to the one-argument name, so `other` was
 // whatever rdx held. `isStackable()` is "can this stack hold more than one" (Item::getMaxStackSize > 1,
 // not a damaged damageable); `isStackable(other)` is "would these two merge": the same Item, `other`
@@ -4351,10 +4368,31 @@ ItemStackBase.prototype.isPotionItem = derived(
     },
     () => procHacker.js("?isPotionItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isPattern = procHacker.js("?isPattern@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isLiquidClipItem = procHacker.js("?isLiquidClipItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+ItemStackBase.prototype.isPattern = derived(
+    "?isPattern@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item === null ? false : itemSlotCall<boolean>(item as any as StaticPointer, ITEM_SLOTS.isPattern, bool_t);
+    },
+    () => procHacker.js("?isPattern@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
+ItemStackBase.prototype.isLiquidClipItem = derived(
+    "?isLiquidClipItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item === null ? false : itemSlotCall<boolean>(item as any as StaticPointer, ITEM_SLOTS.isLiquidClipItem, bool_t);
+    },
+    () => procHacker.js("?isLiquidClipItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isHorseArmorItem = procHacker.js("?isHorseArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
-ItemStackBase.prototype.isGlint = procHacker.js("?isGlint@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+ItemStackBase.prototype.isGlint = derived(
+    "?isGlint@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item === null ? false : itemSlotCall<boolean>(item as any as StaticPointer, ITEM_SLOTS.isGlint, bool_t, this);
+    },
+    () => procHacker.js("?isGlint@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // 2024 0x1b64a70: count (+0x22) >= getMaxStackSize()
 ItemStackBase.prototype.isFullStack = derived(
     "?isFullStack@ItemStackBase@@QEBA_NXZ",
@@ -4542,7 +4580,14 @@ Player.prototype.getDestroySpeed = derived(
     },
     () => procHacker.js("?getDestroySpeed@Player@@QEBAMAEBVBlock@@@Z", float32_t, { this: Player }, Block.ref()),
 );
-ItemStackBase.prototype.getMaxDamage = procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase });
+ItemStackBase.prototype.getMaxDamage = derived(
+    "?getMaxDamage@ItemStackBase@@QEBAFXZ",
+    function (this: ItemStackBase): number {
+        const item = this.getItem();
+        return item === null ? 0 : itemSlotCall<number>(item as any as StaticPointer, ITEM_SLOTS.getMaxDamage, int32_t);
+    },
+    () => procHacker.js("?getMaxDamage@ItemStackBase@@QEBAFXZ", int32_t, { this: ItemStackBase }),
+);
 // next-steps Q1-B-2. 2024's ItemStackBase::getDamageValue (0x1b5fa50) is ten bytes: the same
 // item_ (+8, double pointer -- see getAuxValue/getId just above) null-check as its siblings, then
 // a tail jump into Item::getDamageValue(CompoundTag const* userData) (0x1cab820). That inner
@@ -4572,7 +4617,14 @@ ItemStackBase.prototype.getDamageValue = derived(
     },
     () => procHacker.js("?getDamageValue@ItemStackBase@@QEBAFXZ", int16_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.getAttackDamage = procHacker.js("?getAttackDamage@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase });
+ItemStackBase.prototype.getAttackDamage = derived(
+    "?getAttackDamage@ItemStackBase@@QEBAHXZ",
+    function (this: ItemStackBase): number {
+        const item = this.getItem();
+        return item === null ? 0 : itemSlotCall<number>(item as any as StaticPointer, ITEM_SLOTS.getAttackDamage, int32_t);
+    },
+    () => procHacker.js("?getAttackDamage@ItemStackBase@@QEBAHXZ", int32_t, { this: ItemStackBase }),
+);
 // 2024: isHumanoidArmorItem() || isHumanoidWearableBlockItem(); 1.26.51 keeps that body (the table has it), 1.26.40 inlines it
 ItemStackBase.prototype.isHumanoidWearableItem = derived(
     "?isHumanoidWearableItem@ItemStackBase@@QEBA_NXZ",
