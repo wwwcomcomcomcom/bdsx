@@ -5508,7 +5508,7 @@ Block.prototype.hasBlockEntity = derived(
     () => procHacker.js("?hasBlockEntity@Block@@QEBA_NXZ", bool_t, { this: Block }),
 );
 Block.prototype.use = procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t);
-// the four below are 2024's `block_type_->virtual(...)` forwards, through the block type's own vftable (engine/blocktype.ts)
+// these are 2024's `block_type_->virtual(...)` forwards, through the block type's own vftable (engine/blocktype.ts)
 const BlockType$getVariant = makefunc.js([BLOCK_TYPE_SLOTS.getVariant * 8], int32_t, { this: BlockLegacy }, Block);
 Block.prototype.getVariant = derived(
     "?getVariant@Block@@QEBAHXZ",
@@ -5612,15 +5612,22 @@ Block.prototype.getComparatorSignal = derived(
     },
     () => procHacker.js("?getComparatorSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@E@Z", int32_t, { this: Block }, BlockSource, BlockPos, uint8_t),
 );
-Block.prototype.getDirectSignal = procHacker.js(
+const BlockType$getDirectSignal = makefunc.js([BLOCK_TYPE_SLOTS.getDirectSignal * 8], int32_t, { this: BlockLegacy }, BlockSource, BlockPos, int32_t);
+Block.prototype.getDirectSignal = derived(
     "?getDirectSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@H@Z",
-    int32_t,
-    { this: Block },
-    BlockSource,
-    BlockPos,
-    int32_t,
+    function (this: Block, region: BlockSource, pos: BlockPos, facing: number): number {
+        return BlockType$getDirectSignal.call(this.blockLegacy, region, pos, facing);
+    },
+    () => procHacker.js("?getDirectSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@H@Z", int32_t, { this: Block }, BlockSource, BlockPos, int32_t),
 );
-Block.prototype.isSignalSource = procHacker.js("?isSignalSource@Block@@QEBA_NXZ", bool_t, { this: Block });
+const BlockType$isSignalSource = makefunc.js([BLOCK_TYPE_SLOTS.isSignalSource * 8], bool_t, { this: BlockLegacy });
+Block.prototype.isSignalSource = derived(
+    "?isSignalSource@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return BlockType$isSignalSource.call(this.blockLegacy);
+    },
+    () => procHacker.js("?isSignalSource@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.getDestroySpeed = derived(
     "?getDestroySpeed@Block@@QEBAMXZ",
     function (this: Block): number {

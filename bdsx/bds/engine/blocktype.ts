@@ -145,10 +145,17 @@ export const BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT = engineLayout("BlockLegacy", "asI
  * hasComparatorSignal() 90 and
  * getComparatorSignal(BlockSource&, BlockPos const&, Block const&, FacingID) 91 (JukeboxBlock and ChestBlock override both,
  * 90 as the image's return-true), getVariant(Block const&) 102 (`movzwl 0x120(%rdx)`, the Block's data_). Endstone
- * block_type.h counts the same three. 2024 slots: 111, 112, 129. (Endstone's getDirectSignal, its 42, is not: the base slot 42 is `ret` and LeverBlock's passes r9 on as a pointer; calling it as getDirectSignal killed the server.) docs/findings-blocks.md "Block's signal and variant".
+ * block_type.h counts the same three. 2024 slots: 111, 112, 129. docs/findings-blocks.md "Block's signal and variant".
+ * isSignalSource() 35 and getDirectSignal(BlockSource&, BlockPos const&, int) 43 are Endstone's 34 and 42 plus one (its 42 is
+ * onFillBlock here: the base's is `ret` and calling it as getDirectSignal killed the server). The engine's own inlined
+ * forwards call them: calculateGoldenRailSpeedIncrease tests `!type->vf[35]()` after the solid-blocking checks (2024's
+ * isSolidBlockingBlockAndNotSignalSource), DiodeBlock::getAlternateSignalAt tail-calls `type->vf[43](region, pos, dir)`.
+ * RepeaterBlock/ComparatorBlock override both. 2024 slots: 47, 54. docs/findings-blocks.md "getDirectSignal and isSignalSource".
  */
 export const BLOCK_TYPE_SLOTS = {
     hasComparatorSignal: engineLayout("BlockLegacy", "hasComparatorSignalSlot", 111),
     getComparatorSignal: engineLayout("BlockLegacy", "getComparatorSignalSlot", 112),
     getVariant: engineLayout("BlockLegacy", "getVariantSlot", 129),
+    isSignalSource: engineLayout("BlockLegacy", "isSignalSourceSlot", 47),
+    getDirectSignal: engineLayout("BlockLegacy", "getDirectSignalSlot", 54),
 };
