@@ -43,3 +43,29 @@ export function mobEffectInstanceComponentName(inst: StaticPointer): VoidPointer
     if (DEFAULT_ERROR_VALUE === null) throw Error("HashedString::defaultErrorValue: no address in this build");
     return DEFAULT_ERROR_VALUE;
 }
+
+/** MobEffect::mEffectVisible (showParticles): the byte the constructor ANDs into the instance's visible flag, +0xf0 */
+const EFFECT_VISIBLE = engineLayout("MobEffect", "showParticles", 0xf0);
+/** MobEffectInstance::factor_calculation_data_: +0x28 on 1.26.40, +0x30 on 1.26.51 (a byte was added at +0x28) */
+const FACTOR_DATA = engineLayout("MobEffectInstance", "factorData", 0x20);
+const INSTANCE_SIZE = engineLayout("MobEffectInstance", "size", 0x80);
+
+/**
+ * MobEffectInstance(id, duration, amplifier, ambient, visible, displayAnimation). 1.26 inlines the constructor; the copy
+ * where the engine builds one from JSON (40 0x2414720, 51 0x29fc0a0) writes id +0, duration +4, the three optional
+ * difficulty durations' engaged flags (+0xc/+0x14/+0x1c) 0, amplifier +0x20, display +0x24, 0 at +0x25, ambient +0x26,
+ * visible AND mMobEffects[id]->showParticles at +0x27, then factor_calculation_data_ with 1.0f at its +8 (40 +0x30,
+ * 51 +0x38) and the rest zero, an empty std::function included. bdsx zeroes the whole instance first.
+ */
+export function mobEffectInstanceConstruct(inst: StaticPointer, id: number, duration: number, amplifier: number, ambient: boolean, visible: boolean, displayAnimation: boolean): void {
+    inst.fill(0, INSTANCE_SIZE);
+    inst.setUint32(id >>> 0, 0);
+    inst.setInt32(duration, 4);
+    inst.setInt32(amplifier, 0x20);
+    inst.setUint8(displayAnimation ? 1 : 0, 0x24);
+    inst.setUint8(ambient ? 1 : 0, 0x26);
+    const effect = mobEffectById(id);
+    const effectVisible = effect === null ? 1 : (effect as StaticPointer).getUint8(EFFECT_VISIBLE);
+    inst.setUint8((visible ? 1 : 0) & effectVisible, 0x27);
+    inst.setFloat32(1, FACTOR_DATA + 8);
+}

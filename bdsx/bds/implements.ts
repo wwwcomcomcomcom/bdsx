@@ -3,7 +3,7 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight } from "./engine/dimension";
-import { mobEffectById, mobEffectInstanceComponentName, MOB_EFFECT_ID } from "./engine/mobeffect";
+import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
@@ -4002,7 +4002,15 @@ ItemStackBase.prototype.toDebugString = procHacker.jsv(
 
 ItemStackBase.prototype.remove = procHacker.js("?remove@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
 ItemStackBase.prototype.addAmount = procHacker.js("?add@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
-ItemStackBase.prototype.setAuxValue = procHacker.js("?setAuxValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t);
+// 2024 0x1b6c940: `aux_ = value > 0 ? value : 0` (aux_ is +0x20 on 1.26 too, see getAuxValue below); 1.26 inlined it
+ItemStackBase.prototype.setAuxValue = derived(
+    "?setAuxValue@ItemStackBase@@QEAAXF@Z",
+    function (this: ItemStackBase, value: number): void {
+        const aux = (value << 16) >> 16;
+        (this as unknown as StaticPointer).setInt16(aux > 0 ? aux : 0, 32);
+    },
+    () => procHacker.js("?setAuxValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t),
+);
 // ItemStackBase's three readers 1.26 inlined away (next-steps Q1-B-2, docs/findings-containers.md 11).
 // Both offsets they need moved, and both 1.26 builds say the same thing:
 //   `Item::id_` 162 -> **170**. The whole of `ItemStackBase::getId` is inlined into
@@ -6333,16 +6341,14 @@ MobEffect.prototype.getId = derived(
     () => procHacker.js("?getId@MobEffect@@QEBAIXZ", uint32_t, { this: MobEffect }),
 );
 
-(MobEffectInstance.prototype as any)._create = procHacker.js(
+// 1.26 inlines the constructor and moved its flags (engine/mobeffect.ts, docs/findings-components.md "MobEffectInstance's
+// constructor on 1.26")
+(MobEffectInstance.prototype as any)._create = derived(
     "??0MobEffectInstance@@QEAA@IHH_N00@Z",
-    void_t,
-    { this: MobEffectInstance },
-    uint32_t,
-    int32_t,
-    int32_t,
-    bool_t,
-    bool_t,
-    bool_t,
+    function (this: MobEffectInstance, id: number, duration: number, amplifier: number, ambient: boolean, showParticles: boolean, displayAnimation: boolean): void {
+        mobEffectInstanceConstruct(this as any as StaticPointer, id, duration, amplifier, ambient, showParticles, displayAnimation);
+    },
+    () => procHacker.js("??0MobEffectInstance@@QEAA@IHH_N00@Z", void_t, { this: MobEffectInstance }, uint32_t, int32_t, int32_t, bool_t, bool_t, bool_t),
 );
 // 1.26 inlines it (Mob::hasComponent): the registry slot's HashedString at +0x100, else HashedString::defaultErrorValue
 (MobEffectInstance.prototype as any)._getComponentName = derived(
@@ -6355,7 +6361,13 @@ MobEffect.prototype.getId = derived(
             this: MobEffectInstance,
         }),
 );
-MobEffectInstance.prototype.getAmplifier = procHacker.js("?getAmplifier@MobEffectInstance@@QEBAHXZ", int32_t, { this: MobEffectInstance });
+MobEffectInstance.prototype.getAmplifier = derived(
+    "?getAmplifier@MobEffectInstance@@QEBAHXZ",
+    function (this: MobEffectInstance): number {
+        return this.amplifier;
+    },
+    () => procHacker.js("?getAmplifier@MobEffectInstance@@QEBAHXZ", int32_t, { this: MobEffectInstance }),
+);
 MobEffectInstance.prototype.allocateAndSave = procHacker.js(
     "?save@MobEffectInstance@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
     CompoundTag.ref(),

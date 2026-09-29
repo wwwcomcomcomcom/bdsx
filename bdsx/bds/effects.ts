@@ -120,13 +120,18 @@ export class MobEffectInstance extends NativeClass {
     duration: int32_t;
     @nativeField(int32_t, 0x20)
     amplifier: int32_t;
-    @nativeField(bool_t)
+    // 1.26 swapped ambient and the counter flag: the constructor the engine inlines where it builds an instance from JSON
+    // (40 0x2414720, 51 0x29fc0a0, the keys "display_on_screen_animation", "ambient", "visible") stores the display flag at
+    // +0x24, 0 at +0x25 (is_counter_paused_this_tick_), ambient at +0x26 and visible at +0x27 -- Endstone
+    // mob_effect_instance.h's order; 2024's constructor (0x189e7d0) had display, ambient, counter, visible
+    // (docs/findings-components.md "MobEffectInstance's constructor on 1.26")
+    @nativeField(bool_t, 0x24)
     displayAnimation: bool_t;
-    @nativeField(bool_t)
-    ambient: bool_t;
-    @nativeField(bool_t)
+    @nativeField(bool_t, 0x25)
     noCounter: bool_t;
-    @nativeField(bool_t)
+    @nativeField(bool_t, 0x26)
+    ambient: bool_t;
+    @nativeField(bool_t, 0x27)
     showParticles: bool_t;
 
     /**
