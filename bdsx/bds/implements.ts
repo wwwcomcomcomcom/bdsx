@@ -56,7 +56,7 @@ import {
     blockTypeTranslucency,
     lookupBlockType,
 } from "./engine/blocktype";
-import { LEVEL_CHUNK_ENTITIES, LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkToWorld } from "./engine/chunk";
+import { LEVEL_CHUNK_ENTITIES, LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkIsFullyLoaded, levelChunkToWorld } from "./engine/chunk";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -7120,7 +7120,14 @@ LevelChunk.prototype.getMax = derived(
     },
     () => procHacker.js("?getMax@LevelChunk@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: LevelChunk }),
 );
-LevelChunk.prototype.isFullyLoaded = procHacker.js("?isFullyLoaded@LevelChunk@@QEBA_NXZ", bool_t, { this: LevelChunk });
+// 2024's leaf over the load state, a flag and the redstone-set-up byte; 1.26 inlined it (engine/chunk.ts)
+LevelChunk.prototype.isFullyLoaded = derived(
+    "?isFullyLoaded@LevelChunk@@QEBA_NXZ",
+    function (this: LevelChunk): boolean {
+        return levelChunkIsFullyLoaded(this as any as StaticPointer);
+    },
+    () => procHacker.js("?isFullyLoaded@LevelChunk@@QEBA_NXZ", bool_t, { this: LevelChunk }),
+);
 LevelChunk.prototype.toWorldPos = derived(
     "?toWorldPos@LevelChunk@@QEBA?AVBlockPos@@AEBVChunkBlockPos@@@Z",
     function (this: LevelChunk, pos: ChunkBlockPos): BlockPos {
