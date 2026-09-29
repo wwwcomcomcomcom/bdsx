@@ -27,6 +27,16 @@ const LOOKUP_BY_NAME_IMPL = engineSymbol("bdsx:BlockTypeRegistry::_lookupByNameI
 const RESULT_IS_WEAK_PTR = engineLayout("BlockTypeRegistry", "lookupResultIsWeakPtr", 1) !== 0;
 /** BlockType::id_ (NewBlockID, uint16): Endstone block_type.h +382, and the engine's inlined getBlockItemId reads it */
 const BLOCK_TYPE_ID = engineLayout("BlockLegacy", "id", 0x1a6);
+/**
+ * BlockType::creative_category_ (SharedTypes::CreativeItemCategory, a one-byte enum in 1.26; the values are the Item
+ * field's). 2024's ?getCreativeCategory@BlockLegacy@@ (0x1bee130) was the leaf `movl 0x138(%rcx),%eax; ret` over a
+ * four-byte enum; 1.26 keeps no out-of-line copy. The field is +0x160 on both builds (Endstone block_type.h +352): the
+ * BlockType constructor (40 0x1ee72c0 / 51 0x1a1fef0) stores `movl $0x80050000,0x160(%rcx)`, the category 0 (All) as in
+ * 2024, and the block-item registration (40 0x154a8d0 / 51 0x1661130) copies it with `movzbl 0x160(%rsi),%ecx; movb
+ * %cl,0x180(%rax)` into the item's creative_category_ (docs/findings-containers.md section 18). One byte is also right
+ * over 2024's layout (little endian, values < 7).
+ */
+const BLOCK_TYPE_CREATIVE_CATEGORY = engineLayout("BlockLegacy", "creativeCategory", 0x138);
 /** { block type (WeakPtr or pointer) +0, const Block* +8 } */
 const RESULT_SIZE = 0x10;
 /** LookupByNameImplResolve: 0 finds the type only, 1 also resolves the Block for `data` */
@@ -60,4 +70,9 @@ export function lookupBlockType(name: VoidPointer): NativePointer | null {
 export function blockTypeItemId(blockType: StaticPointer): number {
     const id = blockType.getUint16(BLOCK_TYPE_ID);
     return id < 0x100 ? id : ((0xff - id) << 16) >> 16;
+}
+
+/** BlockType::getCreativeCategory: the creative_category_ byte */
+export function blockTypeCreativeCategory(blockType: StaticPointer): number {
+    return blockType.getUint8(BLOCK_TYPE_CREATIVE_CATEGORY);
 }

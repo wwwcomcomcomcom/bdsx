@@ -32,7 +32,7 @@ import { applyEnchantOwn } from "./engine/enchant";
 import { inventoryTransactionActions } from "./engine/invtransaction";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
-import { blockTypeItemId, lookupBlockType } from "./engine/blocktype";
+import { blockTypeCreativeCategory, blockTypeItemId, lookupBlockType } from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -5074,7 +5074,15 @@ BlockLegacy.prototype.getCommandNames2 = derived(
             { this: BlockLegacy, structureReturn: true },
         ),
 );
-BlockLegacy.prototype.getCreativeCategory = procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy });
+// 1.26 inlined the 2024 leaf (`movl 0x138(%rcx),%eax; ret`) everywhere: bdsx reads BlockType::creative_category_, a
+// one-byte enum at +0x160 on both builds (engine/blocktype.ts, docs/findings-containers.md section 18)
+BlockLegacy.prototype.getCreativeCategory = derived(
+    "?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ",
+    function (this: BlockLegacy): number {
+        return blockTypeCreativeCategory(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy }),
+);
 BlockLegacy.prototype.setDestroyTime = procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t);
 BlockLegacy.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@BlockLegacy@@QEBA?AW4BlockActorType@@XZ", int32_t, { this: BlockLegacy });
 // inlined everywhere in 1.26 (40: 49 sites, 51: 45 of the branchless `movzwl 0x17e; mov $0xff; sub; cmovae` form)
