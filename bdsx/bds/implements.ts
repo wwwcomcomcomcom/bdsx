@@ -7034,7 +7034,18 @@ LevelChunk.prototype.toWorldPos = derived(
             ChunkBlockPos,
         ),
 );
-LevelChunk.prototype.getEntity = procHacker.js("?getEntity@LevelChunk@@QEBAPEAVActor@@AEBUActorUniqueID@@@Z", Actor, { this: LevelChunk }, ActorUniqueID.ref());
+// 2024 0x217f2f0: the first of the chunk's entities whose unique id matches; 1.26 inlined it (over getChunkEntities above)
+LevelChunk.prototype.getEntity = derived(
+    "?getEntity@LevelChunk@@QEBAPEAVActor@@AEBUActorUniqueID@@@Z",
+    function (this: LevelChunk, actorId: ActorUniqueID): Actor | null {
+        for (const ref of this.getChunkEntities()) {
+            const actor = ref.tryUnwrapActor();
+            if (actor !== null && actor.getUniqueIdBin() === actorId) return actor;
+        }
+        return null;
+    },
+    () => procHacker.js("?getEntity@LevelChunk@@QEBAPEAVActor@@AEBUActorUniqueID@@@Z", Actor, { this: LevelChunk }, ActorUniqueID.ref()),
+);
 // std::vector<WeakEntityRef>& LevelChunk::getChunkEntities();
 // 1.26 inlined 2024's `lea 0x1028` (engine/chunk.ts: the vector is +0x1360 on both builds)
 const LevelChunk$entities = CxxVector.make(WeakEntityRef);
