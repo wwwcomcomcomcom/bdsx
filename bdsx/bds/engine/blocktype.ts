@@ -139,3 +139,16 @@ export function blockActorType(blockActor: StaticPointer): number {
  * BlockLegacy::asItemInstance (0x1be8270: ItemInstance(mDefaultState, 1, nullptr)). docs/findings-blocks.md "asItemInstance".
  */
 export const BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT = engineLayout("BlockLegacy", "asItemInstanceSlot", -1);
+
+/**
+ * BlockType virtuals Block forwarded to in 2024 (`block_type_->vf(...)`, all inlined by 1.26), by slot on both builds:
+ * hasComparatorSignal() 90 and
+ * getComparatorSignal(BlockSource&, BlockPos const&, Block const&, FacingID) 91 (JukeboxBlock and ChestBlock override both,
+ * 90 as the image's return-true), getVariant(Block const&) 102 (`movzwl 0x120(%rdx)`, the Block's data_). Endstone
+ * block_type.h counts the same three. 2024 slots: 111, 112, 129. (Endstone's getDirectSignal, its 42, is not: the base slot 42 is `ret` and LeverBlock's passes r9 on as a pointer; calling it as getDirectSignal killed the server.) docs/findings-blocks.md "Block's signal and variant".
+ */
+export const BLOCK_TYPE_SLOTS = {
+    hasComparatorSignal: engineLayout("BlockLegacy", "hasComparatorSignalSlot", 111),
+    getComparatorSignal: engineLayout("BlockLegacy", "getComparatorSignalSlot", 112),
+    getVariant: engineLayout("BlockLegacy", "getVariantSlot", 129),
+};

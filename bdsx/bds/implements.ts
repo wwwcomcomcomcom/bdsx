@@ -45,6 +45,7 @@ import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, ne
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import {
     BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT,
+    BLOCK_TYPE_SLOTS,
     blockActorType,
     blockDestroySpeed,
     blockExplosionResistance,
@@ -5507,7 +5508,15 @@ Block.prototype.hasBlockEntity = derived(
     () => procHacker.js("?hasBlockEntity@Block@@QEBA_NXZ", bool_t, { this: Block }),
 );
 Block.prototype.use = procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t);
-Block.prototype.getVariant = procHacker.js("?getVariant@Block@@QEBAHXZ", int32_t, { this: Block });
+// the four below are 2024's `block_type_->virtual(...)` forwards, through the block type's own vftable (engine/blocktype.ts)
+const BlockType$getVariant = makefunc.js([BLOCK_TYPE_SLOTS.getVariant * 8], int32_t, { this: BlockLegacy }, Block);
+Block.prototype.getVariant = derived(
+    "?getVariant@Block@@QEBAHXZ",
+    function (this: Block): number {
+        return BlockType$getVariant.call(this.blockLegacy, this);
+    },
+    () => procHacker.js("?getVariant@Block@@QEBAHXZ", int32_t, { this: Block }),
+);
 Block.prototype.getSerializationId = procHacker.js("?getSerializationId@Block@@QEBAAEBVCompoundTag@@XZ", CompoundTag.ref(), { this: Block });
 // 1.26 inlined both overloads (docs/findings-blocks.md "asItemInstance"): 2024 called the block type's asItemInstance with the
 // block actor at the position; the copyWholeData one then called ItemStackBase::addCustomUserData, which 1.26 does not have
@@ -5572,7 +5581,14 @@ Block.prototype.getThickness = derived(
     },
     () => procHacker.js("?getThickness@Block@@QEBAMXZ", float32_t, { this: Block }),
 );
-Block.prototype.hasComparatorSignal = procHacker.js("?hasComparatorSignal@Block@@QEBA_NXZ", bool_t, { this: Block });
+const BlockType$hasComparatorSignal = makefunc.js([BLOCK_TYPE_SLOTS.hasComparatorSignal * 8], bool_t, { this: BlockLegacy });
+Block.prototype.hasComparatorSignal = derived(
+    "?hasComparatorSignal@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return BlockType$hasComparatorSignal.call(this.blockLegacy);
+    },
+    () => procHacker.js("?hasComparatorSignal@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.getTranslucency = derived(
     "?getTranslucency@Block@@QEBAMXZ",
     function (this: Block): number {
@@ -5588,13 +5604,13 @@ const Block$getExplosionResistance = derived(
 Block.prototype.getExplosionResistance = function (actor: Actor | null = null): number {
     return Block$getExplosionResistance(this);
 };
-Block.prototype.getComparatorSignal = procHacker.js(
+const BlockType$getComparatorSignal = makefunc.js([BLOCK_TYPE_SLOTS.getComparatorSignal * 8], int32_t, { this: BlockLegacy }, BlockSource, BlockPos, Block, uint8_t);
+Block.prototype.getComparatorSignal = derived(
     "?getComparatorSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@E@Z",
-    int32_t,
-    { this: Block },
-    BlockSource,
-    BlockPos,
-    uint8_t,
+    function (this: Block, region: BlockSource, pos: BlockPos, facing: number): number {
+        return BlockType$getComparatorSignal.call(this.blockLegacy, region, pos, this, facing);
+    },
+    () => procHacker.js("?getComparatorSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@E@Z", int32_t, { this: Block }, BlockSource, BlockPos, uint8_t),
 );
 Block.prototype.getDirectSignal = procHacker.js(
     "?getDirectSignal@Block@@QEBAHAEAVBlockSource@@AEBVBlockPos@@H@Z",
