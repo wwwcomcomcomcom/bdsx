@@ -37,6 +37,30 @@ const BLOCK_TYPE_ID = engineLayout("BlockLegacy", "id", 0x1a6);
  * over 2024's layout (little endian, values < 7).
  */
 const BLOCK_TYPE_CREATIVE_CATEGORY = engineLayout("BlockLegacy", "creativeCategory", 0x138);
+/**
+ * BlockType::thickness_ and translucency_, floats right before creative_category_ (Endstone block_type.h +344 / +348),
+ * between two fields confirmed on both builds: creative_group_ (a std::string at +0x138, which the block-item
+ * registration copies into the item) and creative_category_ (+0x160). The constructor zeroes both (`movq $0,0x158`);
+ * block constructors store translucency immediates at +0x15c (1.0 and 0.8 on 80-odd and 45-odd sites of each build).
+ * 2024: getThickness@BlockLegacy `movss 0x118(%rcx)`, getTranslucency@Block `movss 0x16c` of the legacy.
+ * docs/findings-blocks.md "BlockType and Block fields on 1.26".
+ */
+const BLOCK_TYPE_THICKNESS = engineLayout("BlockLegacy", "thickness", 0x118);
+const BLOCK_TYPE_TRANSLUCENCY = engineLayout("BlockLegacy", "translucency", 0x16c);
+/**
+ * Block (a block state) fields. direct_data_ caches the block type's component values per state (Endstone
+ * BlockComponentDirectData): explosion_resistance, friction and destroy_speed are three floats, the last of which is
+ * the hardness already confirmed at +0xb4 on both builds (findings-blocks.md section 12), so +0xac / +0xb0 / +0xb4; the
+ * Block constructor (40 0x1bb0460 / 51 0x2ce8950) zeroes 0xa8..0xb7. network_id_ (BlockRuntimeId) is +0x114: the
+ * constructor stores `movabsq $0xffffffff00000000` at +0x110 (hash 0, id -1), and the id assignment (40 0x14f16c8 /
+ * 51 0x15f15a8) is `movl %ecx,0x114(%rdx); movb $1,0x122(%rdx)` (has_runtime_id_ after data_ at +0x120).
+ * 2024: getExplosionResistance `movss 0x70`, getDestroySpeed `movss 0x80`, isUnbreakable `0 > +0x80`,
+ * getRuntimeId `lea 0xc4`.
+ */
+const BLOCK_EXPLOSION_RESISTANCE = engineLayout("Block", "explosionResistance", 0x70);
+const BLOCK_FRICTION = engineLayout("Block", "friction", 0x7c);
+const BLOCK_DESTROY_SPEED = engineLayout("Block", "destroySpeed", 0x80);
+const BLOCK_RUNTIME_ID = engineLayout("Block", "runtimeId", 0xc4);
 /** { block type (WeakPtr or pointer) +0, const Block* +8 } */
 const RESULT_SIZE = 0x10;
 /** LookupByNameImplResolve: 0 finds the type only, 1 also resolves the Block for `data` */
@@ -75,4 +99,23 @@ export function blockTypeItemId(blockType: StaticPointer): number {
 /** BlockType::getCreativeCategory: the creative_category_ byte */
 export function blockTypeCreativeCategory(blockType: StaticPointer): number {
     return blockType.getUint8(BLOCK_TYPE_CREATIVE_CATEGORY);
+}
+
+export function blockTypeThickness(blockType: StaticPointer): number {
+    return blockType.getFloat32(BLOCK_TYPE_THICKNESS);
+}
+export function blockTypeTranslucency(blockType: StaticPointer): number {
+    return blockType.getFloat32(BLOCK_TYPE_TRANSLUCENCY);
+}
+export function blockExplosionResistance(block: StaticPointer): number {
+    return block.getFloat32(BLOCK_EXPLOSION_RESISTANCE);
+}
+export function blockFriction(block: StaticPointer): number {
+    return block.getFloat32(BLOCK_FRICTION);
+}
+export function blockDestroySpeed(block: StaticPointer): number {
+    return block.getFloat32(BLOCK_DESTROY_SPEED);
+}
+export function blockRuntimeId(block: StaticPointer): number {
+    return block.getUint32(BLOCK_RUNTIME_ID);
 }

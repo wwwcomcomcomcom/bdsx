@@ -32,7 +32,16 @@ import { applyEnchantOwn } from "./engine/enchant";
 import { inventoryTransactionActions } from "./engine/invtransaction";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
-import { blockTypeCreativeCategory, blockTypeItemId, lookupBlockType } from "./engine/blocktype";
+import {
+    blockDestroySpeed,
+    blockExplosionResistance,
+    blockRuntimeId,
+    blockTypeCreativeCategory,
+    blockTypeItemId,
+    blockTypeThickness,
+    blockTypeTranslucency,
+    lookupBlockType,
+} from "./engine/blocktype";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -5084,7 +5093,9 @@ BlockLegacy.prototype.getCreativeCategory = derived(
     () => procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy }),
 );
 BlockLegacy.prototype.setDestroyTime = procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t);
-BlockLegacy.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@BlockLegacy@@QEBA?AW4BlockActorType@@XZ", int32_t, { this: BlockLegacy });
+// 1.26 keeps an out-of-line body (40 0x1eefa20, 51 0x1a28630) that returns 0x3e when the block type has a block-entity
+// component and block_entity_type_ (+0x161) otherwise; 51 sets only al on the first path, so the result is one byte
+BlockLegacy.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@BlockLegacy@@QEBA?AW4BlockActorType@@XZ", uint8_t, { this: BlockLegacy });
 // inlined everywhere in 1.26 (40: 49 sites, 51: 45 of the branchless `movzwl 0x17e; mov $0xff; sub; cmovae` form)
 BlockLegacy.prototype.getBlockItemId = derived(
     "?getBlockItemId@BlockLegacy@@QEBAFXZ",
@@ -5160,9 +5171,31 @@ Block.prototype.getDescriptionId = procHacker.js("?getDescriptionId@Block@@QEBA?
     this: Block,
     structureReturn: true,
 });
-Block.prototype.getRuntimeId = procHacker.js("?getRuntimeId@Block@@QEBAAEBIXZ", uint32_t.ref(), { this: Block });
-Block.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@Block@@QEBA?AW4BlockActorType@@XZ", int32_t, { this: Block });
-Block.prototype.hasBlockEntity = procHacker.js("?hasBlockEntity@Block@@QEBA_NXZ", bool_t, { this: Block });
+// Block fields on 1.26 (engine/blocktype.ts, docs/findings-blocks.md "BlockType and Block fields on 1.26"): 2024's
+// leaves are inlined everywhere
+Block.prototype.getRuntimeId = derived(
+    "?getRuntimeId@Block@@QEBAAEBIXZ",
+    function (this: Block): number {
+        return blockRuntimeId(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getRuntimeId@Block@@QEBAAEBIXZ", uint32_t.ref(), { this: Block }),
+);
+// 2024's Block::getBlockEntityType / hasBlockEntity were `block_type_->...` tail calls; 1.26's hasBlockEntity@BlockLegacy
+// (40 0x1eefbd0) is "the block-entity component, or block_entity_type_ != 0", which is getBlockEntityType() != 0
+Block.prototype.getBlockEntityType = derived(
+    "?getBlockEntityType@Block@@QEBA?AW4BlockActorType@@XZ",
+    function (this: Block): number {
+        return this.blockLegacy.getBlockEntityType();
+    },
+    () => procHacker.js("?getBlockEntityType@Block@@QEBA?AW4BlockActorType@@XZ", int32_t, { this: Block }),
+);
+Block.prototype.hasBlockEntity = derived(
+    "?hasBlockEntity@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return this.blockLegacy.getBlockEntityType() !== 0;
+    },
+    () => procHacker.js("?hasBlockEntity@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.use = procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t);
 Block.prototype.getVariant = procHacker.js("?getVariant@Block@@QEBAHXZ", int32_t, { this: Block });
 Block.prototype.getSerializationId = procHacker.js("?getSerializationId@Block@@QEBAAEBVCompoundTag@@XZ", CompoundTag.ref(), { this: Block });
@@ -5190,7 +5223,13 @@ Block.prototype.getSerializationId = procHacker.js("?getSerializationId@Block@@Q
 Block.prototype.getSilkTouchItemInstance = function () {
     return this.blockLegacy.asItemInstance(this);
 };
-Block.prototype.isUnbreakable = procHacker.js("?isUnbreakable@Block@@QEBA_NXZ", bool_t, { this: Block });
+Block.prototype.isUnbreakable = derived(
+    "?isUnbreakable@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return blockDestroySpeed(this as any as StaticPointer) < 0;
+    },
+    () => procHacker.js("?isUnbreakable@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.buildDescriptionId = procHacker.js("?buildDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
     this: Block,
     structureReturn: true,
@@ -5205,10 +5244,26 @@ Block.prototype.popResource = procHacker.js(
     ItemStack,
 );
 Block.prototype.canHurtAndBreakItem = procHacker.js("?canHurtAndBreakItem@Block@@QEBA_NXZ", bool_t, { this: Block });
-Block.prototype.getThickness = procHacker.js("?getThickness@Block@@QEBAMXZ", float32_t, { this: Block });
+Block.prototype.getThickness = derived(
+    "?getThickness@Block@@QEBAMXZ",
+    function (this: Block): number {
+        return blockTypeThickness(this.blockLegacy as any as StaticPointer);
+    },
+    () => procHacker.js("?getThickness@Block@@QEBAMXZ", float32_t, { this: Block }),
+);
 Block.prototype.hasComparatorSignal = procHacker.js("?hasComparatorSignal@Block@@QEBA_NXZ", bool_t, { this: Block });
-Block.prototype.getTranslucency = procHacker.js("?getTranslucency@Block@@QEBAMXZ", float32_t, { this: Block });
-const Block$getExplosionResistance = procHacker.js("?getExplosionResistance@Block@@QEBAMXZ", float32_t, null, Block);
+Block.prototype.getTranslucency = derived(
+    "?getTranslucency@Block@@QEBAMXZ",
+    function (this: Block): number {
+        return blockTypeTranslucency(this.blockLegacy as any as StaticPointer);
+    },
+    () => procHacker.js("?getTranslucency@Block@@QEBAMXZ", float32_t, { this: Block }),
+);
+const Block$getExplosionResistance = derived(
+    "?getExplosionResistance@Block@@QEBAMXZ",
+    (block: Block): number => blockExplosionResistance(block as any as StaticPointer),
+    () => procHacker.js("?getExplosionResistance@Block@@QEBAMXZ", float32_t, null, Block),
+);
 Block.prototype.getExplosionResistance = function (actor: Actor | null = null): number {
     return Block$getExplosionResistance(this);
 };
@@ -5229,7 +5284,13 @@ Block.prototype.getDirectSignal = procHacker.js(
     int32_t,
 );
 Block.prototype.isSignalSource = procHacker.js("?isSignalSource@Block@@QEBA_NXZ", bool_t, { this: Block });
-Block.prototype.getDestroySpeed = procHacker.js("?getDestroySpeed@Block@@QEBAMXZ", float32_t, { this: Block });
+Block.prototype.getDestroySpeed = derived(
+    "?getDestroySpeed@Block@@QEBAMXZ",
+    function (this: Block): number {
+        return blockDestroySpeed(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getDestroySpeed@Block@@QEBAMXZ", float32_t, { this: Block }),
+);
 
 // BDS calls BlockSource::setBlock (this, exactly same overload) when player moves to TheEnd Dimension, to secure the obsidian platform.
 //
