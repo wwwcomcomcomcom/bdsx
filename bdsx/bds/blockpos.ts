@@ -188,13 +188,18 @@ export class ChunkPos extends NativeStruct {
     }
 }
 
-@nativeClass()
+/**
+ * The engine's ChunkBlockPos is { uint8 x +0, uint8 z +1, ChunkLocalHeight (int16) y +2 }, 4 bytes: 2024's
+ * LevelChunk::toWorldPos (1.21.3.01 0x218cb50) reads x at +0, y with movswl at +2 and z at +1, and so do 1.26's inlined
+ * copies (40 0xba152f, 51 0x9f3d7f). bdsx used to lay it out x, y, z (z at +4).
+ */
+@nativeClass(4)
 export class ChunkBlockPos extends NativeStruct {
-    @nativeField(uint8_t)
+    @nativeField(uint8_t, 0)
     x: uint8_t;
-    @nativeField(uint16_t)
+    @nativeField(uint16_t, 2)
     y: uint16_t;
-    @nativeField(uint8_t)
+    @nativeField(uint8_t, 1)
     z: uint8_t;
 
     set(pos: ChunkBlockPos | VectorXYZ): void {

@@ -33,6 +33,7 @@ import { inventoryTransactionActions } from "./engine/invtransaction";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import {
+    blockActorType,
     blockDestroySpeed,
     blockExplosionResistance,
     blockRuntimeId,
@@ -42,6 +43,7 @@ import {
     blockTypeTranslucency,
     lookupBlockType,
 } from "./engine/blocktype";
+import { LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkToWorld } from "./engine/chunk";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
 import { Register, asm } from "../assembler";
@@ -5429,7 +5431,13 @@ BlockActor.prototype.getContainer = procHacker.jsv(
     Container,
     { this: BlockActor },
 );
-BlockActor.prototype.getType = procHacker.js("?getType@BlockActor@@QEBAAEBW4BlockActorType@@XZ", int32_t.ref(), { this: BlockActor });
+BlockActor.prototype.getType = derived(
+    "?getType@BlockActor@@QEBAAEBW4BlockActorType@@XZ",
+    function (this: BlockActor): number {
+        return blockActorType(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getType@BlockActor@@QEBAAEBW4BlockActorType@@XZ", int32_t.ref(), { this: BlockActor }),
+);
 BlockActor.prototype.getPosition = procHacker.js("?getPosition@BlockActor@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: BlockActor });
 BlockActor.prototype.getServerUpdatePacket = procHacker.js(
     "?getServerUpdatePacket@BlockActor@@QEAA?AV?$unique_ptr@VBlockActorDataPacket@@U?$default_delete@VBlockActorDataPacket@@@std@@@std@@AEAVBlockSource@@@Z",
@@ -6751,15 +6759,42 @@ HitResult.prototype.getEntity = derived(
 // chunk.ts
 LevelChunk.prototype.getBiome = procHacker.js("?getBiome@LevelChunk@@QEBAAEBVBiome@@AEBVChunkBlockPos@@@Z", Biome, { this: LevelChunk }, ChunkBlockPos);
 LevelChunk.prototype.getLevel = procHacker.js("?getLevel@LevelChunk@@QEBAAEAVLevel@@XZ", Level, { this: LevelChunk });
-LevelChunk.prototype.getPosition = procHacker.js("?getPosition@LevelChunk@@QEBAAEBVChunkPos@@XZ", ChunkPos, { this: LevelChunk });
-LevelChunk.prototype.getMin = procHacker.js("?getMin@LevelChunk@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: LevelChunk });
-LevelChunk.prototype.getMax = procHacker.js("?getMax@LevelChunk@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: LevelChunk });
+// 1.26 inlined 2024's leaves (`lea 0x60 / 0x6c / 0x78`); the fields are where they were (engine/chunk.ts)
+LevelChunk.prototype.getPosition = derived(
+    "?getPosition@LevelChunk@@QEBAAEBVChunkPos@@XZ",
+    function (this: LevelChunk): ChunkPos {
+        return this.addAs(ChunkPos, LEVEL_CHUNK_POSITION);
+    },
+    () => procHacker.js("?getPosition@LevelChunk@@QEBAAEBVChunkPos@@XZ", ChunkPos, { this: LevelChunk }),
+);
+LevelChunk.prototype.getMin = derived(
+    "?getMin@LevelChunk@@QEBAAEBVBlockPos@@XZ",
+    function (this: LevelChunk): BlockPos {
+        return this.addAs(BlockPos, LEVEL_CHUNK_MIN);
+    },
+    () => procHacker.js("?getMin@LevelChunk@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: LevelChunk }),
+);
+LevelChunk.prototype.getMax = derived(
+    "?getMax@LevelChunk@@QEBAAEBVBlockPos@@XZ",
+    function (this: LevelChunk): BlockPos {
+        return this.addAs(BlockPos, LEVEL_CHUNK_MAX);
+    },
+    () => procHacker.js("?getMax@LevelChunk@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: LevelChunk }),
+);
 LevelChunk.prototype.isFullyLoaded = procHacker.js("?isFullyLoaded@LevelChunk@@QEBA_NXZ", bool_t, { this: LevelChunk });
-LevelChunk.prototype.toWorldPos = procHacker.js(
+LevelChunk.prototype.toWorldPos = derived(
     "?toWorldPos@LevelChunk@@QEBA?AVBlockPos@@AEBVChunkBlockPos@@@Z",
-    BlockPos,
-    { this: LevelChunk, structureReturn: true },
-    ChunkPos,
+    function (this: LevelChunk, pos: ChunkBlockPos): BlockPos {
+        const [x, y, z] = levelChunkToWorld(this as any as StaticPointer, pos.x, pos.y, pos.z);
+        return BlockPos.create(x, y, z);
+    },
+    () =>
+        procHacker.js(
+            "?toWorldPos@LevelChunk@@QEBA?AVBlockPos@@AEBVChunkBlockPos@@@Z",
+            BlockPos,
+            { this: LevelChunk, structureReturn: true },
+            ChunkBlockPos,
+        ),
 );
 LevelChunk.prototype.getEntity = procHacker.js("?getEntity@LevelChunk@@QEBAPEAVActor@@AEBUActorUniqueID@@@Z", Actor, { this: LevelChunk }, ActorUniqueID.ref());
 // std::vector<WeakEntityRef>& LevelChunk::getChunkEntities();

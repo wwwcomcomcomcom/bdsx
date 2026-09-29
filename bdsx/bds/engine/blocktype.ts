@@ -119,3 +119,15 @@ export function blockDestroySpeed(block: StaticPointer): number {
 export function blockRuntimeId(block: StaticPointer): number {
     return block.getUint32(BLOCK_RUNTIME_ID);
 }
+
+/**
+ * BlockActor::type_ (BlockActorType, one byte in 1.26): Endstone block_actor.h +20 in 0.11.7 and HEAD, right after
+ * position_ (a BlockPos at +8, execution-confirmed on both builds as the getPosition accessor). The first run read it as
+ * four bytes and got 0xffffff01 for a furnace and 0x656f6426 for a blast furnace: the low byte is the type, the rest is
+ * not. 2024: getType@BlockActor `lea 0x50(%rcx)` over a four-byte enum. docs/findings-layouts.md "LevelChunk and
+ * BlockActor on 1.26".
+ */
+const BLOCK_ACTOR_TYPE = engineLayout("BlockActor", "type", 0x50);
+export function blockActorType(blockActor: StaticPointer): number {
+    return blockActor.getUint8(BLOCK_ACTOR_TYPE);
+}
