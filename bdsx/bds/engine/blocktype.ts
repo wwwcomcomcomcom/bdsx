@@ -131,3 +131,11 @@ const BLOCK_ACTOR_TYPE = engineLayout("BlockActor", "type", 0x50);
 export function blockActorType(blockActor: StaticPointer): number {
     return blockActor.getUint8(BLOCK_ACTOR_TYPE);
 }
+
+/**
+ * BlockType::asItemInstance(Block const&, BlockActor const*) is a virtual: slot 77 on both builds (Endstone block_type.h
+ * counts 76 from the top, which is off by one). The base body (40 0x1eeb770, 51 0x1a24b60) builds an ItemInstance of
+ * default_state_ (+0x240, Endstone +576) with count 1 and no tag into the return slot, ignoring both arguments -- 2024's
+ * BlockLegacy::asItemInstance (0x1be8270: ItemInstance(mDefaultState, 1, nullptr)). docs/findings-blocks.md "asItemInstance".
+ */
+export const BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT = engineLayout("BlockLegacy", "asItemInstanceSlot", -1);

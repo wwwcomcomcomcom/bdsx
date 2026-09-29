@@ -39,6 +39,7 @@ import { inventoryTransactionActions } from "./engine/invtransaction";
 import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, networkItemStackDescriptorMove } from "./engine/itemdescriptor";
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import {
+    BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT,
     blockActorType,
     blockDestroySpeed,
     blockExplosionResistance,
@@ -5231,13 +5232,26 @@ BlockLegacy.prototype.use = procHacker.jsv(
     BlockPos,
     uint8_t,
 );
-BlockLegacy.prototype.asItemInstance = procHacker.jsv(
-    "??_7BlockLegacy@@6B@",
+// through the block type's own vftable (engine/blocktype.ts: slot 77 on both 1.26 builds), so an override answers too
+let BlockLegacy$asItemInstance: ((this: BlockLegacy, block: Block, blockActor: BlockActor | null) => ItemStackBase) | null = null;
+BlockLegacy.prototype.asItemInstance = derived(
     "?asItemInstance@BlockLegacy@@UEBA?AVItemInstance@@AEBVBlock@@PEBVBlockActor@@@Z",
-    ItemStackBase,
-    { this: BlockLegacy, structureReturn: true },
-    Block,
-    BlockActor,
+    function (this: BlockLegacy, block: Block, blockActor: BlockActor | null = null): ItemStackBase {
+        if (BlockLegacy$asItemInstance === null) {
+            if (BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT < 0) throw Error("BlockLegacy::asItemInstance: no slot in this build");
+            BlockLegacy$asItemInstance = makefunc.js([BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT * 8], ItemStackBase, { this: BlockLegacy, structureReturn: true }, Block, BlockActor);
+        }
+        return BlockLegacy$asItemInstance.call(this, block, blockActor);
+    },
+    () =>
+        procHacker.jsv(
+            "??_7BlockLegacy@@6B@",
+            "?asItemInstance@BlockLegacy@@UEBA?AVItemInstance@@AEBVBlock@@PEBVBlockActor@@@Z",
+            ItemStackBase,
+            { this: BlockLegacy, structureReturn: true },
+            Block,
+            BlockActor,
+        ),
 );
 BlockLegacy.prototype.getSilkTouchedItemInstance = function (block) {
     return this.asItemInstance(this.getRenderBlock());
@@ -5302,26 +5316,37 @@ Block.prototype.hasBlockEntity = derived(
 Block.prototype.use = procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t);
 Block.prototype.getVariant = procHacker.js("?getVariant@Block@@QEBAHXZ", int32_t, { this: Block });
 Block.prototype.getSerializationId = procHacker.js("?getSerializationId@Block@@QEBAAEBVCompoundTag@@XZ", CompoundTag.ref(), { this: Block });
-(Block.prototype as any)._asItemInstance1 = procHacker.js(
+// 1.26 inlined both overloads (docs/findings-blocks.md "asItemInstance"): 2024 called the block type's asItemInstance with the
+// block actor at the position; the copyWholeData one then called ItemStackBase::addCustomUserData, which 1.26 does not have
+(Block.prototype as any)._asItemInstance1 = derived(
     "?asItemInstance@Block@@QEBA?AVItemInstance@@AEAVBlockSource@@AEBVBlockPos@@@Z",
-    ItemStack,
-    {
-        this: Block,
-        structureReturn: true,
+    function (this: Block, region: BlockSource, blockPos: BlockPos): ItemStackBase {
+        return this.blockLegacy.asItemInstance(this, region.getBlockEntity(blockPos));
     },
-    BlockSource,
-    BlockPos,
+    () =>
+        procHacker.js(
+            "?asItemInstance@Block@@QEBA?AVItemInstance@@AEAVBlockSource@@AEBVBlockPos@@@Z",
+            ItemStack,
+            { this: Block, structureReturn: true },
+            BlockSource,
+            BlockPos,
+        ),
 );
-(Block.prototype as any)._asItemInstance2 = procHacker.js(
+(Block.prototype as any)._asItemInstance2 = derived(
     "?asItemInstance@Block@@QEBA?AVItemInstance@@AEAVBlockSource@@AEBVBlockPos@@_N@Z",
-    ItemStack,
-    {
-        this: Block,
-        structureReturn: true,
+    function (this: Block, region: BlockSource, blockPos: BlockPos, copyWholeData: boolean): ItemStackBase {
+        if (copyWholeData) throw Error("Block.asItemInstance(copyWholeData = true) is not available on BDS 1.26 (no ItemStackBase::addCustomUserData)");
+        return this.blockLegacy.asItemInstance(this, region.getBlockEntity(blockPos));
     },
-    BlockSource,
-    BlockPos,
-    bool_t,
+    () =>
+        procHacker.js(
+            "?asItemInstance@Block@@QEBA?AVItemInstance@@AEAVBlockSource@@AEBVBlockPos@@_N@Z",
+            ItemStack,
+            { this: Block, structureReturn: true },
+            BlockSource,
+            BlockPos,
+            bool_t,
+        ),
 );
 Block.prototype.getSilkTouchItemInstance = function () {
     return this.blockLegacy.asItemInstance(this);
