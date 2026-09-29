@@ -14,7 +14,7 @@
  */
 import { NativePointer, StaticPointer, VoidPointer } from "../../core";
 import { makefunc } from "../../makefunc";
-import { bool_t, int32_t } from "../../nativetype";
+import { bool_t, CxxString, int32_t } from "../../nativetype";
 import { engineLayout } from "./deps";
 
 export const ITEM_BLOCK_TYPE = engineLayout("Item", "blockType", 0x178);
@@ -225,4 +225,24 @@ export function itemIsHumanoidArmor(item: StaticPointer): boolean {
         humanoidArmorCalls.set(key, call);
     }
     return call(item);
+}
+
+/**
+ * Item::buildDescriptionName(ItemStackBase const&), the translated display name: slot 93 on both builds (2024: 82,
+ * +0x290; Endstone item.h counts 92, and 1.26 has one more virtual between isValidAuxValue (67) and it). PickaxeItem's
+ * slot 93 (40 0x24e8940, 51 0x1a8d530) calls slot 94 (+0x2f0, buildDescriptionId) and the static I18n's +0x80 (get),
+ * 2024's body; slot 92 does neither (docs/findings-containers.md section 20).
+ */
+export const ITEM_BUILD_DESCRIPTION_NAME_SLOT = engineLayout("Item", "buildDescriptionNameSlot", 82);
+const descriptionNameCalls = new Map<string, (item: VoidPointer, stack: VoidPointer) => string>();
+export function itemBuildDescriptionName(item: StaticPointer, stack: VoidPointer): string {
+    const fn = item.getPointer(0).getPointer(ITEM_BUILD_DESCRIPTION_NAME_SLOT * 8);
+    const key = fn.toString();
+    let call = descriptionNameCalls.get(key);
+    if (call === undefined) {
+        const native = makefunc.js(fn, CxxString, { this: VoidPointer, structureReturn: true }, VoidPointer);
+        call = (i: VoidPointer, st: VoidPointer) => native.call(i, st);
+        descriptionNameCalls.set(key, call);
+    }
+    return call(item, stack);
 }

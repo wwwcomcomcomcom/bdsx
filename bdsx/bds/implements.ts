@@ -17,6 +17,7 @@ import {
     itemBlockType,
     itemCanDestroyInCreative,
     itemCommandNames,
+    itemBuildDescriptionName,
     itemCreativeCategory,
     itemFullName,
     itemIsExplodable,
@@ -4194,10 +4195,48 @@ ItemStackBase.prototype.getRawNameId = derived(
             { this: ItemStackBase, structureReturn: true },
         ),
 );
-ItemStackBase.prototype.getCustomName = procHacker.js("?getName@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: ItemStackBase,
-    structureReturn: true,
-});
+// the custom-name family over the item's user data (display.Name / display.Lore), as setCustomName below; 1.26 keeps no
+// out-of-line copy of any of them (docs/findings-containers.md section 20)
+function itemStackDisplay(stack: ItemStackBase, create: boolean): CompoundTag | null {
+    const self = stack as any as StaticPointer;
+    let userData = self.getNullablePointerAs(CompoundTag, 16);
+    if (userData === null) {
+        if (!create) return null;
+        userData = CompoundTag.allocate();
+        self.setPointer(userData, 16);
+    }
+    const display = userData.get("display");
+    if (display instanceof CompoundTag) return display;
+    if (!create) return null;
+    userData.setAllocated("display", CompoundTag.allocate());
+    return userData.get<CompoundTag>("display");
+}
+// 2024 0x1b61950: the custom name when there is one, else the item's buildDescriptionName (engine/item.ts), else ""
+ItemStackBase.prototype.getCustomName = derived(
+    "?getName@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function (this: ItemStackBase): string {
+        if (this.hasCustomName()) {
+            const name = itemStackDisplay(this, false)!.get("Name");
+            if (name instanceof StringTag) return name.data;
+        }
+        const item = this.getItem();
+        if (item === null) return "";
+        const blockType = itemBlockType(item as any as StaticPointer);
+        if (blockType === null) return itemBuildDescriptionName(item as any as StaticPointer, this);
+        // a block item: BlockItem's buildDescriptionId leaves a SpinLock held for oak_planks on 1.26.51 (the server asserts
+        // "SpinLock in use while destructing" at shutdown), so bdsx translates the block type's description_id_ (+8,
+        // Endstone block_type.h) + ".name" itself, and refuses when en_US has no such key rather than guess
+        const key = (blockType as StaticPointer).getCxxString(8) + ".name";
+        const name = translateText(key, []);
+        if (name === key) throw Error(`ItemStackBase.getCustomName: no translation for ${key} (a block item without a custom name)`);
+        return name;
+    },
+    () =>
+        procHacker.js("?getName@ItemStackBase@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
+            this: ItemStackBase,
+            structureReturn: true,
+        }),
+);
 ItemStackBase.prototype.setCustomName = derived(
     "?setCustomName@ItemStackBase@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     // 2024 0x1b6ccf0 (docs/findings-nbt.md "setCustomName"): nothing without an item or with an empty name; otherwise
@@ -4225,7 +4264,15 @@ ItemStackBase.prototype.setCustomName = derived(
         ),
 );
 ItemStackBase.prototype.getUserData = procHacker.js("?getUserData@ItemStackBase@@QEAAPEAVCompoundTag@@XZ", CompoundTag, { this: ItemStackBase });
-ItemStackBase.prototype.hasCustomName = procHacker.js("?hasCustomHoverName@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b62980: user data has a "display" compound that contains "Name"
+ItemStackBase.prototype.hasCustomName = derived(
+    "?hasCustomHoverName@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const display = itemStackDisplay(this, false);
+        return display !== null && display.has("Name");
+    },
+    () => procHacker.js("?hasCustomHoverName@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // no out-of-line copy on either 1.26 build: 2024's body (0x1b64660) over Item::block_type_ (engine/item.ts)
 ItemStackBase.prototype.isBlock = derived(
     "?isBlock@ItemStackBase@@QEBA_NXZ",
@@ -4573,23 +4620,52 @@ ItemStackBase.prototype.isMusicDiscItem = function () {
     },
     () => procHacker.js("?getItem@ItemStackBase@@QEBAPEBVItem@@XZ", Item, { this: ItemStackBase }),
 );
-(ItemStackBase.prototype as any)._setCustomLore = procHacker.js(
+// 2024 0x1b6ca70 (setCustomLore): with an item, user data and "display" made if missing, then display.Lore = a list of string tags
+(ItemStackBase.prototype as any)._setCustomLore = derived(
     "?setCustomLore@ItemStackBase@@QEAAXAEBV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@@Z",
-    void_t,
-    { this: ItemStackBase },
-    CxxVector.make(CxxStringWrapper),
+    function (this: ItemStackBase, lore: CxxVector<CxxStringWrapper>): void {
+        if (this.getItem() === null) return;
+        const list = ListTag.allocate();
+        // setCustomLore hands a CxxVector<CxxString>, whose elements come back as JS strings
+        for (const line of (lore as unknown as CxxVector<string>).toArray()) list.pushAllocated(StringTag.allocateWith(line));
+        itemStackDisplay(this, true)!.setAllocated("Lore", list);
+    },
+    () =>
+        procHacker.js(
+            "?setCustomLore@ItemStackBase@@QEAAXAEBV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@@Z",
+            void_t,
+            { this: ItemStackBase },
+            CxxVector.make(CxxStringWrapper),
+        ),
 );
-const ItemStackBase$getCustomLore = procHacker.js(
+// 2024: display.Lore's strings, [] without one
+ItemStackBase.prototype.getCustomLore = derived(
     "?getCustomLore@ItemStackBase@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
-    CxxVector$string,
-    { this: ItemStackBase, structureReturn: true },
+    function (this: ItemStackBase): string[] {
+        const display = itemStackDisplay(this, false);
+        const lore = display === null ? null : display.get("Lore");
+        if (!(lore instanceof ListTag)) return [];
+        const out: string[] = [];
+        for (let i = 0; i < lore.size(); i++) {
+            const t = lore.get(i);
+            if (t instanceof StringTag) out.push(t.data);
+        }
+        return out;
+    },
+    () => {
+        const native = procHacker.js(
+            "?getCustomLore@ItemStackBase@@QEBA?AV?$vector@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V?$allocator@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@std@@XZ",
+            CxxVector$string,
+            { this: ItemStackBase, structureReturn: true },
+        );
+        return function (this: ItemStackBase): string[] {
+            const lore: CxxVector<CxxString> = native.call(this);
+            const res = lore.toArray();
+            lore.destruct();
+            return res;
+        };
+    },
 );
-ItemStackBase.prototype.getCustomLore = function () {
-    const lore: CxxVector<CxxString> = ItemStackBase$getCustomLore.call(this);
-    const res = lore.toArray();
-    lore.destruct();
-    return res;
-};
 
 ItemStackBase.prototype.constructItemEnchantsFromUserData = procHacker.js(
     "?constructItemEnchantsFromUserData@ItemStackBase@@QEBA?AVItemEnchants@@XZ",
