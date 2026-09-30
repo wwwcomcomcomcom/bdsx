@@ -1939,7 +1939,15 @@ ProjectileComponent.prototype.setOwnerId = derived(
     () => procHacker.js("?setOwnerId@ProjectileComponent@@QEAAXUActorUniqueID@@@Z", void_t, { this: ProjectileComponent }, ActorUniqueID),
 );
 
-DamageSensorComponent.prototype.isFatal = procHacker.js("?isFatal@DamageSensorComponent@@QEBA_NXZ", bool_t, { this: DamageSensorComponent });
+// 2024: `movzbl 4(%rcx)` (identical-code-folded with 25 other bodies). 1.26 keeps the same component layout as Endstone's
+// damage_sensor_component.h: int damage_amount_ +0, bool damage_is_fatal_ +4, int damage_cause_ +8, the trigger vector at +0x10.
+DamageSensorComponent.prototype.isFatal = derived(
+    "?isFatal@DamageSensorComponent@@QEBA_NXZ",
+    function isFatal(this: DamageSensorComponent): boolean {
+        return (this as unknown as StaticPointer).getUint8(engineLayout("DamageSensorComponent", "fatal", 4)) !== 0;
+    },
+    () => procHacker.js("?isFatal@DamageSensorComponent@@QEBA_NXZ", bool_t, { this: DamageSensorComponent }),
+);
 
 CommandBlockComponent.prototype.addAdditionalSaveData = procHacker.js(
     "?addAdditionalSaveData@CommandBlockComponent@@QEBAXAEAVCompoundTag@@@Z",
