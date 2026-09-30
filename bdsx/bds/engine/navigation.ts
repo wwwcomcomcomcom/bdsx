@@ -1,5 +1,5 @@
 /**
- * NavigationComponent on 1.26 (engine layer; docs/findings-navigation.md).
+ * NavigationComponent on 1.26 (engine layer; docs/findings-components.md, section NavigationComponent).
  *
  * The component is an EnTT element (hash fnv1a "NavigationComponent" = 0xbb725ebe) of 0x60 bytes on both builds
  * (2024: 0x70). Its fields, each read off a live mob on both builds and set against the behaviour packs' own JSON:

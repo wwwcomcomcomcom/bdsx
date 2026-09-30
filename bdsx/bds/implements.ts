@@ -1781,7 +1781,7 @@ const getNameableComponent = derived<(actor: Actor) => NameableComponent>(
     },
     () => procHacker.js("??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ", NameableComponent, null, Actor),
 );
-// 1.26 has no out-of-line try_get for it (docs/findings-navigation.md): an EnTT element of 0x60 bytes on both builds (hash fnv1a
+// 1.26 has no out-of-line try_get for it (docs/findings-components.md, section NavigationComponent): an EnTT element of 0x60 bytes on both builds (hash fnv1a
 // "NavigationComponent"; 2024: 0x70).
 const getNavigationComponent = derived<(actor: Actor) => NavigationComponent>(
     "??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ",
@@ -1936,7 +1936,7 @@ NameableComponent.prototype.nameEntity = procHacker.js(
     Actor,
     CxxString,
 );
-// 1.26 (docs/findings-navigation.md): every accessor is a field read of the 0x60-byte component (bit field at +0, speed +0x14, tick pair
+// 1.26 (docs/findings-components.md, section NavigationComponent): every accessor is a field read of the 0x60-byte component (bit field at +0, speed +0x14, tick pair
 // +4/+0xc, last stuck position +0x1c, the navigation object +0x50, the owned Path +0x58) and the three that ran path code are slots
 // 4/5/9 of the navigation object's vftable (engine/navigation.ts).
 const NavigationComponent$$createPath$$Actor = derived<(component: NavigationComponent, mob: Actor, target: Actor) => Path>(
