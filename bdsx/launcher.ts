@@ -17,7 +17,8 @@ import { copyLevelServerNetworkHandler } from "./bds/engine/networkhandler";
 import { levelStructureManager } from "./bds/engine/structure";
 import { engineLayout } from "./bds/engine/deps";
 import { StructureManager } from "./bds/structure";
-import { proc } from "./bds/symbols";
+import { derived, proc } from "./bds/symbols";
+import { minecraftCommandsRegistry, minecraftLevel } from "./bds/engine/serverfields";
 import type { CommandResult, CommandResultType } from "./commandresult";
 import { CANCEL, Encoding } from "./common";
 import { Config } from "./config";
@@ -525,18 +526,31 @@ function _launch(asyncResolve: () => void): void {
                 cgate.nodeLoopOnce();
             }
 
-            const Minecraft$getLevel = procHacker.js("?getLevel@Minecraft@@QEBAPEAVLevel@@XZ", Level, null, bd_server.Minecraft);
+            // 1.26 has no address for either getter; both are field reads (engine/serverfields.ts)
+            const Minecraft$getLevel = derived(
+                "?getLevel@Minecraft@@QEBAPEAVLevel@@XZ",
+                (mc: bd_server.Minecraft): Level | null => {
+                    const l = minecraftLevel(mc as any as StaticPointer);
+                    return l === null ? null : l.as(Level);
+                },
+                () => procHacker.js("?getLevel@Minecraft@@QEBAPEAVLevel@@XZ", Level, null, bd_server.Minecraft),
+            );
             const Minecraft$getCommands = procHacker.js(
                 "?getCommands@Minecraft@@QEAAAEAVMinecraftCommands@@XZ",
                 MinecraftCommands,
                 null,
                 bd_server.Minecraft,
             );
-            const MinecraftCommands$getRegistry = procHacker.js(
+            const MinecraftCommands$getRegistry = derived(
                 "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ",
-                CommandRegistry,
-                null,
-                MinecraftCommands,
+                (mc: MinecraftCommands): CommandRegistry => minecraftCommandsRegistry(mc as any as StaticPointer).as(CommandRegistry),
+                () =>
+                    procHacker.js(
+                        "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ",
+                        CommandRegistry,
+                        null,
+                        MinecraftCommands,
+                    ),
             );
             const Level$getGameRules = procHacker.js("?getGameRules@Level@@UEAAAEAVGameRules@@XZ", GameRules, null, Level);
             const RakNetConnector$getPeer = procHacker.js(
@@ -580,9 +594,14 @@ function _launch(asyncResolve: () => void): void {
             }
 
             let commandRegistry: CommandRegistry | null = null;
-            if (minecraftCommands != null && "?getRegistry@MinecraftCommands@@QEAAAEAVCommandRegistry@@XZ" in proc) {
+            if (minecraftCommands != null) {
                 commandRegistry = attempt("commandRegistry", () => MinecraftCommands$getRegistry(minecraftCommands!));
-            } else if (commandRegistryFromRegister != null) {
+                if (commandRegistry != null && commandRegistryFromRegister != null && !commandRegistry.equalsptr(commandRegistryFromRegister)) {
+                    console.error(colors.yellow(`[bdsx] commandRegistry: MinecraftCommands+0x10 ${commandRegistry} is not the registry the register hook saw ${commandRegistryFromRegister}`));
+                    commandRegistry = commandRegistryFromRegister;
+                }
+            }
+            if (commandRegistry == null && commandRegistryFromRegister != null) {
                 commandRegistry = commandRegistryFromRegister;
             }
             const gameRules = level != null ? attempt("gameRules", () => Level$getGameRules(level)) : null;

@@ -119,3 +119,29 @@ export function networkConnectionIds(system: StaticPointer): StaticPointer[] {
     }
     return out;
 }
+
+/**
+ * NetworkSystem::_getConnectionFromId (docs/findings-inventory.md section 18).
+ *
+ * 2024's body (1.21.3.01 0x810b60) walks the vector, skips a connection whose id type (+0x98) differs from the argument's
+ * before it pays for NetworkIdentifier::equalsTypeData, and returns the first match, or null. 1.26 has no copy; the loop is
+ * inlined in its callers (40 0xbfd6f0, 51 0x93bfa0: the type at +0xa8 of the id, `equalsTypeData`, then -- only in that
+ * caller -- a should_close_connection_ check this function never made). The equality is passed in, because bdsx's
+ * `NetworkIdentifier.equals` is already the derived/bound one.
+ */
+const NETWORK_IDENTIFIER_TYPE = engineLayout("NetworkIdentifier", "type", 0x98);
+export function networkConnectionFromId(system: StaticPointer, id: StaticPointer, equalsTypeData: (connectionId: StaticPointer) => boolean): StaticPointer | null {
+    const begin = system.getNullablePointer(NETWORK_SYSTEM_CONNECTIONS);
+    const end = system.getNullablePointer(NETWORK_SYSTEM_CONNECTIONS + 8);
+    if (begin === null || end === null) return null;
+    const type = id.getInt32(NETWORK_IDENTIFIER_TYPE);
+    const count = end.subptr(begin) / 8;
+    for (let i = 0; i < count; i++) {
+        const connection = begin.getNullablePointer(i * 8);
+        if (connection === null) continue;
+        const connectionId = connection.add(NETWORK_CONNECTION_ID);
+        if (connectionId.getInt32(NETWORK_IDENTIFIER_TYPE) !== type) continue;
+        if (equalsTypeData(connectionId)) return connection;
+    }
+    return null;
+}

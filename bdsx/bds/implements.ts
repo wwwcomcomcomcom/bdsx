@@ -8,7 +8,8 @@ import { structureSettingsConstruct, structureSettingsDestruct, structureSetting
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
-import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
+import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/serverfields";
+import { copyLevelServerNetworkHandler, networkConnectionFromId, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { freezeOnHitReadJson } from "./engine/freezeonhit";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
@@ -3478,7 +3479,14 @@ Player.tryGetFromEntity = derived<(entity: EntityContext, getRemoved?: boolean) 
     () => procHacker.js("?tryGetFromEntity@Player@@SAPEAV1@AEAVEntityContext@@_N@Z", Player, null, EntityContext, bool_t),
 );
 
-ServerPlayer.prototype.nextContainerCounter = procHacker.js("?_nextContainerCounter@ServerPlayer@@AEAA?AW4ContainerID@@XZ", int8_t, { this: ServerPlayer });
+// 1.26 inlines it into ServerPlayer::openInventory over a byte at +0xd98 (engine/serverfields.ts)
+ServerPlayer.prototype.nextContainerCounter = derived(
+    "?_nextContainerCounter@ServerPlayer@@AEAA?AW4ContainerID@@XZ",
+    function nextContainerCounter(this: ServerPlayer): number {
+        return serverPlayerNextContainerCounter(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("?_nextContainerCounter@ServerPlayer@@AEAA?AW4ContainerID@@XZ", int8_t, { this: ServerPlayer }),
+);
 ServerPlayer.prototype.openInventory = procHacker.js("?openInventory@ServerPlayer@@UEAAXXZ", void_t, { this: ServerPlayer });
 // `?resendAllChunks@Player@@QEAAXXZ` is a 17-byte leaf outside `.pdata` that 1.26 inlines into its
 // callers (docs/next-steps.md Q1 0 C-2, `tools/leaf-funcs.mjs --at=0x19e6dd0`). The 2024 body is three
@@ -3830,10 +3838,18 @@ Object.defineProperties(NetworkSystem.prototype, {
 });
 
 // NetworkSystem::Connection* NetworkSystem::getConnectionFromId(const NetworkIdentifier& ni)
-NetworkSystem.prototype.getConnectionFromId = procHacker.js(
+NetworkSystem.prototype.getConnectionFromId = derived(
     "?_getConnectionFromId@NetworkSystem@@AEBAPEAVNetworkConnection@@AEBVNetworkIdentifier@@@Z",
-    NetworkConnection,
-    { this: NetworkSystem },
+    function getConnectionFromId(this: NetworkSystem, ni: NetworkIdentifier): NetworkConnection | null {
+        const connection = networkConnectionFromId(this as unknown as StaticPointer, ni as unknown as StaticPointer, id => (id.as(NetworkIdentifier) as NetworkIdentifier).equals(ni));
+        return connection === null ? null : connection.as(NetworkConnection);
+    },
+    () =>
+        procHacker.js(
+            "?_getConnectionFromId@NetworkSystem@@AEBAPEAVNetworkConnection@@AEBVNetworkIdentifier@@@Z",
+            NetworkConnection,
+            { this: NetworkSystem },
+        ),
 );
 
 // void NetworkSystem::send(const NetworkIdentifier& ni, Packet& packet, unsigned char senderSubClientId)
@@ -7857,7 +7873,13 @@ LevelChunk.prototype.getChunkEntities = derived(
         ),
 );
 
-ChunkSource.prototype.getLevel = procHacker.js("?getLevel@ChunkSource@@QEBAAEAVLevel@@XZ", Level, { this: ChunkSource });
+ChunkSource.prototype.getLevel = derived(
+    "?getLevel@ChunkSource@@QEBAAEAVLevel@@XZ",
+    function getLevel(this: ChunkSource): Level {
+        return chunkSourceLevel(this as unknown as StaticPointer).as(Level);
+    },
+    () => procHacker.js("?getLevel@ChunkSource@@QEBAAEAVLevel@@XZ", Level, { this: ChunkSource }),
+);
 ChunkSource.prototype.isChunkKnown = procHacker.jsv(
     "??_7ChunkSource@@6B@",
     "?isChunkKnown@ChunkSource@@UEAA_NAEBVChunkPos@@@Z",
