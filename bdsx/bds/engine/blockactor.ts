@@ -59,16 +59,24 @@ export function blockActorGetCustomName(blockActor: StaticPointer): string {
     return p.as(StaticPointer).getCxxString();
 }
 
-export function blockActorSetCustomName(blockActor: StaticPointer, name: string): void {
-    const iface = mainInterface(blockActor);
-    const call = slotCall(iface, SET_CUSTOM_NAME_SLOT, fn => makefunc.js(fn, void_t, null, VoidPointer, VoidPointer));
+/**
+ * Runs `use` with a temporary Bedrock::Safety::RedactableString holding `name` (a zeroed 0x48-byte block with a constructed
+ * raw std::string and no filtered part) and destroys it again.
+ */
+export function withRedactableString<T>(name: string, use: (redactable: VoidPointer) => T): T {
     const tmp = new AllocatedPointer(REDACTABLE_STRING_SIZE);
     tmp.fill(0, REDACTABLE_STRING_SIZE);
     CxxString[NativeType.ctor](tmp as any);
     try {
         tmp.setCxxString(name);
-        call(iface, tmp);
+        return use(tmp);
     } finally {
         CxxString[NativeType.dtor](tmp as any);
     }
+}
+
+export function blockActorSetCustomName(blockActor: StaticPointer, name: string): void {
+    const iface = mainInterface(blockActor);
+    const call = slotCall(iface, SET_CUSTOM_NAME_SLOT, fn => makefunc.js(fn, void_t, null, VoidPointer, VoidPointer));
+    withRedactableString(name, tmp => call(iface, tmp));
 }

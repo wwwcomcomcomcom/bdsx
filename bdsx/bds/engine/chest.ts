@@ -31,7 +31,7 @@ export function chestPairedPosition(self: ChestBlockActor): BlockPos {
  * loot-table virtuals moved to the main interface (blockactor.ts), and the tail of ChestBlockActor's own virtuals (loadItems,
  * saveItems, openBy, playOpenSound, playCloseSound, _canOpenThis, getObstructionAABB, _detectEntityObstruction) is at 27..34
  * with openBy second from the top of that run (28 saveItems, 29 openBy). The body is 2024's: send the player-gameplay event
- * (variant 0x10 with the block position), then, when the player has an open container (`cmpq $0, 0x5a0(player)`), call
+ * (variant 0x10 with the block position; executed: the bot's +0x5a0 goes null -> pointer inside the call), then, when the player has an open container (`cmpq $0, 0x5a0(player)`), call
  * `Container::startOpen(player)` (vftable +0xb0) on the chest's container, or on the partner's when one is paired
  * (40: partner +0x2f8 / valid flag +0x2d4, container +0x110; 51: +0x300 / +0x2dc / +0x118).
  */

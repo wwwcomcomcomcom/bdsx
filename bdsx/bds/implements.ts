@@ -1,6 +1,6 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { chestIsLarge, chestOpenBy, chestPairedPosition } from "./engine/chest";
-import { blockActorGetContainer, blockActorGetCustomName, blockActorSetCustomName } from "./engine/blockactor";
+import { blockActorGetContainer, blockActorGetCustomName, blockActorSetCustomName, withRedactableString } from "./engine/blockactor";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
@@ -1978,13 +1978,13 @@ CommandBlockComponent.prototype.getTicking = procHacker.js("?getTicking@CommandB
 CommandBlockComponent.prototype.setTicking = procHacker.js("?setTicking@CommandBlockComponent@@QEAAX_N@Z", void_t, { this: CommandBlockComponent }, bool_t);
 CommandBlockComponent.prototype.resetCurrentTicking = procHacker.js("?resetCurrentTick@CommandBlockComponent@@QEAAXXZ", void_t, { this: CommandBlockComponent });
 
-NameableComponent.prototype.nameEntity = procHacker.js(
-    "?nameEntity@NameableComponent@@QEAAXAEAVActor@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: NameableComponent },
-    Actor,
-    CxxString,
-);
+// 1.26 nameEntity (40 0x2d8e0d0 / 51 0x23f1a60) takes the name as a Bedrock::Safety::RedactableString const& (its first callee is the
+// RedactableString overload of setNameTag), so the 2024 decoration with std::string no longer describes it: it ships under a
+// bdsx: key, and the method builds the RedactableString (docs/findings-components.md "nameEntity").
+const NameableComponent$nameEntity = procHacker.js("bdsx:NameableComponent::nameEntity", void_t, null, VoidPointer, Actor, VoidPointer);
+NameableComponent.prototype.nameEntity = function (this: NameableComponent, actor: Actor, name: string): void {
+    withRedactableString(name, redactable => NameableComponent$nameEntity(this, actor, redactable));
+};
 // 1.26 (docs/findings-components.md, section NavigationComponent): every accessor is a field read of the 0x60-byte component (bit field at +0, speed +0x14, tick pair
 // +4/+0xc, last stuck position +0x1c, the navigation object +0x50, the owned Path +0x58) and the three that ran path code are slots
 // 4/5/9 of the navigation object's vftable (engine/navigation.ts).
