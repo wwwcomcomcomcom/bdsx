@@ -8,7 +8,8 @@ import type { Level } from "./level";
 
 @nativeClass(null)
 export class LevelChunk extends NativeClass {
-    getBiome(pos: ChunkBlockPos): Biome {
+    /** null for a sub-chunk the world has not generated yet (1.26 keeps no storage for it) */
+    getBiome(pos: ChunkBlockPos): Biome | null {
         abstract();
     }
     getLevel(): Level {

@@ -143,6 +143,7 @@ import {
 import { AttributeId, AttributeInstance, BaseAttributeMap } from "./attribute";
 import { Bedrock } from "./bedrock";
 import { Biome } from "./biome";
+import { biomeGetType, levelChunkGetBiome } from "./engine/biome";
 import { Block, BlockActor, BlockLegacy, BlockSource, BlockUtils, ChestBlockActor, PistonBlockActor } from "./block";
 import { BlockPos, ChunkBlockPos, ChunkPos, Vec2, Vec3 } from "./blockpos";
 import { ChunkSource, LevelChunk } from "./chunk";
@@ -6343,11 +6344,29 @@ BlockSource.prototype.getBlockEntity = procHacker.js(
     { this: BlockSource },
     BlockPos,
 );
-BlockSource.prototype.removeBlockEntity = procHacker.js(
+// 1.26 keeps no out-of-line BlockSource::removeBlockEntity (setBlock inlines it). 2024's body is getChunkAt(pos), then
+// LevelChunk::removeBlockEntity(sret shared_ptr<BlockActor>, pos) -- a block-entity map erase that hands the removed actor back.
+// The chunk function is an address under a bdsx: key; the wrapper is bdsx's own and discards the returned pointer
+// (docs/findings-inventory.md section 21)
+const LevelChunk$removeBlockEntity =
+    "bdsx:LevelChunk::removeBlockEntity" in proc
+        ? procHacker.js("bdsx:LevelChunk::removeBlockEntity", CxxSharedPtr.make(BlockActor), { this: LevelChunk, structureReturn: true }, BlockPos)
+        : null;
+BlockSource.prototype.removeBlockEntity = derived(
     "?removeBlockEntity@BlockSource@@QEAA?AV?$shared_ptr@VBlockActor@@@std@@AEBVBlockPos@@@Z",
-    void_t,
-    { this: BlockSource },
-    BlockPos,
+    function removeBlockEntity(this: BlockSource, blockPos: BlockPos): void {
+        const chunk = this.getChunkAt(blockPos);
+        if (chunk === null) return;
+        if (LevelChunk$removeBlockEntity === null) throw Error("LevelChunk::removeBlockEntity is not available on this build");
+        LevelChunk$removeBlockEntity.call(chunk, blockPos).dispose();
+    },
+    () =>
+        procHacker.js(
+            "?removeBlockEntity@BlockSource@@QEAA?AV?$shared_ptr@VBlockActor@@@std@@AEBVBlockPos@@@Z",
+            void_t,
+            { this: BlockSource },
+            BlockPos,
+        ),
 );
 BlockSource.prototype.getDimension = procHacker.js("?getDimension@BlockSource@@UEAAAEAVDimension@@XZ", Dimension, { this: BlockSource });
 BlockSource.prototype.getDimensionId = procHacker.js("?getDimensionId@BlockSource@@UEBA?AV?$AutomaticID@VDimension@@H@@XZ", int32_t, {
@@ -7902,7 +7921,15 @@ HitResult.prototype.getEntity = derived(
 );
 
 // chunk.ts
-LevelChunk.prototype.getBiome = procHacker.js("?getBiome@LevelChunk@@QEBAAEBVBiome@@AEBVChunkBlockPos@@@Z", Biome, { this: LevelChunk }, ChunkBlockPos);
+// 1.26 keeps no out-of-line copy: the sub-chunk's storage answers with the Biome itself (engine/biome.ts)
+LevelChunk.prototype.getBiome = derived(
+    "?getBiome@LevelChunk@@QEBAAEBVBiome@@AEBVChunkBlockPos@@@Z",
+    function getBiome(this: LevelChunk, pos: ChunkBlockPos): Biome | null {
+        const biome = levelChunkGetBiome(this as any as StaticPointer, pos.x, pos.y, pos.z);
+        return biome === null ? null : biome.as(Biome);
+    },
+    () => procHacker.js("?getBiome@LevelChunk@@QEBAAEBVBiome@@AEBVChunkBlockPos@@@Z", Biome, { this: LevelChunk }, ChunkBlockPos),
+);
 LevelChunk.prototype.getLevel = procHacker.js("?getLevel@LevelChunk@@QEBAAEAVLevel@@XZ", Level, { this: LevelChunk });
 // 1.26 inlined 2024's leaves (`lea 0x60 / 0x6c / 0x78`); the fields are where they were (engine/chunk.ts)
 LevelChunk.prototype.getPosition = derived(
@@ -8013,7 +8040,14 @@ VirtualCommandOrigin.constructWith = function (origin: CommandOrigin, actor: Act
 };
 
 // biome.ts
-Biome.prototype.getBiomeType = procHacker.js("?getBiomeType@Biome@@QEBA?AW4VanillaBiomeTypes@@XZ", uint32_t, { this: Biome });
+// the component storage's VanillaBiomeTypeAttributes entry (engine/biome.ts)
+Biome.prototype.getBiomeType = derived(
+    "?getBiomeType@Biome@@QEBA?AW4VanillaBiomeTypes@@XZ",
+    function getBiomeType(this: Biome): number {
+        return biomeGetType(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getBiomeType@Biome@@QEBA?AW4VanillaBiomeTypes@@XZ", uint32_t, { this: Biome }),
+);
 
 // item_component.ts
 // Each 1.26 table is NetworkedItemComponent<T>'s, at the component's +0; its buildNetworkTag (slot 4) stores
