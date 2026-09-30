@@ -13,6 +13,7 @@ import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/ser
 import { copyLevelServerNetworkHandler, networkConnectionFromId, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerPrimaryRequest, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { freezeOnHitReadJson } from "./engine/freezeonhit";
 import { gameplayUserManagerUsers, playerInputMode } from "./engine/worldfields";
+import { dimensionSendPacketForPosition, levelForceRemoveEntityFromWorld, packetSetReliableOrdered } from "./engine/dimensionentities";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { pushableByBlock, pushableByEntity, pushActorByActor, pushActorByVec } from "./engine/pushable";
@@ -838,7 +839,38 @@ Dimension.prototype.getHeight = procHacker.js("?getHeight@Dimension@@QEBAFXZ", i
 Dimension.prototype.tryGetClosestPublicRegion = function (chunkpos: ChunkPos) {
     return this.getBlockSource();
 };
-Dimension.prototype.removeActorByID = procHacker.js("?removeActorByID@Dimension@@QEAAXAEBUActorUniqueID@@@Z", void_t, { this: Dimension }, ActorUniqueID);
+// 2024 looked the id up in the dimension's own entity map and called Level::forceRemoveEntityfromWorld with the actor; 1.26 keeps no
+// out-of-line copy, and Level::fetchEntity is the same lookup with the dimension checked by hand (engine/dimensionentities.ts)
+Dimension.prototype.removeActorByID = derived(
+    "?removeActorByID@Dimension@@QEAAXAEBUActorUniqueID@@@Z",
+    function removeActorByID(this: Dimension, actorUniqueId: ActorUniqueID): void {
+        const level = bedrockServer.level;
+        const actor = level.fetchEntity(actorUniqueId, false);
+        if (actor === null || actor.getDimensionId() !== this.getDimensionId()) return;
+        levelForceRemoveEntityFromWorld(level as unknown as StaticPointer, actor as unknown as VoidPointer);
+    },
+    () => procHacker.js("?removeActorByID@Dimension@@QEAAXAEBUActorUniqueID@@@Z", void_t, { this: Dimension }, ActorUniqueID),
+);
+// 2024's body (0x1f46b70) is: the block at the position, nothing unless it has a block entity, that BlockActor's server update packet,
+// and IDimension::sendPacketForPosition(pos, packet, nullptr) with the packet's reliability set to 1
+Dimension.prototype._sendBlockEntityUpdatePacket = derived(
+    "?_sendBlockEntityUpdatePacket@Dimension@@AEAAXAEBVNetworkBlockPosition@@@Z",
+    function _sendBlockEntityUpdatePacket(this: Dimension, pos: BlockPos): void {
+        const region = this.getBlockSource();
+        if (!region.getBlock(pos).hasBlockEntity()) return;
+        const blockActor = region.getBlockEntity(pos);
+        if (blockActor === null) return;
+        const packet = blockActor.getServerUpdatePacket(region);
+        if (packet === null) return;
+        try {
+            packetSetReliableOrdered(packet as unknown as StaticPointer);
+            dimensionSendPacketForPosition(this as unknown as StaticPointer, pos, packet as unknown as VoidPointer, null);
+        } finally {
+            packet.dispose();
+        }
+    },
+    () => procHacker.js("?_sendBlockEntityUpdatePacket@Dimension@@AEAAXAEBVNetworkBlockPosition@@@Z", void_t, { this: Dimension }, BlockPos),
+);
 Dimension.prototype.getMinHeight = procHacker.js("?getMinHeight@Dimension@@QEBAFXZ", int16_t, { this: Dimension });
 // 1.26: slot 25 of every dimension's vftable no longer returns a HashedString; it writes the biome's numeric id (BiomeIdType, one
 // uint16 through the sret pointer: Nether 8, The End 9, the overworld 0) and ships under a bdsx: key
@@ -6410,12 +6442,18 @@ BlockActor.prototype.getType = derived(
     () => procHacker.js("?getType@BlockActor@@QEBAAEBW4BlockActorType@@XZ", int32_t.ref(), { this: BlockActor }),
 );
 BlockActor.prototype.getPosition = procHacker.js("?getPosition@BlockActor@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: BlockActor });
-BlockActor.prototype.getServerUpdatePacket = procHacker.js(
-    "?getServerUpdatePacket@BlockActor@@QEAA?AV?$unique_ptr@VBlockActorDataPacket@@U?$default_delete@VBlockActorDataPacket@@@std@@@std@@AEAVBlockSource@@@Z",
-    BlockActorDataPacket.ref(),
-    { this: BlockActor, structureReturn: true },
-    BlockSource,
-);
+// 1.26: a virtual at slot 18 of BlockActor's vftable, whose base copy (`mov %rdx,%rax; movq $0,(%rdx); ret`, no packet) ships under
+// a bdsx: key; procHacker.jsv finds the slot by scanning ??_7BlockActor@@6B@ for it, and the call goes through the object's own
+// vftable, so a chest or a sign reaches its override (docs/findings-inventory.md section 19)
+BlockActor.prototype.getServerUpdatePacket =
+    "bdsx:BlockActor::getServerUpdatePacket" in proc
+        ? procHacker.jsv("??_7BlockActor@@6B@", "bdsx:BlockActor::getServerUpdatePacket", BlockActorDataPacket.ref(), { this: BlockActor, structureReturn: true }, BlockSource)
+        : procHacker.js(
+              "?getServerUpdatePacket@BlockActor@@QEAA?AV?$unique_ptr@VBlockActorDataPacket@@U?$default_delete@VBlockActorDataPacket@@@std@@@std@@AEAVBlockSource@@@Z",
+              BlockActorDataPacket.ref(),
+              { this: BlockActor, structureReturn: true },
+              BlockSource,
+          );
 BlockActor.prototype.updateClientSide = function (player: ServerPlayer): void {
     const pk = BlockActorDataPacket.allocate();
     const nbtData = this.allocateAndSave();

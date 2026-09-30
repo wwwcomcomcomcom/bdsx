@@ -115,13 +115,3 @@ Dimension.prototype.getDimensionId = procHacker.js("?getDimensionId@Dimension@@U
     structureReturn: true,
 });
 
-/**
- * in fact, the first parameter of this function is NetworkBlockPosition.
- * but it seems it's an alias of BlockPos and it's used for only this function.
- */
-Dimension.prototype._sendBlockEntityUpdatePacket = procHacker.js(
-    "?_sendBlockEntityUpdatePacket@Dimension@@AEAAXAEBVNetworkBlockPosition@@@Z",
-    void_t,
-    { this: Dimension },
-    BlockPos,
-);
