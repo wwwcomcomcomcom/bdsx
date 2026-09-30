@@ -4061,8 +4061,32 @@ ItemStackBase.prototype.toDebugString = procHacker.jsv(
     { this: ItemStackBase, structureReturn: true },
 );
 
-ItemStackBase.prototype.remove = procHacker.js("?remove@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
-ItemStackBase.prototype.addAmount = procHacker.js("?add@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t);
+// 2024's add/remove (0x1b562c0 / 0x1b68590) are `set(count_ + n)` / `set(count_ - n)` tail calls, and set (0x1b6c8c0) is
+// what 1.26 inlined away: the low byte of the argument clamped to getMaxStackSize (a byte compare, `cmpb %al,%dil; ja`),
+// stored at +0x22, then `if (!(valid_ && item_ && *item_ && !isNull() && count_)) setNull(nullopt)`. The count byte
+// (+0x22), the valid flag (+0x23) and setNull's vftable slot 4 are what the constructor/destructor/setNull reads of both
+// 1.26 builds show (40 0x1bbf770 / 51 0x1a52060: `movb $0,0x22(%rdi)`), docs/findings-containers.md "matchesItem".
+function itemStackSetCount(stack: ItemStackBase, n: number): void {
+    const max = stack.getMaxStackSize();
+    const low = n & 0xff;
+    const count = low > max ? max : low;
+    stack.amount = count;
+    if (!(stack.valid && stack.getItem() !== null && !stack.isNull() && count !== 0)) stack.setNull();
+}
+ItemStackBase.prototype.remove = derived(
+    "?remove@ItemStackBase@@QEAAXH@Z",
+    function (this: ItemStackBase, amount: number): void {
+        itemStackSetCount(this, this.amount - amount);
+    },
+    () => procHacker.js("?remove@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t),
+);
+ItemStackBase.prototype.addAmount = derived(
+    "?add@ItemStackBase@@QEAAXH@Z",
+    function (this: ItemStackBase, amount: number): void {
+        itemStackSetCount(this, this.amount + amount);
+    },
+    () => procHacker.js("?add@ItemStackBase@@QEAAXH@Z", void_t, { this: ItemStackBase }, int32_t),
+);
 // 2024 0x1b6c940: `aux_ = value > 0 ? value : 0` (aux_ is +0x20 on 1.26 too, see getAuxValue below); 1.26 inlined it
 ItemStackBase.prototype.setAuxValue = derived(
     "?setAuxValue@ItemStackBase@@QEAAXF@Z",
@@ -4774,7 +4798,14 @@ const ItemStackBase$hurtAndBreak = procHacker.js("?hurtAndBreak@ItemStackBase@@Q
 ItemStackBase.prototype.hurtAndBreak = function (count: number, actor: Actor | null = null): boolean {
     return ItemStackBase$hurtAndBreak.call(this, count, actor);
 };
-ItemStackBase.prototype.matches = procHacker.js("?matches@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
+// 2024 0x1b4d9b0: `matchesItem(other) && count_ == other.count_` (count byte at +0x22); 1.26 keeps no copy of it
+ItemStackBase.prototype.matches = derived(
+    "?matches@ItemStackBase@@QEBA_NAEBV1@@Z",
+    function (this: ItemStackBase, other: ItemStackBase): boolean {
+        return this.matchesItem(other) && this.amount === other.amount;
+    },
+    () => procHacker.js("?matches@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase),
+);
 ItemStackBase.prototype.matchesItem = procHacker.js("?matchesItem@ItemStackBase@@QEBA_NAEBV1@@Z", bool_t, { this: ItemStackBase }, ItemStackBase);
 
 const ItemStackBase$load = derived(
