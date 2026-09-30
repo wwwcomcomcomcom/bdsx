@@ -9,6 +9,7 @@ import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
+import { freezeOnHitReadJson } from "./engine/freezeonhit";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { pushableByBlock, pushableByEntity, pushActorByActor, pushActorByVec } from "./engine/pushable";
@@ -648,8 +649,10 @@ BlockPalette.prototype.getBlock = procHacker.jsv(
     uint32_t.ref(),
 );
 
+// 1.26: Spawner has a vftable (Endstone spawner.h: spawnMob is slot 8, spawnItem slot 9, spawnProjectile 10) and 2024's
+// non-virtual pair became those virtuals, so the address ships under bdsx: keys (docs/findings-inventory.md "moved")
 const Spawner$spawnItem = procHacker.js(
-    "?spawnItem@Spawner@@QEAAPEAVItemActor@@AEAVBlockSource@@AEBVItemStack@@PEAVActor@@AEBVVec3@@H@Z",
+    "bdsx:Spawner::spawnItem" in proc ? "bdsx:Spawner::spawnItem" : "?spawnItem@Spawner@@QEAAPEAVItemActor@@AEAVBlockSource@@AEBVItemStack@@PEAVActor@@AEBVVec3@@H@Z",
     ItemActor,
     null,
     Spawner,
@@ -663,7 +666,7 @@ Spawner.prototype.spawnItem = function (region: BlockSource, itemStack: ItemStac
     return Spawner$spawnItem(this, region, itemStack, null, pos, throwTime);
 };
 const Spawner$spawnMob = procHacker.js(
-    "?spawnMob@Spawner@@QEAAPEAVMob@@AEAVBlockSource@@AEBUActorDefinitionIdentifier@@PEAVActor@@AEBVVec3@@_N44@Z",
+    "bdsx:Spawner::spawnMob" in proc ? "bdsx:Spawner::spawnMob" : "?spawnMob@Spawner@@QEAAPEAVMob@@AEAVBlockSource@@AEBUActorDefinitionIdentifier@@PEAVActor@@AEBVVec3@@_N44@Z",
     Actor,
     null,
     Spawner,
@@ -2985,10 +2988,10 @@ Player.prototype.getSkin = derived(
 );
 // The trailing bool is "send PlayerStartItemCooldownPacket" (2024 and 1.26 alike); ItemStackBase::startCoolDown passes
 // true and upstream left it unset. 1.26's body also dropped 2024's null-item check (docs/findings-slots.md "startCooldown").
-const Player$startCooldown = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item, bool_t);
+const Player$startCooldownItem = procHacker.js("?startCooldown@Player@@QEAAXPEBVItem@@_N@Z", void_t, { this: Player }, Item, bool_t);
 Player.prototype.startCooldown = function (this: Player, item: Item): void {
     if (item == null) return;
-    Player$startCooldown.call(this, item, true);
+    Player$startCooldownItem.call(this, item, true);
 };
 // 1.26's getItemCooldownLeft takes the category's 64-bit hash, not the HashedString -- it compares the argument register
 // itself with the stored hash -- so the 2024 decoration names nothing and the function ships as a bdsx: key. 2024
@@ -4770,7 +4773,18 @@ ItemStackBase.prototype.setDamageValue = derived(
     () => procHacker.js("?setDamageValue@ItemStackBase@@QEAAXF@Z", void_t, { this: ItemStackBase }, int16_t),
 );
 ItemStackBase.prototype.setItem = procHacker.js("?_setItem@ItemStackBase@@AEAA_NH_N@Z", bool_t, { this: ItemStackBase }, int32_t);
-ItemStackBase.prototype.startCoolDown = procHacker.js("?startCoolDown@ItemStackBase@@QEBAXPEAVPlayer@@@Z", void_t, { this: ItemStackBase }, ServerPlayer);
+// 2024 0x1b6e6a0: with an item, a player that is not removed: Player::startCooldown(item, false) -- the bool is "send the
+// packet" (findings-slots.md "startCooldown"), and this entry passes false. 1.26 has no out-of-line copy (the two 99-byte
+// neighbours test a bool and pass true), so it is those steps over the ones bdsx has
+ItemStackBase.prototype.startCoolDown = derived(
+    "?startCoolDown@ItemStackBase@@QEBAXPEAVPlayer@@@Z",
+    function (this: ItemStackBase, player: ServerPlayer): void {
+        const item = this.getItem();
+        if (item === null || player === null || player.isRemoved()) return;
+        Player$startCooldownItem.call(player, item, false);
+    },
+    () => procHacker.js("?startCoolDown@ItemStackBase@@QEBAXPEAVPlayer@@@Z", void_t, { this: ItemStackBase }, ServerPlayer),
+);
 @nativeClass()
 class ComparisonOptions extends NativeClass {
     @nativeField(bool_t)
@@ -5942,10 +5956,21 @@ Block.create = function (blockName: string, data: number = 0): Block | null {
     if (data === 0x7fff && legacy.getBlockItemId() < 0x100) return legacy.getDefaultState();
     return legacy.tryGetStateFromLegacyData(data);
 };
-Block.prototype.getDescriptionId = procHacker.js("?getDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: Block,
-    structureReturn: true,
-});
+// 2024 0x1bae830: the block's BlockDisplayNameComponent string when the block type has that component (custom blocks), else
+// the block type's description_id_ at +8 (BlockLegacy+8; Endstone block_type.h). 1.26 has no such component out of line and
+// bdsx's ItemStackBase::getCustomName already reads the same +8 for block items, so this is the field read
+// (docs/findings-inventory.md "moved", mvprobe desc)
+Block.prototype.getDescriptionId = derived(
+    "?getDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function (this: Block): string {
+        return (this.blockLegacy as any as StaticPointer).getCxxString(8);
+    },
+    () =>
+        procHacker.js("?getDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
+            this: Block,
+            structureReturn: true,
+        }),
+);
 // Block fields on 1.26 (engine/blocktype.ts, docs/findings-blocks.md "BlockType and Block fields on 1.26"): 2024's
 // leaves are inlined everywhere
 Block.prototype.getRuntimeId = derived(
@@ -5971,7 +5996,15 @@ Block.prototype.hasBlockEntity = derived(
     },
     () => procHacker.js("?hasBlockEntity@Block@@QEBA_NXZ", bool_t, { this: Block }),
 );
-Block.prototype.use = procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t);
+// 2024 0x1bbc3d0 is 1.26's bdsx:Block::use (40 0x1bb2b50, 51 0x2ceb030), the function SimulatedPlayer::simulateInteract calls; with no
+// click position, as 2024's bdsx binding had (engine/simulatedplayer.ts simInteractBlock)
+Block.prototype.use = derived(
+    "?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z",
+    function (this: Block, player: Player, blockPos: BlockPos, face: number): boolean {
+        return simInteractBlock(player as any as StaticPointer, this as any as StaticPointer, blockPos as any as StaticPointer, face);
+    },
+    () => procHacker.js("?use@Block@@QEBA_NAEAVPlayer@@AEBVBlockPos@@EV?$optional@VVec3@@@std@@@Z", bool_t, { this: Block }, Player, BlockPos, uint8_t),
+);
 // these are 2024's `block_type_->virtual(...)` forwards, through the block type's own vftable (engine/blocktype.ts)
 const BlockType$getVariant = makefunc.js([BLOCK_TYPE_SLOTS.getVariant * 8], int32_t, { this: BlockLegacy }, Block);
 Block.prototype.getVariant = derived(
@@ -6035,13 +6068,31 @@ Block.prototype.isCropBlock = derived<(this: Block) => boolean>(
     },
     () => procHacker.js("?isCropBlock@Block@@QEBA_NXZ", bool_t, { this: Block }),
 );
-Block.prototype.popResource = procHacker.js(
+// 2024 Block::popResource (0x1bb7a40) forwards to the static BlockLegacy::popResource (0x1bf2de0): nothing when the stack is
+// empty (count byte +0x22), else Spawner::spawnItem at (x + r*0.7 + 0.15, y + r*0.7 + 0.15, z + r*0.7 + 0.15) with r a fresh
+// Random::nextFloat, throw time 10. 1.26 keeps no out-of-line static, so bdsx does the steps over the Spawner (bdsx:Spawner::
+// spawnItem) with its own random; 2024's first test, a BlockSource virtual (+0x180) that had to be true, is not read
+// (docs/findings-inventory.md "moved", mvprobe pop)
+Block.prototype.popResource = derived(
     "?popResource@Block@@QEBAPEAVItemActor@@AEAVBlockSource@@AEBVBlockPos@@AEBVItemInstance@@@Z",
-    ItemActor,
-    { this: Block },
-    BlockSource,
-    BlockPos,
-    ItemStack,
+    function (this: Block, region: BlockSource, blockPos: BlockPos, itemStack: ItemStack): ItemActor {
+        if (itemStack.getAmount() === 0) return null as any;
+        const at = Vec3.create(
+            blockPos.x + Math.random() * 0.7 + 0.15,
+            blockPos.y + Math.random() * 0.7 + 0.15,
+            blockPos.z + Math.random() * 0.7 + 0.15,
+        );
+        return bedrockServer.level.getSpawner().spawnItem(region, itemStack, at, 10);
+    },
+    () =>
+        procHacker.js(
+            "?popResource@Block@@QEBAPEAVItemActor@@AEAVBlockSource@@AEBVBlockPos@@AEBVItemInstance@@@Z",
+            ItemActor,
+            { this: Block },
+            BlockSource,
+            BlockPos,
+            ItemStack,
+        ),
 );
 // 2024: forwards to BlockLegacy::canHurtAndBreakItem, which is `0 < legacy destroy time` (1.21.3.01 0x1be9950). 1.26 keeps
 // that value per Block state (direct_data_ destroy_speed, engine/blocktype.ts), so it is `destroySpeed > 0`
@@ -7694,12 +7745,20 @@ StructureManager.prototype.getOrCreate = procHacker.js(
     CxxString,
 );
 // components.ts
-OnHitSubcomponent.prototype.readfromJSON = procHacker.jsv(
-    "??_7FreezeOnHitSubcomponent@@6B@",
+// 1.26.51's slot 1 is no longer a reader (engine/freezeonhit.ts); 1.26.40 keeps 2024's
+OnHitSubcomponent.prototype.readfromJSON = derived(
     "?readfromJSON@FreezeOnHitSubcomponent@@UEAAXAEAVValue@Json@@AEBVSemVersion@@@Z",
-    void_t,
-    { this: OnHitSubcomponent },
-    JsonValue,
+    function (this: OnHitSubcomponent, json: JsonValue): void {
+        freezeOnHitReadJson(this as any as StaticPointer, json);
+    },
+    () =>
+        procHacker.jsv(
+            "??_7FreezeOnHitSubcomponent@@6B@",
+            "?readfromJSON@FreezeOnHitSubcomponent@@UEAAXAEAVValue@Json@@AEBVSemVersion@@@Z",
+            void_t,
+            { this: OnHitSubcomponent },
+            JsonValue,
+        ),
 );
 OnHitSubcomponent.prototype.writetoJSON = procHacker.jsv(
     "??_7FreezeOnHitSubcomponent@@6B@",
