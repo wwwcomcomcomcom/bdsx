@@ -1730,13 +1730,35 @@ Actor.prototype.playAnimation = function (animation, options = {}) {
     pk.dispose();
 };
 
-const getProjectileComponent = procHacker.js("??$tryGetComponent@VProjectileComponent@@@Actor@@QEAAPEAVProjectileComponent@@XZ", ProjectileComponent, null, Actor);
-const getPhysicsComponent = procHacker.js("??$tryGetComponent@VPhysicsComponent@@@Actor@@QEAAPEAVPhysicsComponent@@XZ", PhysicsComponent, null, Actor);
-const getDamageSensorComponent = procHacker.js(
+// 1.26 has no out-of-line Actor::tryGetComponent<X> for these: every caller inlined the EnTT lookup, and the packed
+// storage's stride (the multiply after the sparse lookup) is the component's size on both builds
+// (docs/findings-components.md "tryGetComponent: the EnTT components"). Same shape as the CommandBlockComponent one below.
+const getProjectileComponent = derived<(actor: Actor) => ProjectileComponent>(
+    "??$tryGetComponent@VProjectileComponent@@@Actor@@QEAAPEAVProjectileComponent@@XZ",
+    function tryGetProjectileComponent(actor: Actor): ProjectileComponent {
+        const component = enttComponent(actor, componentHash("ProjectileComponent"), engineLayout("ProjectileComponent", "size", 0x300));
+        return component === null ? (null as any) : component.as(ProjectileComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VProjectileComponent@@@Actor@@QEAAPEAVProjectileComponent@@XZ", ProjectileComponent, null, Actor),
+);
+// PhysicsComponent is an empty type in 1.26: entt keeps no payload for it, and every user of its hash asks
+// `contains` and then passes one static address (40 0xf8b7c0 hands 0xc8dd844 on) instead of a per-entity pointer.
+// Its three members here never read `this`, so a component an actor holds is one shared, stable pointer.
+const PHYSICS_COMPONENT_STATIC = new AllocatedPointer(8);
+const getPhysicsComponent = derived<(actor: Actor) => PhysicsComponent>(
+    "??$tryGetComponent@VPhysicsComponent@@@Actor@@QEAAPEAVPhysicsComponent@@XZ",
+    function tryGetPhysicsComponent(actor: Actor): PhysicsComponent {
+        return enttHas(actor, componentHash("PhysicsComponent")) ? PHYSICS_COMPONENT_STATIC.as(PhysicsComponent) : (null as any);
+    },
+    () => procHacker.js("??$tryGetComponent@VPhysicsComponent@@@Actor@@QEAAPEAVPhysicsComponent@@XZ", PhysicsComponent, null, Actor),
+);
+const getDamageSensorComponent = derived<(actor: Actor) => DamageSensorComponent>(
     "??$tryGetComponent@VDamageSensorComponent@@@Actor@@QEBAPEBVDamageSensorComponent@@XZ",
-    DamageSensorComponent,
-    null,
-    Actor,
+    function tryGetDamageSensorComponent(actor: Actor): DamageSensorComponent {
+        const component = enttComponent(actor, componentHash("DamageSensorComponent"), engineLayout("DamageSensorComponent", "size", 0x28));
+        return component === null ? (null as any) : component.as(DamageSensorComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VDamageSensorComponent@@@Actor@@QEBAPEBVDamageSensorComponent@@XZ", DamageSensorComponent, null, Actor),
 );
 // 1.26 has no out-of-line try_get for it (docs/findings-nbt.md "CommandBlockComponent"): MinecartCommandBlock::
 // readAdditionalSaveData (40 0x2d3fe20 / 51 0x598e210) inlines the lookup -- hash 0x42d5de32, packed stride 0xc8 on
@@ -1749,10 +1771,31 @@ const getCommandBlockComponent = derived<(actor: Actor) => CommandBlockComponent
     },
     () => procHacker.js("??$tryGetComponent@VCommandBlockComponent@@@Actor@@QEAAPEAVCommandBlockComponent@@XZ", CommandBlockComponent, null, Actor),
 );
-const getNameableComponent = procHacker.js("??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ", NameableComponent, null, Actor);
+const getNameableComponent = derived<(actor: Actor) => NameableComponent>(
+    "??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ",
+    function tryGetNameableComponent(actor: Actor): NameableComponent {
+        const component = enttComponent(actor, componentHash("NameableComponent"), engineLayout("NameableComponent", "size", 0x2));
+        return component === null ? (null as any) : component.as(NameableComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ", NameableComponent, null, Actor),
+);
 const getNavigationComponent = procHacker.js("??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ", NavigationComponent, null, Actor);
-const getNpcComponent = procHacker.js("??$tryGetComponent@VNpcComponent@@@Actor@@QEAAPEAVNpcComponent@@XZ", NpcComponent, null, Actor);
-const getRideableComponent = procHacker.js("??$tryGetComponent@VRideableComponent@@@Actor@@QEAAPEAVRideableComponent@@XZ", RideableComponent, null, Actor);
+const getNpcComponent = derived<(actor: Actor) => NpcComponent>(
+    "??$tryGetComponent@VNpcComponent@@@Actor@@QEAAPEAVNpcComponent@@XZ",
+    function tryGetNpcComponent(actor: Actor): NpcComponent {
+        const component = enttComponent(actor, componentHash("NpcComponent"), engineLayout("NpcComponent", "size", 0x178));
+        return component === null ? (null as any) : component.as(NpcComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VNpcComponent@@@Actor@@QEAAPEAVNpcComponent@@XZ", NpcComponent, null, Actor),
+);
+const getRideableComponent = derived<(actor: Actor) => RideableComponent>(
+    "??$tryGetComponent@VRideableComponent@@@Actor@@QEAAPEAVRideableComponent@@XZ",
+    function tryGetRideableComponent(actor: Actor): RideableComponent {
+        const component = enttComponent(actor, componentHash("RideableComponent"), engineLayout("RideableComponent", "size", 0xa8));
+        return component === null ? (null as any) : component.as(RideableComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VRideableComponent@@@Actor@@QEAAPEAVRideableComponent@@XZ", RideableComponent, null, Actor),
+);
 // 1.26 has no out-of-line try_get for it either (docs/findings-containers.md section 23): the component is an EnTT element of
 // 0x200 bytes on both builds (hash fnv1a "ContainerComponent"), so bdsx walks the lookup itself.
 const getContainerComponent = derived<(actor: Actor) => ContainerComponent>(
@@ -1764,12 +1807,21 @@ const getContainerComponent = derived<(actor: Actor) => ContainerComponent>(
     () => procHacker.js("??$tryGetComponent@VContainerComponent@@@Actor@@QEAAPEAVContainerComponent@@XZ", ContainerComponent, null, Actor),
 );
 const getPushableComponent = procHacker.js("??$tryGetComponent@VPushableComponent@@@Actor@@QEAAPEAVPushableComponent@@XZ", PushableComponent, null, Actor);
-const getShooterComponent = procHacker.js("??$tryGetComponent@VShooterComponent@@@Actor@@QEAAPEAVShooterComponent@@XZ", ShooterComponent, null, Actor);
-const getConditionalBandwidthComponent = procHacker.js(
+const getShooterComponent = derived<(actor: Actor) => ShooterComponent>(
+    "??$tryGetComponent@VShooterComponent@@@Actor@@QEAAPEAVShooterComponent@@XZ",
+    function tryGetShooterComponent(actor: Actor): ShooterComponent {
+        const component = enttComponent(actor, componentHash("ShooterComponent"), engineLayout("ShooterComponent", "size", 0xe0));
+        return component === null ? (null as any) : component.as(ShooterComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VShooterComponent@@@Actor@@QEAAPEAVShooterComponent@@XZ", ShooterComponent, null, Actor),
+);
+const getConditionalBandwidthOptimizationComponent = derived<(actor: Actor) => ConditionalBandwidthOptimizationComponent>(
     "??$tryGetComponent@VConditionalBandwidthOptimizationComponent@@@Actor@@QEAAPEAVConditionalBandwidthOptimizationComponent@@XZ",
-    ConditionalBandwidthOptimizationComponent,
-    null,
-    Actor,
+    function tryGetConditionalBandwidthOptimizationComponent(actor: Actor): ConditionalBandwidthOptimizationComponent {
+        const component = enttComponent(actor, componentHash("ConditionalBandwidthOptimizationComponent"), engineLayout("ConditionalBandwidthOptimizationComponent", "size", 0xd0));
+        return component === null ? (null as any) : component.as(ConditionalBandwidthOptimizationComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VConditionalBandwidthOptimizationComponent@@@Actor@@QEAAPEAVConditionalBandwidthOptimizationComponent@@XZ", ConditionalBandwidthOptimizationComponent, null, Actor),
 );
 
 (Actor.prototype as any)._tryGetComponent = function (comp: string) {
@@ -1797,34 +1849,61 @@ const getConditionalBandwidthComponent = procHacker.js(
         case "minecraft:shooter":
             return getShooterComponent(this);
         case "minecraft:conditional_bandwidth_optimization":
-            return getConditionalBandwidthComponent(this);
+            return getConditionalBandwidthOptimizationComponent(this);
         default:
             return null;
     }
 };
 
-PhysicsComponent.prototype.setHasCollision = procHacker.js(
+// 2024's setHasCollision is `actor->vftable[1](HasCollision, value)` -- Actor::setStatusFlag, which is derived() above
+// (`this` is not read). setAffectedByGravity was SynchedActorDataAccess::setActorFlag(flags, dirty, HasGravity, value)
+// on the two components it is handed; 1.26's setActorFlag takes the EntityContext instead and looks both components up
+// (ActorDataDirtyFlagsComponent 0xc131f6a8, ActorDataFlagComponent 0xc67426f3, 24 bytes each), so what is left of its
+// body after the lookups is written out here over the two pointers: the flag is bit N of the 64-bit word N/64 at the
+// flag component's +0, and a real change marks the dirty component -- byte 0 |= 1 for flags 0-63, byte 0xb |= 0x10 for
+// 64-127, byte 0x11 |= 8 above (40 0x2e7c90c-0x2e7c959, 51 0x2535ff9-0x25360b9: the same instructions).
+PhysicsComponent.prototype.setHasCollision = derived(
     "?setHasCollision@PhysicsComponent@@QEAAXAEAVActor@@_N@Z",
-    void_t,
-    { this: PhysicsComponent },
-    Actor,
-    bool_t,
+    function setHasCollision(this: PhysicsComponent, actor: Actor, value: boolean): void {
+        actor.setStatusFlag(ActorFlags.HasCollision, value);
+    },
+    () => procHacker.js("?setHasCollision@PhysicsComponent@@QEAAXAEAVActor@@_N@Z", void_t, { this: PhysicsComponent }, Actor, bool_t),
 );
-PhysicsComponent.prototype.setAffectedByGravity = procHacker.js(
+PhysicsComponent.prototype.setAffectedByGravity = derived(
     "?setAffectedByGravity@PhysicsComponent@@QEBAXAEAUActorDataFlagComponent@@AEAUActorDataDirtyFlagsComponent@@_N@Z",
-    void_t,
-    { this: PhysicsComponent },
-    ActorDataFlagComponent,
-    ActorDataDirtyFlagsComponent,
-    bool_t,
+    function setAffectedByGravity(this: PhysicsComponent, actorData: ActorDataFlagComponent, actorDirtyData: ActorDataDirtyFlagsComponent, value: boolean): void {
+        const flags = actorData as unknown as StaticPointer;
+        const dirty = actorDirtyData as unknown as StaticPointer;
+        const flag = ActorFlags.HasGravity;
+        const word = (flag >>> 5) * 4;
+        const bit = 1 << (flag & 31);
+        const now = (flags.getUint32(word) & bit) !== 0;
+        if (now === value) return;
+        flags.setUint32(value ? (flags.getUint32(word) | bit) >>> 0 : (flags.getUint32(word) & ~bit) >>> 0, word);
+        if (flag <= 63) dirty.setUint8(dirty.getUint8(0) | 0x01, 0);
+        else if (flag <= 127) dirty.setUint8(dirty.getUint8(0xb) | 0x10, 0xb);
+        else dirty.setUint8(dirty.getUint8(0x11) | 0x08, 0x11);
+    },
+    () =>
+        procHacker.js(
+            "?setAffectedByGravity@PhysicsComponent@@QEBAXAEAUActorDataFlagComponent@@AEAUActorDataDirtyFlagsComponent@@_N@Z",
+            void_t,
+            { this: PhysicsComponent },
+            ActorDataFlagComponent,
+            ActorDataDirtyFlagsComponent,
+            bool_t,
+        ),
 );
 
 ProjectileComponent.prototype.shoot = procHacker.js("?shoot@ProjectileComponent@@QEAAXAEAVActor@@0@Z", void_t, { this: ProjectileComponent }, Actor, Actor);
-ProjectileComponent.prototype.setOwnerId = procHacker.js(
+// 2024's body is `mov %rdx, 8(%rcx)`; 1.26 inlined it (40 0x12542d0 / 51 0x1ccf050 store the owner's
+// getOrCreateUniqueID at component+8), so the write is bdsx's own.
+ProjectileComponent.prototype.setOwnerId = derived(
     "?setOwnerId@ProjectileComponent@@QEAAXUActorUniqueID@@@Z",
-    void_t,
-    { this: ProjectileComponent },
-    ActorUniqueID,
+    function setOwnerId(this: ProjectileComponent, uniqueId: ActorUniqueID): void {
+        (this as unknown as StaticPointer).setBin(uniqueId, engineLayout("ProjectileComponent", "ownerId", 8));
+    },
+    () => procHacker.js("?setOwnerId@ProjectileComponent@@QEAAXUActorUniqueID@@@Z", void_t, { this: ProjectileComponent }, ActorUniqueID),
 );
 
 DamageSensorComponent.prototype.isFatal = procHacker.js("?isFatal@DamageSensorComponent@@QEBA_NXZ", bool_t, { this: DamageSensorComponent });
@@ -1896,7 +1975,21 @@ NavigationComponent.prototype.setAvoidWater = procHacker.js("?setAvoidWater@Navi
 NavigationComponent.prototype.setAvoidSun = procHacker.js("?setAvoidSun@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t);
 NavigationComponent.prototype.setSpeed = procHacker.js("?setSpeed@NavigationComponent@@QEAAXM@Z", void_t, { this: NavigationComponent }, float32_t);
 
-RideableComponent.prototype.areSeatsFull = procHacker.js("?areSeatsFull@RideableComponent@@QEBA_NAEBVActor@@@Z", bool_t, { this: RideableComponent }, Actor);
+// 2024's body: passengers of the ride (ActorRiding::getPassengers) >= the int at component+0. 1.26 reads the same
+// two things in the core of canAddPassenger (40 0x1aff9d0: `movslq (%rsi)` against the VehicleComponent's vector size >> 4),
+// the vector being the one isPassenger above walks.
+RideableComponent.prototype.areSeatsFull = derived(
+    "?areSeatsFull@RideableComponent@@QEBA_NAEBVActor@@@Z",
+    function areSeatsFull(this: RideableComponent, ride: Actor): boolean {
+        const seats = (this as unknown as StaticPointer).getInt32(engineLayout("RideableComponent", "seatCount", 0));
+        const component = enttComponent(ride, VEHICLE_COMPONENT_HASH, VEHICLE_COMPONENT_SIZE);
+        if (component === null) return 0 >= seats;
+        const begin = component.getPointer(VEHICLE_PASSENGERS);
+        const count = component.getPointer(VEHICLE_PASSENGERS + 8).subptr(begin) / RIDER_PAIR_STRIDE;
+        return count >= seats;
+    },
+    () => procHacker.js("?areSeatsFull@RideableComponent@@QEBA_NAEBVActor@@@Z", bool_t, { this: RideableComponent }, Actor),
+);
 RideableComponent.prototype.canAddPassenger = procHacker.js(
     "?canAddPassenger@RideableComponent@@QEBA_NAEBVActor@@AEAV2@@Z",
     bool_t,
