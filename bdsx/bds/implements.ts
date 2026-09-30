@@ -57,6 +57,7 @@ import {
     blockTypeTranslucency,
     lookupBlockType,
 } from "./engine/blocktype";
+import { blockTypeAllowsNetherVegetation, blockTypeHasTag, blockTypeIsBeehive, blockTypeIsWater } from "./engine/blockutils";
 import { LEVEL_CHUNK_ENTITIES, LEVEL_CHUNK_MAX, LEVEL_CHUNK_MIN, LEVEL_CHUNK_POSITION, levelChunkIsFullyLoaded, levelChunkToWorld } from "./engine/chunk";
 import * as colors from "colors";
 import { asmcode } from "../asm/asmcode";
@@ -5482,12 +5483,6 @@ BlockLegacy.prototype.getBlockItemId = derived(
     },
     () => procHacker.js("?getBlockItemId@BlockLegacy@@QEBAFXZ", int16_t, { this: BlockLegacy }),
 );
-BlockLegacy.prototype.getStateFromLegacyData = procHacker.js(
-    "?getStateFromLegacyData@BlockLegacy@@QEBAAEBVBlock@@G@Z",
-    Block.ref(),
-    { this: BlockLegacy },
-    uint16_t,
-);
 
 BlockLegacy.prototype.getRenderBlock = procHacker.js("?getRenderBlock@BlockLegacy@@UEBAAEBVBlock@@XZ", Block, { this: BlockLegacy });
 BlockLegacy.prototype.getDefaultState = procHacker.js("?getDefaultState@BlockLegacy@@QEBAAEBVBlock@@XZ", Block, { this: BlockLegacy });
@@ -5496,6 +5491,15 @@ BlockLegacy.prototype.tryGetStateFromLegacyData = procHacker.js(
     Block,
     { this: BlockLegacy },
     uint16_t,
+);
+// 2024's getStateFromLegacyData was the legacy-data cache lookup with the default state on a miss; 1.26 keeps only the lookup
+// (tryGetStateFromLegacyData, over legacy_data_lookup_table_ at +0x260) and the default_state_ reader (getDefaultState)
+BlockLegacy.prototype.getStateFromLegacyData = derived<(this: BlockLegacy, data: number) => Block>(
+    "?getStateFromLegacyData@BlockLegacy@@QEBAAEBVBlock@@G@Z",
+    function (this: BlockLegacy, data: number): Block {
+        return this.tryGetStateFromLegacyData(data) ?? this.getDefaultState();
+    },
+    () => procHacker.js("?getStateFromLegacyData@BlockLegacy@@QEBAAEBVBlock@@G@Z", Block.ref(), { this: BlockLegacy }, uint16_t),
 );
 BlockLegacy.prototype.use = procHacker.jsv(
     "??_7JukeboxBlock@@6B@",
@@ -5644,7 +5648,13 @@ Block.prototype.buildDescriptionId = procHacker.js("?buildDescriptionId@Block@@Q
     this: Block,
     structureReturn: true,
 });
-Block.prototype.isCropBlock = procHacker.js("?isCropBlock@Block@@QEBA_NXZ", bool_t, { this: Block });
+Block.prototype.isCropBlock = derived<(this: Block) => boolean>(
+    "?isCropBlock@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return blockTypeHasTag(this.blockLegacy as any as StaticPointer, "minecraft:crop");
+    },
+    () => procHacker.js("?isCropBlock@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.popResource = procHacker.js(
     "?popResource@Block@@QEBAPEAVItemActor@@AEAVBlockSource@@AEBVBlockPos@@AEBVItemInstance@@@Z",
     ItemActor,
@@ -5941,11 +5951,40 @@ BlockSource.prototype.checkBlockDestroyPermission = procHacker.js(
 );
 
 BlockUtils.isDownwardFlowingLiquid = procHacker.js("?isDownwardFlowingLiquid@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
-BlockUtils.isBeehiveBlock = procHacker.js("?isBeehiveBlock@BlockUtils@@SA_NAEBVBlockLegacy@@@Z", bool_t, null, BlockLegacy);
-BlockUtils.isWaterSource = procHacker.js("?isWaterSource@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
+// isDownwardFlowingLiquid, isLiquidSource, canGrowTreeWithBeehive and getLiquidBlockHeight are out of line on 1.26 (next
+// to isFullFlowingLiquid); the four below were inlined and are bdsx's own (engine/blockutils.ts)
+BlockUtils.isBeehiveBlock = derived<(block: BlockLegacy) => boolean>(
+    "?isBeehiveBlock@BlockUtils@@SA_NAEBVBlockLegacy@@@Z",
+    function (block: BlockLegacy): boolean {
+        return blockTypeIsBeehive(block as any as StaticPointer);
+    },
+    () => procHacker.js("?isBeehiveBlock@BlockUtils@@SA_NAEBVBlockLegacy@@@Z", bool_t, null, BlockLegacy),
+);
+BlockUtils.isWaterSource = derived<(block: Block) => boolean>(
+    "?isWaterSource@BlockUtils@@SA_NAEBVBlock@@@Z",
+    function (block: Block): boolean {
+        return BlockUtils.isLiquidSource(block) && blockTypeIsWater(block.blockLegacy as any as StaticPointer);
+    },
+    () => procHacker.js("?isWaterSource@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block),
+);
 BlockUtils.isFullFlowingLiquid = procHacker.js("?isFullFlowingLiquid@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
-BlockUtils.allowsNetherVegetation = procHacker.js("?allowsNetherVegetation@BlockUtils@@SA_NAEBVBlockLegacy@@@Z", bool_t, null, BlockLegacy);
-BlockUtils.isThinFenceOrWallBlock = procHacker.js("?isThinFenceOrWallBlock@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
+BlockUtils.allowsNetherVegetation = derived<(block: BlockLegacy) => boolean>(
+    "?allowsNetherVegetation@BlockUtils@@SA_NAEBVBlockLegacy@@@Z",
+    function (block: BlockLegacy): boolean {
+        return blockTypeAllowsNetherVegetation(block as any as StaticPointer);
+    },
+    () => procHacker.js("?allowsNetherVegetation@BlockUtils@@SA_NAEBVBlockLegacy@@@Z", bool_t, null, BlockLegacy),
+);
+const BlockType$isThinFenceBlock = makefunc.js([BLOCK_TYPE_SLOTS.isThinFenceBlock * 8], bool_t, { this: BlockLegacy });
+const BlockType$isWallBlock = makefunc.js([BLOCK_TYPE_SLOTS.isWallBlock * 8], bool_t, { this: BlockLegacy });
+BlockUtils.isThinFenceOrWallBlock = derived<(block: Block) => boolean>(
+    "?isThinFenceOrWallBlock@BlockUtils@@SA_NAEBVBlock@@@Z",
+    function (block: Block): boolean {
+        const type = block.blockLegacy;
+        return BlockType$isThinFenceBlock.call(type) || BlockType$isWallBlock.call(type);
+    },
+    () => procHacker.js("?isThinFenceOrWallBlock@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block),
+);
 BlockUtils.isLiquidSource = procHacker.js("?isLiquidSource@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);
 BlockUtils.getLiquidBlockHeight = procHacker.js("?getLiquidBlockHeight@BlockUtils@@SAMAEBVBlock@@AEBVBlockPos@@@Z", float32_t, null, Block, BlockPos);
 BlockUtils.canGrowTreeWithBeehive = procHacker.js("?canGrowTreeWithBeehive@BlockUtils@@SA_NAEBVBlock@@@Z", bool_t, null, Block);

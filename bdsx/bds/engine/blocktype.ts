@@ -172,4 +172,8 @@ export const BLOCK_TYPE_SLOTS = {
     getVariant: engineLayout("BlockLegacy", "getVariantSlot", 129),
     isSignalSource: engineLayout("BlockLegacy", "isSignalSourceSlot", 47),
     getDirectSignal: engineLayout("BlockLegacy", "getDirectSignalSlot", 54),
+    // 2024's isThinFenceBlock / isWallBlock (0x120 / 0x128 of the table): 27 and 28 here; ThinFenceBlock's table returns true at
+    // 27 and WallBlock's at 28 (docs/findings-blocks.md "BlockUtils on 1.26")
+    isThinFenceBlock: engineLayout("BlockLegacy", "isThinFenceBlockSlot", 36),
+    isWallBlock: engineLayout("BlockLegacy", "isWallBlockSlot", 37),
 };
