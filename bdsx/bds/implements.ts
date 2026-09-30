@@ -36,6 +36,9 @@ import {
     itemDestroySpeed,
     itemIsFireResistant,
     itemRawNameId,
+    itemSerializedName,
+    itemAllowOffhand,
+    itemSetAllowOffhand,
     itemStackIsBlockOwn,
     itemStackIsValidAuxValue,
     REFLECTION_CTX_OF,
@@ -4388,19 +4391,33 @@ Item.prototype.isMusicDisk = function () {
 
 // inventory.ts
 Item.prototype.allowOffhand = function () {
-    // manual implement
-    // accessed on Item::setAllowOffhand
-    return (this as any).getInt8(0x13a) < 0;
+    // the flag byte's top bit (engine/item.ts): 2024 +0x14a, 1.26 +0x152
+    return itemAllowOffhand(this as any as StaticPointer);
 };
 Item.prototype.isDamageable = procHacker.js("?isDamageable@Item@@UEBA_NXZ", bool_t, { this: Item });
 Item.prototype.isFood = procHacker.js("?isFood@Item@@UEBA_NXZ", bool_t, {
     this: Item,
 });
-Item.prototype.setAllowOffhand = procHacker.js("?setAllowOffhand@Item@@QEAAAEAV1@_N@Z", void_t, { this: Item }, bool_t);
-Item.prototype.getSerializedName = procHacker.js("?getSerializedName@Item@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: Item,
-    structureReturn: true,
-});
+// 2024 0x1cb3c10: set or clear bit 7 of the flag byte (+0x14a), return this; 1.26 has no out-of-line copy (engine/item.ts)
+Item.prototype.setAllowOffhand = derived(
+    "?setAllowOffhand@Item@@QEAAAEAV1@_N@Z",
+    function (this: Item, value: boolean): void {
+        itemSetAllowOffhand(this as any as StaticPointer, value);
+    },
+    () => procHacker.js("?setAllowOffhand@Item@@QEAAAEAV1@_N@Z", void_t, { this: Item }, bool_t),
+);
+// 2024 0x1cae4b0: namespace_ + ":" + raw_name_id_ without its "tile." prefix (engine/item.ts)
+Item.prototype.getSerializedName = derived(
+    "?getSerializedName@Item@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function (this: Item): string {
+        return itemSerializedName(this as any as StaticPointer);
+    },
+    () =>
+        procHacker.js("?getSerializedName@Item@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
+            this: Item,
+            structureReturn: true,
+        }),
+);
 /**
  * The vector Item::getCommandNames / BlockLegacy::getCommandNames return: CommandName {std::string, bool at +0x20}, 0x28
  * bytes each. 1.26 has neither function out of line on either build, so bdsx fills one with the names engine/item.ts

@@ -193,6 +193,20 @@ export function blockTypeRawName(blockType: StaticPointer): string {
 }
 
 /**
+ * Item::namespace_ (a std::string, "minecraft"), +0x100 on both 1.26 builds: Endstone item.h declares raw_name_id_, namespace_,
+ * full_name_ in that order, so it is the 0x20 bytes before the confirmed full_name_ (+0x120); 2024 kept it at +0xf8 right after
+ * the raw name (?getSerializedName@Item@@ 0x1cae4b0 reads `lea 0xf8(%r8)` as its left half). 2024's getSerializedName is
+ * namespace_ + ":" + raw_name_id_ with everything up to and including the first "tile." dropped from the raw name.
+ */
+export const ITEM_NAMESPACE = engineLayout("Item", "namespace", 0xf8);
+export function itemSerializedName(item: StaticPointer): string {
+    let raw = itemRawNameId(item);
+    const tile = raw.indexOf("tile.");
+    if (tile >= 0) raw = raw.substr(tile + 5);
+    return item.getCxxString(ITEM_NAMESPACE) + ":" + raw;
+}
+
+/**
  * Item's flag byte right after max_damage_ (Endstone item.h: is_glint_, hand_equipped_, is_stacked_by_data_,
  * requires_world_builder_, explodable_, fire_resistant_, should_despawn_, allow_offhand_ as one-bit fields), +0x152 on
  * both builds between the confirmed full_name_ (+0x120, a 0x30-byte HashedString, then max_damage_ +0x150) and
@@ -206,6 +220,27 @@ export function itemIsExplodable(item: StaticPointer): boolean {
 }
 export function itemIsFireResistant(item: StaticPointer): boolean {
     return (item.getUint8(ITEM_FLAGS) & 0x20) !== 0;
+}
+/**
+ * The offhand rule (Item::allow_offhand_; 2024 bit 7 of the flag byte at +0x14a, what Item::setAllowOffhand 0x1cb3c10 sets).
+ * The engine's reader is OffhandContainerValidation's vftable slot 2, which tests the stack's item and nothing else:
+ * 1.26.40 (0x8f48ce0): `movzbl 0x152(item); shrb $7`, the flag byte's top bit; 1.26.51 (0x2f48d80): `movzbl 0x210(item);
+ * andb $3; cmpb $1`, a two-bit state at Item+0x210 that 51's network writer also uses for "allow_off_hand" (0x20bb75d), and
+ * whose reader stores 2 or 1 there (0x20bd5a7). Bit 7 of +0x152 is read by no code on 51. `layouts.Item.allowOffhandState` is
+ * that byte's offset, 0 where the flag bit is the storage. A state of 0 is "not set" and reads false.
+ */
+export const ITEM_ALLOW_OFFHAND_STATE = engineLayout("Item", "allowOffhandState", 0);
+export function itemAllowOffhand(item: StaticPointer): boolean {
+    if (ITEM_ALLOW_OFFHAND_STATE !== 0) return (item.getUint8(ITEM_ALLOW_OFFHAND_STATE) & 3) === 1;
+    return (item.getUint8(ITEM_FLAGS) & 0x80) !== 0;
+}
+export function itemSetAllowOffhand(item: StaticPointer, value: boolean): void {
+    if (ITEM_ALLOW_OFFHAND_STATE !== 0) {
+        item.setUint8((item.getUint8(ITEM_ALLOW_OFFHAND_STATE) & 0xfc) | (value ? 1 : 2), ITEM_ALLOW_OFFHAND_STATE);
+        return;
+    }
+    const flags = item.getUint8(ITEM_FLAGS);
+    item.setUint8(value ? flags | 0x80 : flags & 0x7f, ITEM_FLAGS);
 }
 
 /**
