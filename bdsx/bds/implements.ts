@@ -3,11 +3,11 @@ import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
-import { componentHash, engineLayout } from "./engine/deps";
+import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
-import { createSimulatedPlayer } from "./engine/simulatedplayer";
+import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
 import {
@@ -3422,7 +3422,16 @@ SimulatedPlayer.create = function (name: string, blockPos: VectorXYZ, dimensionI
     shHandler.assign(bedrockServer.nonOwnerPointerServerNetworkHandler);
     return create(name, blockPos as BlockPos, dimensionId, shHandler, ""); // it destructs shHandler
 };
-SimulatedPlayer.prototype.simulateDisconnect = procHacker.js("?simulateDisconnect@SimulatedPlayer@@QEAAXXZ", void_t, { this: SimulatedPlayer });
+// simulateDisconnect, simulateInteract (both overloads), simulateSetItem and simulateStopDestroyingBlock are inlined into the GameTest
+// bindings on 1.26; each is bdsx's own code over what the binding calls (engine/simulatedplayer.ts, docs/findings-slots.md
+// "SimulatedPlayer: the five that were inlined")
+SimulatedPlayer.prototype.simulateDisconnect = derived(
+    "?simulateDisconnect@SimulatedPlayer@@QEAAXXZ",
+    function simulateDisconnect(this: SimulatedPlayer): void {
+        simDisconnect(this as any as StaticPointer, engineSymbol("?remove@Player@@UEAAXXZ"));
+    },
+    () => procHacker.js("?simulateDisconnect@SimulatedPlayer@@QEAAXXZ", void_t, { this: SimulatedPlayer }),
+);
 SimulatedPlayer.prototype.simulateAttack = procHacker.js("?simulateAttack@SimulatedPlayer@@QEAA_NPEAVActor@@@Z", bool_t, { this: SimulatedPlayer }, Actor);
 const SimulatedPlayer$simulateLookAtEntity = procHacker.js(
     "?simulateLookAt@SimulatedPlayer@@QEAAXAEAVActor@@W4LookDuration@sim@@@Z",
@@ -3500,11 +3509,12 @@ SimulatedPlayer.prototype.simulateNavigateToLocations = function (_locations, sp
     locations.destruct();
 };
 
-SimulatedPlayer.prototype.simulateInteractWithActor = procHacker.js(
+SimulatedPlayer.prototype.simulateInteractWithActor = derived(
     "?simulateInteract@SimulatedPlayer@@QEAA_NAEAVActor@@@Z",
-    bool_t,
-    { this: SimulatedPlayer },
-    Actor,
+    function simulateInteractWithActor(this: SimulatedPlayer, target: Actor): boolean {
+        return this.isAlive() && simInteractActor(this as any as StaticPointer, target as any as StaticPointer);
+    },
+    () => procHacker.js("?simulateInteract@SimulatedPlayer@@QEAA_NAEAVActor@@@Z", bool_t, { this: SimulatedPlayer }, Actor),
 );
 const SimulatedPlayer$simulateInteractWithBlock = procHacker.js(
     "?simulateInteract@SimulatedPlayer@@QEAA_NAEBVBlockPos@@W4ScriptFacing@ScriptModuleMinecraft@@@Z",
@@ -3514,9 +3524,18 @@ const SimulatedPlayer$simulateInteractWithBlock = procHacker.js(
     BlockPos,
     uint8_t,
 );
-SimulatedPlayer.prototype.simulateInteractWithBlock = function (blockPos: BlockPos, direction: number = 1) {
-    return SimulatedPlayer$simulateInteractWithBlock(this, blockPos, direction);
-};
+SimulatedPlayer.prototype.simulateInteractWithBlock = derived(
+    "?simulateInteract@SimulatedPlayer@@QEAA_NAEBVBlockPos@@W4ScriptFacing@ScriptModuleMinecraft@@@Z",
+    function simulateInteractWithBlock(this: SimulatedPlayer, blockPos: BlockPos, direction: number = 1): boolean {
+        if (!this.isAlive()) return false;
+        const block = this.getDimensionBlockSource().getBlock(blockPos);
+        return simInteractBlock(this as any as StaticPointer, block as any as StaticPointer, blockPos as any as StaticPointer, direction);
+    },
+    () =>
+        function simulateInteractWithBlock(this: SimulatedPlayer, blockPos: BlockPos, direction: number = 1): boolean {
+            return SimulatedPlayer$simulateInteractWithBlock(this, blockPos, direction);
+        },
+);
 SimulatedPlayer.prototype.simulateJump = procHacker.js("?simulateJump@SimulatedPlayer@@QEAA_NXZ", void_t, { this: SimulatedPlayer });
 SimulatedPlayer.prototype.simulateSetBodyRotation = procHacker.js(
     "?simulateSetBodyRotation@SimulatedPlayer@@QEAAXM@Z",
@@ -3524,13 +3543,18 @@ SimulatedPlayer.prototype.simulateSetBodyRotation = procHacker.js(
     { this: SimulatedPlayer },
     float32_t,
 );
-SimulatedPlayer.prototype.simulateSetItem = procHacker.js(
+SimulatedPlayer.prototype.simulateSetItem = derived(
     "?simulateSetItem@SimulatedPlayer@@QEAA_NAEAVItemStack@@_NH@Z",
-    bool_t,
-    { this: SimulatedPlayer },
-    ItemStack,
-    bool_t,
-    int32_t,
+    // 2024 0xcd6be0, and the binding's inlined copy: inventory_'s container setItem (vftable slot 12), then whether the slot
+    // now holds an item that `matches` the one given (same count, then matchesItem), then setSelectedSlot when asked
+    function simulateSetItem(this: SimulatedPlayer, item: ItemStack, selectSlot: boolean, slot: number): boolean {
+        const container = this.getInventory().container;
+        FillingContainer$setItem.call(container, slot, item);
+        const matches = container.getItem(slot).matches(item);
+        if (selectSlot) this.setSelectedSlot(slot);
+        return matches;
+    },
+    () => procHacker.js("?simulateSetItem@SimulatedPlayer@@QEAA_NAEAVItemStack@@_NH@Z", bool_t, { this: SimulatedPlayer }, ItemStack, bool_t, int32_t),
 );
 const SimulatedPlayer$simulateDestroyBlock = procHacker.js(
     "?simulateDestroyBlock@SimulatedPlayer@@QEAA_NAEBVBlockPos@@W4ScriptFacing@ScriptModuleMinecraft@@@Z",
@@ -3543,7 +3567,13 @@ const SimulatedPlayer$simulateDestroyBlock = procHacker.js(
 SimulatedPlayer.prototype.simulateDestroyBlock = function (pos: BlockPos, direction: number = 1) {
     return SimulatedPlayer$simulateDestroyBlock(this, pos, direction);
 };
-SimulatedPlayer.prototype.simulateStopDestroyingBlock = procHacker.js("?simulateStopDestroyingBlock@SimulatedPlayer@@QEAAXXZ", void_t, { this: SimulatedPlayer });
+SimulatedPlayer.prototype.simulateStopDestroyingBlock = derived(
+    "?simulateStopDestroyingBlock@SimulatedPlayer@@QEAAXXZ",
+    function simulateStopDestroyingBlock(this: SimulatedPlayer): void {
+        simStopDestroyingBlock(this as any as StaticPointer, this.isAlive(), this.getGameMode() as any as StaticPointer);
+    },
+    () => procHacker.js("?simulateStopDestroyingBlock@SimulatedPlayer@@QEAAXXZ", void_t, { this: SimulatedPlayer }),
+);
 SimulatedPlayer.prototype.simulateLocalMove = procHacker.js(
     "?simulateLocalMove@SimulatedPlayer@@QEAAXAEBVVec3@@M@Z",
     void_t,
