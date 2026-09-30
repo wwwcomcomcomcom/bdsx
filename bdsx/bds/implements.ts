@@ -1589,10 +1589,25 @@ const Actor$isValidTarget = procHacker.jsv("??_7ServerPlayer@@6B@", "?isValidTar
 Actor.prototype.isValidTarget = function (source = null) {
     return Actor$isValidTarget.call(this, source);
 };
-const Actor$canAttack = procHacker.jsv("??_7Actor@@6B@", "?canAttack@Actor@@UEBA_NPEAV1@_N@Z", bool_t, { this: Actor }, Actor, bool_t);
-Actor.prototype.canAttack = function (target, unknown = false) {
-    return Actor$canAttack.call(this, target, unknown);
-};
+// Actor::canAttack: the virtual has no slot in 1.26 (setTarget is slot 50 in both tables), so bdsx carries the
+// base body (2024 0x19abf70, docs/findings-inventory.md section 14): no target -> false; the target's PLAYING_DEAD
+// status flag (98) -> false; else !ActorClassTree::isInstanceOf(target, 0xb29). isInstanceOf is inlined in 1.26; with a
+// non-zero low byte (0x29, Ghast) it is an equality of the low byte against Actor::getEntityTypeId, which is what
+// this does. Neither the `unknown` argument nor `this` is read by the 2024 base body.
+Actor.prototype.canAttack = derived(
+    "?canAttack@Actor@@UEBA_NPEAV1@_N@Z",
+    function canAttack(this: Actor, target: Actor | null, unknown = false): boolean {
+        if (target === null) return false;
+        if (target.getStatusFlag(ActorFlags.PlayingDead)) return false;
+        return (target.getEntityTypeId() & 0xff) !== (0xb29 & 0xff);
+    },
+    () => {
+        const f = procHacker.jsv("??_7Actor@@6B@", "?canAttack@Actor@@UEBA_NPEAV1@_N@Z", bool_t, { this: Actor }, Actor, bool_t);
+        return function (this: Actor, target: Actor | null, unknown = false): boolean {
+            return f.call(this, target, unknown);
+        };
+    },
+);
 Actor.prototype.getLastDeathPos = procHacker.jsv("??_7Actor@@6B@", "?getLastDeathPos@Actor@@UEBA?AV?$optional@VBlockPos@@@std@@XZ", CxxOptional.make(BlockPos), {
     this: Actor,
     structureReturn: true,
