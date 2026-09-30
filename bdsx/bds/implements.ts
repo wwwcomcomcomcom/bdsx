@@ -11,6 +11,7 @@ import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstru
 import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/serverfields";
 import { copyLevelServerNetworkHandler, networkConnectionFromId, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { freezeOnHitReadJson } from "./engine/freezeonhit";
+import { gameplayUserManagerUsers, playerInputMode } from "./engine/worldfields";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
 import { pushableByBlock, pushableByEntity, pushActorByActor, pushActorByVec } from "./engine/pushable";
@@ -532,47 +533,36 @@ Level.prototype.getTime = procHacker.js("?getTime@Level@@UEBAHXZ", int64_as_floa
 Level.prototype.getCurrentTick = procHacker.js("?getCurrentTick@Level@@UEBAAEBUTick@@XZ", int64_as_float_t.ref(), { this: Level }); // You can run the server for 1.4202551784875594e+22 years till it exceeds the max safe integer
 
 @nativeClass()
-class GamePlayUserManager extends AbstractClass {
+export class GamePlayUserManager extends AbstractClass {
     getActiveGameplayUsers(): CxxVector<WeakEntityRef> {
         abstract();
     }
 }
-GamePlayUserManager.prototype.getActiveGameplayUsers = procHacker.js(
+// 1.26 keeps no out-of-line copy: the vector is a member at +8 (2024: +0), engine/worldfields.ts
+const CxxVector$WeakEntityRef = CxxVector.make(WeakEntityRef);
+GamePlayUserManager.prototype.getActiveGameplayUsers = derived(
     "?getActiveGameplayUsers@GameplayUserManager@@QEBAAEBV?$vector@VWeakEntityRef@@V?$allocator@VWeakEntityRef@@@std@@@std@@XZ",
-    CxxVector.make(WeakEntityRef),
-    { this: GamePlayUserManager },
+    function (this: GamePlayUserManager): CxxVector<WeakEntityRef> {
+        return gameplayUserManagerUsers(this as unknown as StaticPointer).as(CxxVector$WeakEntityRef);
+    },
+    () =>
+        procHacker.js(
+            "?getActiveGameplayUsers@GameplayUserManager@@QEBAAEBV?$vector@VWeakEntityRef@@V?$allocator@VWeakEntityRef@@@std@@@std@@XZ",
+            CxxVector$WeakEntityRef,
+            { this: GamePlayUserManager },
+        ),
 );
 
 Level.prototype.getRandomPlayer = function () {
-    const mgr = this.addAs(GamePlayUserManager, 0x2e30);
-    const activePlayers = mgr.getActiveGameplayUsers();
-    if (activePlayers.empty()) return null;
-    const list = CxxVector$PlayerRef.construct(); // rsp+28
-    if (!activePlayers.empty()) {
-        for (const p of activePlayers) {
-            const storage = new StackResultStorageEntity(true); // rsp+40
-            storage.constructWith(p);
-            const al = storage._hasValue();
-            if (al) {
-                const entityctx = storage._getStackRef();
-                const player = ServerPlayer.tryGetFromEntity(entityctx, true); // rsp+20
-                if (player !== null) {
-                    list.push(player);
-                }
-            }
-        }
+    // Level::getActiveUsers is the manager's vector on both 2024 and 1.26 (2024: _getGameplayUserManager then getActiveGameplayUsers).
+    // 2024 wrapped every entry in a StackResultStorageEntity to reach the player; tryUnwrapPlayer is the same lookup.
+    const list: Player[] = [];
+    for (const user of this.getActiveUsers()) {
+        const player = user.tryUnwrapPlayer();
+        if (player !== null) list.push(player);
     }
-    let out: Player | null;
-    if (!list.empty()) {
-        out = list.get((Math.random() * list.size()) | 0);
-        // const random = this.getRandom();
-        // const idx = random[vftable + 8](list.size());
-        // out = list.get(idx);
-    } else {
-        out = null;
-    }
-    list.destruct();
-    return out;
+    if (list.length === 0) return null;
+    return list[(Math.random() * list.length) | 0];
 };
 // On 1.26 the Level virtual is a 12-byte forwarder (`mov rcx,[rcx+weatherManager]; jmp`) that the table
 // does not ship, because levelWeatherChange hooks this name and twelve bytes cannot take a hook. The
@@ -825,11 +815,25 @@ Dimension.prototype.tryGetClosestPublicRegion = function (chunkpos: ChunkPos) {
 };
 Dimension.prototype.removeActorByID = procHacker.js("?removeActorByID@Dimension@@QEAAXAEBUActorUniqueID@@@Z", void_t, { this: Dimension }, ActorUniqueID);
 Dimension.prototype.getMinHeight = procHacker.js("?getMinHeight@Dimension@@QEBAFXZ", int16_t, { this: Dimension });
-Dimension.prototype.getDefaultBiomeString = procHacker.jsv(
-    "??_7NetherDimension@@6BIDimension@@@",
+// 1.26: slot 25 of every dimension's vftable no longer returns a HashedString; it writes the biome's numeric id (BiomeIdType, one
+// uint16 through the sret pointer: Nether 8, The End 9, the overworld 0) and ships under a bdsx: key
+// (docs/findings-inventory.md section 19). The names are the ones 2024 returned as strings.
+const DEFAULT_BIOME_NAMES: { [id: number]: string } = { 0: "ocean", 8: "hell", 9: "the_end" };
+Dimension.prototype.getDefaultBiomeString = derived(
     "?getDefaultBiome@NetherDimension@@UEBA?AVHashedString@@XZ",
-    HashedStringToString,
-    { this: Dimension, structureReturn: true },
+    (() => {
+        let byId: any = null;
+        return function getDefaultBiomeString(this: Dimension): string {
+            byId ??= procHacker.jsv("??_7NetherDimension@@6BIDimension@@@", "bdsx:Dimension::getDefaultBiome", uint16_t, { this: Dimension, structureReturn: true });
+            const id: number = byId.call(this);
+            return DEFAULT_BIOME_NAMES[id] ?? `biome:${id}`;
+        };
+    })() as any,
+    () =>
+        procHacker.jsv("??_7NetherDimension@@6BIDimension@@@", "?getDefaultBiome@NetherDimension@@UEBA?AVHashedString@@XZ", HashedStringToString, {
+            this: Dimension,
+            structureReturn: true,
+        }) as any,
 );
 Dimension.prototype.getMoonPhase = derived(
     "?getMoonPhase@Dimension@@QEBAHXZ",
@@ -1714,7 +1718,12 @@ namespace ActorMobilityUtils {
     );
 }
 namespace PlayerMovement {
-    export const getInputMode = procHacker.js("?getInputMode@PlayerMovement@@YA?AW4InputMode@@AEBVEntityContext@@@Z", int32_t, null, EntityContext);
+    // 1.26 keeps no out-of-line copy: PlayerInputModeComponent's first int, engine/worldfields.ts
+    export const getInputMode: (context: EntityContext) => number = derived(
+        "?getInputMode@PlayerMovement@@YA?AW4InputMode@@AEBVEntityContext@@@Z",
+        (context: EntityContext): number => playerInputMode(context as unknown as StaticPointer),
+        () => procHacker.js("?getInputMode@PlayerMovement@@YA?AW4InputMode@@AEBVEntityContext@@@Z", int32_t, null, EntityContext),
+    );
 }
 
 Actor.prototype.isInLava = function () {

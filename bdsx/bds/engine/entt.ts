@@ -72,7 +72,11 @@ export function enttSlot(actor: EntityOwner, hash: number): number | null {
     const self = actor as unknown as StaticPointer;
     const registry = self.getNullablePointer(ACTOR_ENTT_REGISTRY);
     if (registry === null) return null;
-    const entity = self.getUint32(ACTOR_ENTITY_ID);
+    return enttSlotIn(registry, self.getUint32(ACTOR_ENTITY_ID), hash);
+}
+
+/** `enttSlot` for a registry and an entity id held apart from any Actor (an EntityContext's +8 and +0x10) */
+export function enttSlotIn(registry: StaticPointer, entity: number, hash: number): number | null {
     const storage = enttStorage(registry, hash);
     if (storage === null) return null;
     const index = entity & ENTT_ENTITY_MASK;
@@ -97,14 +101,18 @@ export function enttComponent(actor: EntityOwner, hash: number, size: number): S
     const self = actor as unknown as StaticPointer;
     const registry = self.getNullablePointer(ACTOR_ENTT_REGISTRY);
     if (registry === null) return null;
-    const slot = enttSlot(actor, hash);
+    return enttComponentIn(registry, self.getUint32(ACTOR_ENTITY_ID), hash, size);
+}
+
+/** `enttComponent` for a registry and an entity id held apart from any Actor */
+export function enttComponentIn(registry: StaticPointer, entity: number, hash: number, size: number): StaticPointer | null {
+    const slot = enttSlotIn(registry, entity, hash);
     if (slot === null) return null;
     const storage = enttStorage(registry, hash);
     if (storage === null) return null;
-    const entry = slot;
-    const packed = storage.getPointer(ENTT_PACKED).getNullablePointer(((entry & ENTT_ENTITY_MASK) >>> ENTT_PACKED_PAGE_BITS) * 8);
+    const packed = storage.getPointer(ENTT_PACKED).getNullablePointer(((slot & ENTT_ENTITY_MASK) >>> ENTT_PACKED_PAGE_BITS) * 8);
     if (packed === null) return null;
-    return packed.add((entry & ((1 << ENTT_PACKED_PAGE_BITS) - 1)) * size);
+    return packed.add((slot & ((1 << ENTT_PACKED_PAGE_BITS) - 1)) * size);
 }
 
 /**
