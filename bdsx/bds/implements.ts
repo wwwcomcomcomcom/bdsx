@@ -6,6 +6,7 @@ import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./en
 import { entityContextIdBuffer, entityContextIsValid, entityContextRegistry, stackResultStorageConstruct, storageHasValue, storageStackRef } from "./engine/entitycontext";
 import { actorFeetY } from "./engine/commandfields";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
+import { nearestAttackablePlayer } from "./engine/attackable";
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
@@ -721,26 +722,37 @@ Spawner.prototype.spawnMob = function (
 };
 
 // dimension.ts
-const fetchNearestAttackablePlayer$nonBlockPos = procHacker.js(
+// 1.26 has no out-of-line fetchNearestAttackablePlayer: each caller builds the forEachPlayer closure itself (engine/attackable.ts,
+// docs/findings-inventory.md section 23). The actor overload takes the mob's position as a BlockPos (2024's BlockPos(Vec3) floors).
+const fetchNearestAttackablePlayer$nonBlockPos = derived(
     "?fetchNearestAttackablePlayer@Dimension@@QEBAPEAVPlayer@@AEAVActor@@M@Z",
-    Player,
-    { this: Dimension },
-    Actor,
-    float32_t,
+    function (this: Dimension, actor: Actor, distance: number): Player | null {
+        const p = actor.getPosition();
+        return nearestAttackablePlayer(this.getPlayers(), Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), distance, actor);
+    },
+    () =>
+        procHacker.js("?fetchNearestAttackablePlayer@Dimension@@QEBAPEAVPlayer@@AEAVActor@@M@Z", Player, { this: Dimension }, Actor, float32_t),
 );
-const fetchNearestAttackablePlayer$withBlockPos = procHacker.js(
+const fetchNearestAttackablePlayer$withBlockPos = derived(
     "?fetchNearestAttackablePlayer@Dimension@@QEBAPEAVPlayer@@VBlockPos@@MPEAVActor@@@Z",
-    Player,
-    { this: Dimension },
-    BlockPos,
-    float32_t,
-    Actor,
+    function (this: Dimension, blockPos: BlockPos, distance: number, actor: Actor | null): Player | null {
+        return nearestAttackablePlayer(this.getPlayers(), blockPos.x, blockPos.y, blockPos.z, distance, actor ?? null);
+    },
+    () =>
+        procHacker.js(
+            "?fetchNearestAttackablePlayer@Dimension@@QEBAPEAVPlayer@@VBlockPos@@MPEAVActor@@@Z",
+            Player,
+            { this: Dimension },
+            BlockPos,
+            float32_t,
+            Actor,
+        ),
 );
 Dimension.prototype.fetchNearestAttackablePlayer = function (actor: Actor, distance: number, blockPos?: BlockPos): Player {
     if (blockPos) {
-        return fetchNearestAttackablePlayer$withBlockPos.call(this, blockPos, distance, actor);
+        return fetchNearestAttackablePlayer$withBlockPos.call(this, blockPos, distance, actor) as Player;
     }
-    return fetchNearestAttackablePlayer$nonBlockPos.call(this, actor, distance);
+    return fetchNearestAttackablePlayer$nonBlockPos.call(this, actor, distance) as Player;
 };
 // 2024's Dimension::getTickingAreas is `mov 0x2d8(%rcx),%rax`. 1.26 keeps the TickingAreaList pointer at +0x300 on both
 // builds (ServerPlayer::moveView reads it and walks the areas) with no out-of-line copy (docs/findings-blocks.md "Ticking areas").
