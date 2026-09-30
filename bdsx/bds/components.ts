@@ -225,12 +225,13 @@ export class RideableComponent extends AbstractClass {
 @nativeClass(null)
 export class ContainerComponent extends AbstractClass {
     addItem(item: ItemActor): boolean;
-    addItem(item: ItemStack, count?: number, data?: number): boolean;
-    addItem(item: ItemStack | ItemActor, count?: number, data?: number): boolean {
-        return this._addItem(item, count, data);
+    /** with `face` and `count`: moves `count` of the stack into the first slot that takes it (`face` is unused on 1.26) */
+    addItem(item: ItemStack, face?: number, count?: number): boolean;
+    addItem(item: ItemStack | ItemActor, face?: number, count?: number): boolean {
+        return this._addItem(item, face, count);
     }
 
-    protected _addItem(item: ItemStack | ItemActor, count?: number, data: number = 0): boolean {
+    protected _addItem(item: ItemStack | ItemActor, face?: number, count?: number): boolean {
         abstract();
     }
 

@@ -1752,7 +1752,16 @@ const getNameableComponent = procHacker.js("??$tryGetComponent@VNameableComponen
 const getNavigationComponent = procHacker.js("??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ", NavigationComponent, null, Actor);
 const getNpcComponent = procHacker.js("??$tryGetComponent@VNpcComponent@@@Actor@@QEAAPEAVNpcComponent@@XZ", NpcComponent, null, Actor);
 const getRideableComponent = procHacker.js("??$tryGetComponent@VRideableComponent@@@Actor@@QEAAPEAVRideableComponent@@XZ", RideableComponent, null, Actor);
-const getContainerComponent = procHacker.js("??$tryGetComponent@VContainerComponent@@@Actor@@QEAAPEAVContainerComponent@@XZ", ContainerComponent, null, Actor);
+// 1.26 has no out-of-line try_get for it either (docs/findings-containers.md section 23): the component is an EnTT element of
+// 0x200 bytes on both builds (hash fnv1a "ContainerComponent"), so bdsx walks the lookup itself.
+const getContainerComponent = derived<(actor: Actor) => ContainerComponent>(
+    "??$tryGetComponent@VContainerComponent@@@Actor@@QEAAPEAVContainerComponent@@XZ",
+    function tryGetContainerComponent(actor: Actor): ContainerComponent {
+        const component = enttComponent(actor, componentHash("ContainerComponent"), engineLayout("ContainerComponent", "size", 0x200));
+        return component === null ? (null as any) : component.as(ContainerComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VContainerComponent@@@Actor@@QEAAPEAVContainerComponent@@XZ", ContainerComponent, null, Actor),
+);
 const getPushableComponent = procHacker.js("??$tryGetComponent@VPushableComponent@@@Actor@@QEAAPEAVPushableComponent@@XZ", PushableComponent, null, Actor);
 const getShooterComponent = procHacker.js("??$tryGetComponent@VShooterComponent@@@Actor@@QEAAPEAVShooterComponent@@XZ", ShooterComponent, null, Actor);
 const getConditionalBandwidthComponent = procHacker.js(
@@ -1896,9 +1905,13 @@ RideableComponent.prototype.canAddPassenger = procHacker.js(
 );
 RideableComponent.prototype.pullInEntity = procHacker.js("?pullInEntity@RideableComponent@@QEBA_NAEAVActor@@0@Z", bool_t, { this: RideableComponent }, Actor, Actor);
 
-const ContainerComponent$addItem$ItemActor = procHacker.js("?addItem@ContainerComponent@@QEAA_NAEAVItemActor@@@Z", bool_t, null, ContainerComponent, ItemActor);
-const ContainerComponent$addItem$ItemStack = procHacker.js("?addItem@ContainerComponent@@QEAA_NAEAVItemStack@@@Z", bool_t, null, ContainerComponent, ItemStack);
-const ContainerComponent$addItem$ItemStack$count = procHacker.js(
+// ContainerComponent: the Container sits inline at +0x10 (2024 and both 1.26 builds, docs/findings-containers.md section 23). Its
+// three forwarders have no 1.26 address; each is 2024's body over that Container.
+const CONTAINER_COMPONENT_CONTAINER = engineLayout("ContainerComponent", "container", 0x10);
+function containerOf(component: ContainerComponent): Container {
+    return (component as any as StaticPointer).addAs(Container, CONTAINER_COMPONENT_CONTAINER);
+}
+const ContainerComponent$addItem$ItemStack$face$count = procHacker.js(
     "?addItem@ContainerComponent@@QEAA_NAEAVItemStack@@HH@Z",
     bool_t,
     null,
@@ -1907,20 +1920,55 @@ const ContainerComponent$addItem$ItemStack$count = procHacker.js(
     int32_t,
     int32_t,
 );
-(ContainerComponent.prototype as any)._addItem = function (component: ContainerComponent, item: ItemStack | ItemActor, count?: number, data: number = 0): boolean {
+// 2024 body: refuse a null stack, a count of 0 or a removed entity; addItem(stack, -1, count); when the whole stack went in, remove the entity.
+const ContainerComponent$addItem$ItemActor = derived<(component: ContainerComponent, item: ItemActor) => boolean>(
+    "?addItem@ContainerComponent@@QEAA_NAEAVItemActor@@@Z",
+    function addItem(component: ContainerComponent, item: ItemActor): boolean {
+        const stack = item.itemStack;
+        // Actor::isRemoved is the byte at +617 (2024's out-of-line body, and 1.26's inlined copies: docs/findings-blocks.md section 5)
+        if (stack.isNull() || stack.getAmount() === 0 || (item as any as StaticPointer).getUint8(engineLayout("Actor", "removed", 617)) !== 0) return false;
+        if (!ContainerComponent$addItem$ItemStack$face$count(component, stack, -1, stack.getAmount())) return false;
+        if (stack.getAmount() === 0) item.remove();
+        return true;
+    },
+    () => procHacker.js("?addItem@ContainerComponent@@QEAA_NAEAVItemActor@@@Z", bool_t, null, ContainerComponent, ItemActor),
+);
+const ContainerComponent$addItem$ItemStack = derived<(component: ContainerComponent, item: ItemStack) => boolean>(
+    "?addItem@ContainerComponent@@QEAA_NAEAVItemStack@@@Z",
+    function addItem(component: ContainerComponent, item: ItemStack): boolean {
+        containerOf(component).addItem(item); // 2024: one virtual call on the Container, then `mov al, 1`
+        return true;
+    },
+    () => procHacker.js("?addItem@ContainerComponent@@QEAA_NAEAVItemStack@@@Z", bool_t, null, ContainerComponent, ItemStack),
+);
+(ContainerComponent.prototype as any)._addItem = function (this: ContainerComponent, item: ItemStack | ItemActor, face?: number, count?: number): boolean {
     if (item instanceof ItemActor) {
-        return ContainerComponent$addItem$ItemActor(component, item);
-    } else if (count !== undefined) {
-        return ContainerComponent$addItem$ItemStack$count(component, item, count, data);
+        return ContainerComponent$addItem$ItemActor(this, item);
+    } else if (face !== undefined || count !== undefined) {
+        return ContainerComponent$addItem$ItemStack$face$count(this, item, face ?? -1, count ?? item.getAmount());
     } else {
-        return ContainerComponent$addItem$ItemStack(component, item);
+        return ContainerComponent$addItem$ItemStack(this, item);
     }
 };
-ContainerComponent.prototype.getEmptySlotsCount = procHacker.js("?getEmptySlotsCount@ContainerComponent@@QEBAHXZ", int64_as_float_t, { this: ContainerComponent });
-ContainerComponent.prototype.getSlots = procHacker.js(
+const Container$getEmptySlotsCount = procHacker.js("?getEmptySlotsCount@Container@@UEBAHXZ", int32_t, { this: Container });
+ContainerComponent.prototype.getEmptySlotsCount = derived<(this: ContainerComponent) => number>(
+    "?getEmptySlotsCount@ContainerComponent@@QEBAHXZ",
+    function (this: ContainerComponent): number {
+        return Container$getEmptySlotsCount.call(containerOf(this));
+    },
+    () => procHacker.js("?getEmptySlotsCount@ContainerComponent@@QEBAHXZ", int64_as_float_t, { this: ContainerComponent }),
+);
+ContainerComponent.prototype.getSlots = derived<(this: ContainerComponent) => CxxVector<ItemStack>>(
     "?getSlots@ContainerComponent@@QEBA?BV?$vector@PEBVItemStack@@V?$allocator@PEBVItemStack@@@std@@@std@@XZ",
-    CxxVector.make(ItemStack.ref()),
-    { this: Container, structureReturn: true },
+    function (this: ContainerComponent): CxxVector<ItemStack> {
+        return containerOf(this).getSlots();
+    },
+    () =>
+        procHacker.js(
+            "?getSlots@ContainerComponent@@QEBA?BV?$vector@PEBVItemStack@@V?$allocator@PEBVItemStack@@@std@@@std@@XZ",
+            CxxVector.make(ItemStack.ref()),
+            { this: ContainerComponent, structureReturn: true },
+        ),
 );
 const PushableComponent$pushByActor = procHacker.js("?push@PushableComponent@@QEAAXAEAVActor@@0_N@Z", void_t, null, PushableComponent, Actor, Actor, bool_t);
 const PushableComponent$pushByPos = procHacker.js("?push@PushableComponent@@QEAAXAEAVActor@@AEBVVec3@@@Z", void_t, null, PushableComponent, Actor, Vec3);
@@ -2452,7 +2500,7 @@ ActorDamageByChildActorSource.constructWith = function (
 };
 
 ItemActor.abstract({
-    itemStack: [ItemStack, 0x448], // accessed in ItemActor::isFireImmune
+    itemStack: [ItemStack, engineLayout("ItemActor", "itemStack", 0x448)], // accessed in ItemActor::isFireImmune; 1.26: +0x3b0 (docs/findings-containers.md section 23)
 });
 
 ServerPlayer.prototype.setAttribute = function (id: AttributeId, value: number): AttributeInstance | null {
