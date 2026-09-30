@@ -54,6 +54,8 @@ import {
     blockActorSetChanged,
     blockActorType,
     blockDestroySpeed,
+    blockSetDestroyTime,
+    blockTypePermutations,
     blockExplosionResistance,
     blockRuntimeId,
     blockTypeCreativeCategory,
@@ -5757,7 +5759,14 @@ BlockLegacy.prototype.getCreativeCategory = derived(
     },
     () => procHacker.js("?getCreativeCategory@BlockLegacy@@QEBA?AW4CreativeItemCategory@@XZ", int32_t, { this: BlockLegacy }),
 );
-BlockLegacy.prototype.setDestroyTime = procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t);
+// 2024 (0x1bf38b0): both floats of the legacy = t. 1.26 has them in every permutation of the type (engine/blocktype.ts)
+BlockLegacy.prototype.setDestroyTime = derived(
+    "?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z",
+    function (this: BlockLegacy, time: number): void {
+        for (const block of blockTypePermutations(this as any as StaticPointer)) blockSetDestroyTime(block, time);
+    },
+    () => procHacker.js("?setDestroyTime@BlockLegacy@@QEAAAEAV1@M@Z", void_t, { this: BlockLegacy }, float32_t),
+);
 // 1.26 keeps an out-of-line body (40 0x1eefa20, 51 0x1a28630) that returns 0x3e when the block type has a block-entity
 // component and block_entity_type_ (+0x161) otherwise; 51 sets only al on the first path, so the result is one byte
 BlockLegacy.prototype.getBlockEntityType = procHacker.js("?getBlockEntityType@BlockLegacy@@QEBA?AW4BlockActorType@@XZ", uint8_t, { this: BlockLegacy });
@@ -5949,7 +5958,16 @@ Block.prototype.popResource = procHacker.js(
     BlockPos,
     ItemStack,
 );
-Block.prototype.canHurtAndBreakItem = procHacker.js("?canHurtAndBreakItem@Block@@QEBA_NXZ", bool_t, { this: Block });
+// 2024: forwards to BlockLegacy::canHurtAndBreakItem, which is `0 < legacy destroy time` (1.21.3.01 0x1be9950). 1.26 keeps
+// that value per Block state (direct_data_ destroy_speed, engine/blocktype.ts), so it is `destroySpeed > 0`
+// (docs/findings-blocks.md "Block leftovers")
+Block.prototype.canHurtAndBreakItem = derived(
+    "?canHurtAndBreakItem@Block@@QEBA_NXZ",
+    function (this: Block): boolean {
+        return blockDestroySpeed(this as any as StaticPointer) > 0;
+    },
+    () => procHacker.js("?canHurtAndBreakItem@Block@@QEBA_NXZ", bool_t, { this: Block }),
+);
 Block.prototype.getThickness = derived(
     "?getThickness@Block@@QEBAMXZ",
     function (this: Block): number {

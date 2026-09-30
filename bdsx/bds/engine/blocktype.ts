@@ -61,6 +61,32 @@ const BLOCK_EXPLOSION_RESISTANCE = engineLayout("Block", "explosionResistance", 
 const BLOCK_FRICTION = engineLayout("Block", "friction", 0x7c);
 const BLOCK_DESTROY_SPEED = engineLayout("Block", "destroySpeed", 0x80);
 const BLOCK_RUNTIME_ID = engineLayout("Block", "runtimeId", 0xc4);
+/**
+ * BlockType::block_permutations_ (a std::vector<std::unique_ptr<Block>>, Endstone block_type.h +552 = 0x228) and the
+ * destructible-by-mining pointer at Block+0xd0. Read off Block.create objects on both builds: stone has one permutation,
+ * lever sixteen, and every first entry's +0x68 points back at the type. 2024 kept the destroy time and explosion
+ * resistance in the legacy (0x184 / 0x188), so BlockLegacy::setDestroyTime (0x1bf38b0, both = t) wrote two floats;
+ * 1.26 copies them into every permutation's direct_data_ (+0xb4 / +0xac) and the hardness helper reads `[+0xd0]+0` instead
+ * when that pointer is set (findings-blocks.md section 12). docs/findings-blocks.md "Block leftovers".
+ */
+const BLOCK_TYPE_PERMUTATIONS = engineLayout("BlockLegacy", "permutations", 0x228);
+const BLOCK_MINING_COMPONENT = engineLayout("Block", "miningComponent", 0xd0);
+/** every permutation (Block state) of a block type */
+export function blockTypePermutations(blockType: StaticPointer): StaticPointer[] {
+    const begin = blockType.getPointer(BLOCK_TYPE_PERMUTATIONS);
+    const end = blockType.getPointer(BLOCK_TYPE_PERMUTATIONS + 8);
+    const out: StaticPointer[] = [];
+    if (begin.isNull()) return out;
+    for (let p = begin; p.subptr(end) < 0; p = p.add(8)) out.push(p.getPointer(0));
+    return out;
+}
+/** BlockLegacy::setDestroyTime(t) on one permutation: destroy speed and explosion resistance both become t */
+export function blockSetDestroyTime(block: StaticPointer, time: number): void {
+    block.setFloat32(time, BLOCK_DESTROY_SPEED);
+    block.setFloat32(time, BLOCK_EXPLOSION_RESISTANCE);
+    const mining = block.getPointer(BLOCK_MINING_COMPONENT);
+    if (!mining.isNull()) mining.setFloat32(time, 0);
+}
 /** { block type (WeakPtr or pointer) +0, const Block* +8 } */
 const RESULT_SIZE = 0x10;
 /** LookupByNameImplResolve: 0 finds the type only, 1 also resolves the Block for `data` */
