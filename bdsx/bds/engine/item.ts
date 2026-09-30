@@ -228,6 +228,41 @@ export function itemIsHumanoidArmor(item: StaticPointer): boolean {
 }
 
 /**
+ * Item::tags_ (Endstone item.h: a std::vector<HashedString>): the begin/end pointers at +0x1f8/+0x200 on both builds, 0x30
+ * bytes an element (the 64-bit hash, the std::string at +8, then the last-match pointer). 1.26 inlines every tag test to
+ * this walk (docs/findings-containers.md section 24): it compares the hash, then the string, and caches the hit in the
+ * element's last-match slot -- bdsx compares the strings only.
+ */
+export const ITEM_TAGS = engineLayout("Item", "tags", 0x1f8);
+const ITEM_TAG_STRIDE = 0x30;
+export function itemHasTag(item: StaticPointer, tag: string): boolean {
+    const end = item.getPointer(ITEM_TAGS + 8);
+    for (let p = item.getPointer(ITEM_TAGS); !p.equalsptr(end); p = p.add(ITEM_TAG_STRIDE)) {
+        if (p.getCxxString(8) === tag) return true;
+    }
+    return false;
+}
+
+/**
+ * ItemStackBase::isHorseArmorItem. 2024 (0x1b64ac0) compared the full name with four VanillaItemNames globals; 1.26 (40
+ * 0x1bc79a0, 51 the same shape) asks whether the item carries the tag "minecraft:horse_armor", which the six horse armors
+ * (leather, iron, golden, diamond, netherite, copper) do. The static-init hash globals of those six names are read by
+ * nothing else (docs/findings-containers.md section 22), the tag is what the engine reads.
+ */
+export function itemIsHorseArmor(item: StaticPointer): boolean {
+    return itemHasTag(item, "minecraft:horse_armor");
+}
+
+/**
+ * ItemStackBase::isArmorItem: 1.26 (40 0x1bc7810, 51 0x1a59b00, both called by Mob::getArmorValue) is, in order, the item's
+ * isHumanoidArmor virtual, the tag "minecraft:horse_armor", the item named "minecraft:wolf_armor", and the tag
+ * "minecraft:nautilus_armor". 2024 (0x1b64560) was the first and the horse test only.
+ */
+export function itemIsArmor(item: StaticPointer): boolean {
+    return itemIsHumanoidArmor(item) || itemIsHorseArmor(item) || itemFullName(item) === "minecraft:wolf_armor" || itemHasTag(item, "minecraft:nautilus_armor");
+}
+
+/**
  * Item::buildDescriptionName(ItemStackBase const&), the translated display name: slot 93 on both builds (2024: 82,
  * +0x290; Endstone item.h counts 92, and 1.26 has one more virtual between isValidAuxValue (67) and it). PickaxeItem's
  * slot 93 (40 0x24e8940, 51 0x1a8d530) calls slot 94 (+0x2f0, buildDescriptionId) and the static I18n's +0x80 (get),

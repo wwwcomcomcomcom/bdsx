@@ -25,6 +25,8 @@ import {
     itemFullName,
     itemIsExplodable,
     itemIsHumanoidArmor,
+    itemIsArmor,
+    itemIsHorseArmor,
     ITEM_SLOTS,
     itemSlotCall,
     itemDestroySpeed,
@@ -4729,7 +4731,15 @@ ItemStackBase.prototype.isLiquidClipItem = derived(
     },
     () => procHacker.js("?isLiquidClipItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isHorseArmorItem = procHacker.js("?isHorseArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b64ac0 compared the full name with four VanillaItemNames; 1.26 (40 0x1bc79a0) tests the "minecraft:horse_armor" tag (engine/item.ts)
+ItemStackBase.prototype.isHorseArmorItem = derived(
+    "?isHorseArmorItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item !== null && itemIsHorseArmor(item as any as StaticPointer);
+    },
+    () => procHacker.js("?isHorseArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 ItemStackBase.prototype.isGlint = derived(
     "?isGlint@ItemStackBase@@QEBA_NXZ",
     function (this: ItemStackBase): boolean {
@@ -4787,7 +4797,15 @@ ItemStackBase.prototype.isDamageableItem = derived(
     },
     () => procHacker.js("?isDamageableItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
 );
-ItemStackBase.prototype.isArmorItem = procHacker.js("?isArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase });
+// 2024 0x1b64560: isHumanoidArmor or isHorseArmorItem; 1.26 (40 0x1bc7810, 51 0x1a59b00) adds the wolf armor item and the nautilus armor tag (engine/item.ts)
+ItemStackBase.prototype.isArmorItem = derived(
+    "?isArmorItem@ItemStackBase@@QEBA_NXZ",
+    function (this: ItemStackBase): boolean {
+        const item = this.getItem();
+        return item !== null && itemIsArmor(item as any as StaticPointer);
+    },
+    () => procHacker.js("?isArmorItem@ItemStackBase@@QEBA_NXZ", bool_t, { this: ItemStackBase }),
+);
 // Q3 follow-up (4), docs/findings-audit.md: 2024's getComponentItem (0x1b5f670, 70B) is
 // `A = item_ (+8); B = *A; return B && Item::vft[9]/isComponentBased(B) ? B : null;` -- the same
 // item_ chase as getId/getDamageValue/_getItem elsewhere in this file, gated by an Item vtable
@@ -7992,3 +8010,19 @@ CommandOutputSender.prototype._toJson = function (output) {
     const value = Object.assign({ statusCode: output.getSuccessCount() > 0 ? 0 : -1, statusMessage }, hasBag ? output.propertyBag.json.value() : {});
     return JsonValue.constructWith(value);
 };
+
+// 2024 looked the lower-cased name up in a table (GetCreativeItemCategoryStrings); 1.26 keeps the seven names only as the
+// enum list of the item schema's "category" (40 0x24ec8c0: all, construction, nature, equipment, items, commands, none, in
+// the order of SharedTypes::CreativeItemCategory 0..6). An unknown name gave 0 in 2024 (docs/findings-containers.md section 24).
+const CREATIVE_CATEGORY_NAMES = ["all", "construction", "nature", "equipment", "items", "commands", "none"];
+export const CreativeItemCategoryFromString: (name: string) => number = derived(
+    "?CreativeItemCategoryFromString@@YA?AW4CreativeItemCategory@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+    (name: string): number => Math.max(0, CREATIVE_CATEGORY_NAMES.indexOf(name.toLowerCase())),
+    () =>
+        procHacker.js(
+            "?CreativeItemCategoryFromString@@YA?AW4CreativeItemCategory@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            int32_t,
+            null,
+            CxxString,
+        ),
+);

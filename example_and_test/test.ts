@@ -2,6 +2,7 @@
  * These are unit tests for bdsx
  */
 
+import { CreativeItemCategoryFromString } from "bdsx/bds/implements";
 import { asm, FloatRegister, OperationSize, Register } from "bdsx/assembler";
 import { AbilitiesIndex } from "bdsx/bds/abilities";
 import { Actor, ActorType, DimensionId, ItemActor } from "bdsx/bds/actor";
@@ -1304,12 +1305,6 @@ Tester.concurrency(
             const item = ItemStack.constructWith("minecraft:acacia_boat");
             item.destruct();
 
-            const CreativeItemCategoryFromString = procHacker.js(
-                "?CreativeItemCategoryFromString@@YA?AW4CreativeItemCategory@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-                int32_t,
-                null,
-                CxxString,
-            );
             this.equals(CreativeItemCategoryFromString("construction"), CreativeItemCategory.Construction);
             this.equals(CreativeItemCategoryFromString("nature"), CreativeItemCategory.Nature);
             this.equals(CreativeItemCategoryFromString("equipment"), CreativeItemCategory.Equipment);
