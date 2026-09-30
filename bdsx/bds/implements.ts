@@ -9,6 +9,7 @@ import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstru
 import { copyLevelServerNetworkHandler, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
 import { playerIsInRaid } from "./engine/village";
+import { pushableByBlock, pushableByEntity, pushActorByActor, pushActorByVec } from "./engine/pushable";
 import { authenticationType, IdentityClaims, identityClaims, uuidFromString } from "./engine/identity";
 import {
     blockTypeName,
@@ -164,7 +165,8 @@ import {
     Path,
     PhysicsComponent,
     ProjectileComponent,
-    PushableComponent,
+    PushableByBlockComponent,
+    PushableByEntityComponent,
     RideableComponent,
     ShooterComponent,
 } from "./components";
@@ -1817,7 +1819,6 @@ const getContainerComponent = derived<(actor: Actor) => ContainerComponent>(
     },
     () => procHacker.js("??$tryGetComponent@VContainerComponent@@@Actor@@QEAAPEAVContainerComponent@@XZ", ContainerComponent, null, Actor),
 );
-const getPushableComponent = procHacker.js("??$tryGetComponent@VPushableComponent@@@Actor@@QEAAPEAVPushableComponent@@XZ", PushableComponent, null, Actor);
 const getShooterComponent = derived<(actor: Actor) => ShooterComponent>(
     "??$tryGetComponent@VShooterComponent@@@Actor@@QEAAPEAVShooterComponent@@XZ",
     function tryGetShooterComponent(actor: Actor): ShooterComponent {
@@ -1855,8 +1856,14 @@ const getConditionalBandwidthOptimizationComponent = derived<(actor: Actor) => C
             return getRideableComponent(this);
         case "minecraft:container":
             return getContainerComponent(this);
-        case "minecraft:pushable":
-            return getPushableComponent(this);
+        case "minecraft:pushable_by_entity": {
+            const component = pushableByEntity(this);
+            return component === null ? null : component.as(PushableByEntityComponent);
+        }
+        case "minecraft:pushable_by_block": {
+            const component = pushableByBlock(this);
+            return component === null ? null : component.as(PushableByBlockComponent);
+        }
         case "minecraft:shooter":
             return getShooterComponent(this);
         case "minecraft:conditional_bandwidth_optimization":
@@ -2166,13 +2173,12 @@ ContainerComponent.prototype.getSlots = derived<(this: ContainerComponent) => Cx
             { this: ContainerComponent, structureReturn: true },
         ),
 );
-const PushableComponent$pushByActor = procHacker.js("?push@PushableComponent@@QEAAXAEAVActor@@0_N@Z", void_t, null, PushableComponent, Actor, Actor, bool_t);
-const PushableComponent$pushByPos = procHacker.js("?push@PushableComponent@@QEAAXAEAVActor@@AEBVVec3@@@Z", void_t, null, PushableComponent, Actor, Vec3);
-(PushableComponent.prototype as any)._push = function (entity: Actor, entityOrVec: Actor | Vec3, bool: bool_t) {
-    if (bool !== undefined) {
-        return PushableComponent$pushByActor(this, entity, entityOrVec as Actor, bool);
+// BDS 1.26 split PushableComponent in two (engine/pushable.ts); both pushes are free functions over the actor now.
+(PushableByEntityComponent.prototype as any)._push = function (actor: Actor, arg2: Actor | Vec3, pushSelfOnly?: boolean) {
+    if (arg2 instanceof Vec3) {
+        pushActorByVec(actor, arg2);
     } else {
-        return PushableComponent$pushByPos(this, entity, entityOrVec as Vec3);
+        pushActorByActor(actor, arg2, !!pushSelfOnly);
     }
 };
 ShooterComponent.prototype.shootProjectile = procHacker.js(

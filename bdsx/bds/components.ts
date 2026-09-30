@@ -244,19 +244,29 @@ export class ContainerComponent extends AbstractClass {
     }
 }
 /**
- * defines what can push an entity between other entities and pistons.
+ * present when other entities can push this one (`is_pushable` of "minecraft:pushable").
+ * BDS 1.26 split 2024's PushableComponent into this and {@link PushableByBlockComponent}; an actor holds this one
+ * only while it is pushable, so there is no flag to read.
  */
 @nativeClass(null)
-export class PushableComponent extends AbstractClass {
-    push(actor: Actor, pos: Vec3): void;
-    push(actor: Actor, actor2: Actor, bool: boolean): void;
-    push(actor: Actor, arg2: Vec3 | Actor, arg3?: bool_t): void {
+export class PushableByEntityComponent extends AbstractClass {
+    /** adds `vec` to the actor's motion (boats and minecarts take their own path) */
+    push(actor: Actor, vec: Vec3): void;
+    /** pushes `actor` away from `other`, and `other` away from `actor` when it is pushable too */
+    push(actor: Actor, other: Actor, pushSelfOnly: boolean): void;
+    push(actor: Actor, arg2: Vec3 | Actor, arg3?: boolean): void {
         this._push(actor, arg2, arg3);
     }
-    protected _push(actor: Actor, arg2: Vec3 | Actor, arg3?: bool_t): void {
+    protected _push(actor: Actor, arg2: Vec3 | Actor, arg3?: boolean): void {
         abstract();
     }
 }
+/**
+ * present when pistons can push this entity (`is_pushable_by_piston` of "minecraft:pushable").
+ * An empty tag in BDS 1.26: holding it is all it says, and every holder shares one stand-in object.
+ */
+@nativeClass(null)
+export class PushableByBlockComponent extends AbstractClass {}
 /**
  * defines the entity's ranged attack behavior.
  */

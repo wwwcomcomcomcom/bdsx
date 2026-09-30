@@ -22,7 +22,8 @@ import type {
     NpcComponent,
     PhysicsComponent,
     ProjectileComponent,
-    PushableComponent,
+    PushableByBlockComponent,
+    PushableByEntityComponent,
     RideableComponent,
     ShooterComponent,
 } from "./components";
@@ -1649,7 +1650,8 @@ interface ComponentsClassMap {
     "minecraft:npc": NpcComponent;
     "minecraft:rideable": RideableComponent;
     "minecraft:container": ContainerComponent;
-    "minecraft:pushable": PushableComponent;
+    "minecraft:pushable_by_entity": PushableByEntityComponent;
+    "minecraft:pushable_by_block": PushableByBlockComponent;
     "minecraft:shooter": ShooterComponent;
     "minecraft:conditional_bandwidth_optimization": ConditionalBandwidthOptimizationComponent;
 }
