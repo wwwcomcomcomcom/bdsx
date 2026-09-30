@@ -3,6 +3,7 @@ import { chestIsLarge, chestOpenBy, chestPairedPosition } from "./engine/chest";
 import { blockActorGetContainer, blockActorGetCustomName, blockActorSetCustomName, withRedactableString } from "./engine/blockactor";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
+import { entityContextIdBuffer, entityContextIsValid, entityContextRegistry, storageHasValue, storageStackRef } from "./engine/entitycontext";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
@@ -1974,9 +1975,40 @@ CommandBlockComponent.prototype.addAdditionalSaveData = procHacker.js(
     { this: CommandBlockComponent },
     CompoundTag,
 );
-CommandBlockComponent.prototype.getTicking = procHacker.js("?getTicking@CommandBlockComponent@@QEBA_NXZ", bool_t, { this: CommandBlockComponent });
-CommandBlockComponent.prototype.setTicking = procHacker.js("?setTicking@CommandBlockComponent@@QEAAX_N@Z", void_t, { this: CommandBlockComponent }, bool_t);
-CommandBlockComponent.prototype.resetCurrentTicking = procHacker.js("?resetCurrentTick@CommandBlockComponent@@QEAAXXZ", void_t, { this: CommandBlockComponent });
+// 1.26 has no out-of-line copy of these three. 2024's bodies (0x577460, 0x57a3e0, 0x579ca0) are field accesses over the BaseCommandBlock
+// at the component's start: ticking flag (2024 +0x9c), current tick count (+0x98), tick delay (+0x90), execute-on-first-tick (+0x94).
+// 1.26's addAdditionalSaveData reads ticking at +0xc4 and the count at +0xc0 (findings-nbt.md section 15); the two BaseCommandBlock
+// fields shifted with them (+0xb8, +0xbc), which the engine's own load sets and bdsx reads back (docs/findings-inventory.md section 16).
+const CBC_TICKING = engineLayout("CommandBlockComponent", "ticking", 0xc4);
+const CBC_CURRENT_TICK = engineLayout("CommandBlockComponent", "currentTick", 0xc0);
+const CBC_TICK_DELAY = engineLayout("CommandBlockComponent", "tickDelay", 0xb8);
+const CBC_ON_FIRST_TICK = engineLayout("CommandBlockComponent", "executeOnFirstTick", 0xbc);
+CommandBlockComponent.prototype.getTicking = derived(
+    "?getTicking@CommandBlockComponent@@QEBA_NXZ",
+    function (this: CommandBlockComponent): boolean {
+        return (this as unknown as StaticPointer).getUint8(CBC_TICKING) !== 0;
+    },
+    () => procHacker.js("?getTicking@CommandBlockComponent@@QEBA_NXZ", bool_t, { this: CommandBlockComponent }),
+);
+CommandBlockComponent.prototype.setTicking = derived(
+    "?setTicking@CommandBlockComponent@@QEAAX_N@Z",
+    function (this: CommandBlockComponent, ticking: boolean): void {
+        const self = this as unknown as StaticPointer;
+        self.setUint8(ticking ? 1 : 0, CBC_TICKING);
+        if (ticking) return;
+        // not ticking any more: the counter goes back to its start, 0 when the block runs on its first tick, else the delay
+        self.setInt32(self.getUint8(CBC_ON_FIRST_TICK) !== 0 ? 0 : self.getInt32(CBC_TICK_DELAY), CBC_CURRENT_TICK);
+    },
+    () => procHacker.js("?setTicking@CommandBlockComponent@@QEAAX_N@Z", void_t, { this: CommandBlockComponent }, bool_t),
+);
+CommandBlockComponent.prototype.resetCurrentTicking = derived(
+    "?resetCurrentTick@CommandBlockComponent@@QEAAXXZ",
+    function (this: CommandBlockComponent): void {
+        const self = this as unknown as StaticPointer;
+        self.setInt32(self.getInt32(CBC_TICK_DELAY), CBC_CURRENT_TICK);
+    },
+    () => procHacker.js("?resetCurrentTick@CommandBlockComponent@@QEAAXXZ", void_t, { this: CommandBlockComponent }),
+);
 
 // 1.26 nameEntity (40 0x2d8e0d0 / 51 0x23f1a60) takes the name as a Bedrock::Safety::RedactableString const& (its first callee is the
 // RedactableString overload of setNameTag), so the 2024 decoration with std::string no longer describes it: it ships under a
@@ -2377,9 +2409,18 @@ Mob.prototype.getToughnessValue = function () {
 Mob.prototype.isBlocking = procHacker.jsv("??_7Mob@@6B@", "?isBlocking@Mob@@UEBA_NXZ", bool_t, { this: Mob });
 Mob.prototype.shouldDropDeathLoot = procHacker.jsv("??_7Mob@@6B@", "?shouldDropDeathLoot@Mob@@UEBA_NXZ", bool_t, { this: Mob });
 
-OwnerStorageEntity.prototype._getStackRef = procHacker.js("?_getStackRef@OwnerStorageEntity@@IEBAAEAVEntityContext@@XZ", EntityContext, {
-    this: OwnerStorageEntity,
-});
+// 1.26 keeps no out-of-line copy of the optional-shaped entity storages (engine/entitycontext.ts): 2024's body is optional::value
+// over an engaged flag at +0x18, so the context is the storage itself.
+OwnerStorageEntity.prototype._getStackRef = derived(
+    "?_getStackRef@OwnerStorageEntity@@IEBAAEAVEntityContext@@XZ",
+    function (this: OwnerStorageEntity): EntityContext {
+        return storageStackRef(this as unknown as StaticPointer).as(EntityContext);
+    },
+    () =>
+        procHacker.js("?_getStackRef@OwnerStorageEntity@@IEBAAEAVEntityContext@@XZ", EntityContext, {
+            this: OwnerStorageEntity,
+        }),
+);
 // Actor / Player / ServerPlayer ::tryGetFromEntity (docs/findings-components.md, "tryGetFromEntity").
 // 1.26 keeps no out-of-line copy of any of them. The 2024 bodies (0x19ca400, 0x19ece30, 0xcd8660) are
 // try_get<ActorOwnerComponent> -> the unique_ptr<Actor> it holds -> null if removed unless asked, and
@@ -2592,7 +2633,7 @@ SynchedActorDataEntityWrapper.prototype.getInt = procHacker.js(
 }
 
 @nativeClass(0x20)
-class StackResultStorageEntity extends NativeClass {
+export class StackResultStorageEntity extends NativeClass {
     constructWith(weakEntityRef: WeakEntityRef): void {
         abstract();
     }
@@ -2609,10 +2650,23 @@ StackResultStorageEntity.prototype.constructWith = procHacker.js(
     { this: StackResultStorageEntity },
     WeakEntityRef,
 );
-StackResultStorageEntity.prototype._hasValue = procHacker.js("?_hasValue@StackResultStorageEntity@@IEBA_NXZ", bool_t, { this: StackResultStorageEntity });
-StackResultStorageEntity.prototype._getStackRef = procHacker.js("?_getStackRef@StackResultStorageEntity@@IEBAAEAVEntityContext@@XZ", EntityContext, {
-    this: StackResultStorageEntity,
-});
+StackResultStorageEntity.prototype._hasValue = derived(
+    "?_hasValue@StackResultStorageEntity@@IEBA_NXZ",
+    function (this: StackResultStorageEntity): boolean {
+        return storageHasValue(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("?_hasValue@StackResultStorageEntity@@IEBA_NXZ", bool_t, { this: StackResultStorageEntity }),
+);
+StackResultStorageEntity.prototype._getStackRef = derived(
+    "?_getStackRef@StackResultStorageEntity@@IEBAAEAVEntityContext@@XZ",
+    function (this: StackResultStorageEntity): EntityContext {
+        return storageStackRef(this as unknown as StaticPointer).as(EntityContext);
+    },
+    () =>
+        procHacker.js("?_getStackRef@StackResultStorageEntity@@IEBAAEAVEntityContext@@XZ", EntityContext, {
+            this: StackResultStorageEntity,
+        }),
+);
 
 WeakEntityRef.prototype.tryUnwrap = function <T extends typeof Actor>(clazz: T, getRemoved: boolean = false): InstanceType<T> | null {
     if (!("??0StackResultStorageEntity@@IEAA@AEBVWeakStorageEntity@@@Z" in proc)) {
@@ -2704,7 +2758,14 @@ ActorDamageSource.prototype.getDamagingEntityUniqueID = procHacker.jsv(
     ActorUniqueID,
     { this: ActorDamageSource, structureReturn: true },
 );
-ActorDamageSource.prototype.setCause = procHacker.js("?setCause@ActorDamageSource@@QEAAXW4ActorDamageCause@@@Z", void_t, { this: ActorDamageSource }, int32_t);
+// 2024 body (0x5bacf0): `mov [rcx+8], edx`. The cause is at +8 in 1.26 too (the constructor above stores it there).
+ActorDamageSource.prototype.setCause = derived(
+    "?setCause@ActorDamageSource@@QEAAXW4ActorDamageCause@@@Z",
+    function (this: ActorDamageSource, cause: ActorDamageCause): void {
+        (this as unknown as StaticPointer).setInt32(cause, 8);
+    },
+    () => procHacker.js("?setCause@ActorDamageSource@@QEAAXW4ActorDamageCause@@@Z", void_t, { this: ActorDamageSource }, int32_t),
+);
 
 ActorDamageByActorSource.prototype[NativeType.dtor] = procHacker.js("??1ActorDamageByActorSource@@UEAA@XZ", void_t, { this: ActorDamageByActorSource });
 const ActorDamageByActorSource$ActorDamageByActorSource = procHacker.js(
@@ -3095,16 +3156,39 @@ class UserEntityIdentifierComponent extends NativeClass {
     uuid: mce.UUID;
 }
 
-EntityContext.prototype.isValid = procHacker.js("?isValid@EntityContext@@QEBA_NXZ", bool_t, {
-    this: EntityContext,
-});
-EntityContext.prototype._enttRegistry = procHacker.js("?_registry@EntityContext@@QEBAAEAVEntityRegistry@@XZ", VoidPointer, {
-    this: EntityContext,
-});
-EntityContext.prototype._getEntityId = procHacker.js("?_getEntityId@EntityContext@@IEBA?AVEntityId@@XZ", VoidPointer, {
-    this: EntityContext,
-    structureReturn: true,
-});
+// EntityContext (engine/entitycontext.ts): EntityRegistry& +0, the entt registry +8, the id +0x10. 1.26 keeps no out-of-line copy
+// of any of the three accessors.
+EntityContext.prototype.isValid = derived(
+    "?isValid@EntityContext@@QEBA_NXZ",
+    function (this: EntityContext): boolean {
+        return entityContextIsValid(this as unknown as StaticPointer);
+    },
+    () =>
+        procHacker.js("?isValid@EntityContext@@QEBA_NXZ", bool_t, {
+            this: EntityContext,
+        }),
+);
+EntityContext.prototype._enttRegistry = derived(
+    "?_registry@EntityContext@@QEBAAEAVEntityRegistry@@XZ",
+    function (this: EntityContext): VoidPointer {
+        return entityContextRegistry(this as unknown as StaticPointer);
+    },
+    () =>
+        procHacker.js("?_registry@EntityContext@@QEBAAEAVEntityRegistry@@XZ", VoidPointer, {
+            this: EntityContext,
+        }),
+);
+EntityContext.prototype._getEntityId = derived(
+    "?_getEntityId@EntityContext@@IEBA?AVEntityId@@XZ",
+    function (this: EntityContext): VoidPointer {
+        return entityContextIdBuffer(this as unknown as StaticPointer);
+    },
+    () =>
+        procHacker.js("?_getEntityId@EntityContext@@IEBA?AVEntityId@@XZ", VoidPointer, {
+            this: EntityContext,
+            structureReturn: true,
+        }),
+);
 
 // 1.26 has no out-of-line try_get for it; the component is 592 bytes with the NetworkIdentifier first
 // (data/candidates-instances-<v>.json offsets.UserEntityIdentifierComponent, docs/findings-packets.md).
