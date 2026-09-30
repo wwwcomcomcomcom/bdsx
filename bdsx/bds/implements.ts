@@ -36,6 +36,7 @@ import {
     itemIsHorseArmor,
     ITEM_SLOTS,
     itemSlotCall,
+    ITEM_GET_COOLDOWN_TYPE_SLOT,
     itemDestroySpeed,
     itemIsFireResistant,
     itemRawNameId,
@@ -60,6 +61,9 @@ import { itemDescriptorConstruct, itemDescriptorCopy, itemDescriptorDestruct, ne
 import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from "./engine/itemcomponent";
 import {
     BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT,
+    BLOCK_TYPE_BUILD_DESCRIPTION_ID_SLOT,
+    BLOCK_PALETTE_GET_BLOCK_SLOT,
+    virtualFunction,
     BLOCK_TYPE_SLOTS,
     blockActorSetChanged,
     blockActorType,
@@ -662,13 +666,19 @@ JsonUtil.getBlockLegacy = derived<(name: string) => BlockLegacy>(
         ),
 );
 
-BlockPalette.prototype.getBlock = procHacker.jsv(
-    "??_7BlockPalette@@6B@",
-    "?getBlock@BlockPalette@@UEBAAEBVBlock@@AEBI@Z",
-    Block,
-    { this: BlockPalette },
-    uint32_t.ref(),
-);
+// a virtual (slot 3 on 2024 and both 1.26 builds) called through the palette's own vptr: 1.26's tables do not name
+// ??_7BlockPalette@@6B@'s derived tables, and a Hashed palette's body differs from the Sequential one's (engine/blocktype.ts)
+const BlockPalette$getBlockCalls = new Map<string, (this: BlockPalette, runtimeId: number) => Block>();
+BlockPalette.prototype.getBlock = function (this: BlockPalette, runtimeId: number): Block {
+    const fn = virtualFunction(this as any as StaticPointer, BLOCK_PALETTE_GET_BLOCK_SLOT);
+    const key = fn.toString();
+    let call = BlockPalette$getBlockCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, Block, { this: BlockPalette }, uint32_t.ref()) as any;
+        BlockPalette$getBlockCalls.set(key, call!);
+    }
+    return call!.call(this, runtimeId);
+};
 
 // 1.26: Spawner has a vftable (Endstone spawner.h: spawnMob is slot 8, spawnItem slot 9, spawnProjectile 10) and 2024's
 // non-virtual pair became those virtuals, so the address ships under bdsx: keys (docs/findings-inventory.md "moved")
@@ -4557,7 +4567,18 @@ Item.prototype.isArmor = derived(
 );
 Item.prototype.getArmorValue = procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?getArmorValue@HumanoidArmorItem@@UEBAHXZ", int32_t, { this: Item });
 Item.prototype.getToughnessValue = procHacker.jsv("??_7HumanoidArmorItem@@6B@", "?getToughnessValue@HumanoidArmorItem@@UEBAHXZ", int32_t, { this: Item });
-Item.prototype.getCooldownType = procHacker.jsv("??_7Item@@6B@", "?getCooldownType@Item@@UEBAAEBVHashedString@@XZ", HashedString, { this: Item });
+// a virtual, slot 103 on both 1.26 builds (2024: 90), through the item's own vptr (engine/item.ts)
+const Item$getCooldownTypeCalls = new Map<string, (this: Item) => HashedString>();
+Item.prototype.getCooldownType = function (this: Item): HashedString {
+    const fn = (this as any as StaticPointer).getPointer(0).getPointer(ITEM_GET_COOLDOWN_TYPE_SLOT * 8);
+    const key = fn.toString();
+    let call = Item$getCooldownTypeCalls.get(key);
+    if (call === undefined) {
+        call = makefunc.js(fn, HashedString, { this: Item }) as any;
+        Item$getCooldownTypeCalls.set(key, call!);
+    }
+    return call!.call(this);
+};
 // a virtual: 1.26's tables do not name ??_7ComponentItem@@6B@, which jsv needs to find the slot, so the engine layer calls
 // the slot (layouts.Item.canDestroyInCreativeSlot) through the item's own table (engine/item.ts)
 Item.prototype.canDestroyInCreative =
@@ -6020,25 +6041,13 @@ BlockLegacy.prototype.use = derived(
 );
 // through the block type's own vftable (engine/blocktype.ts: slot 77 on both 1.26 builds), so an override answers too
 let BlockLegacy$asItemInstance: ((this: BlockLegacy, block: Block, blockActor: BlockActor | null) => ItemStackBase) | null = null;
-BlockLegacy.prototype.asItemInstance = derived(
-    "?asItemInstance@BlockLegacy@@UEBA?AVItemInstance@@AEBVBlock@@PEBVBlockActor@@@Z",
-    function (this: BlockLegacy, block: Block, blockActor: BlockActor | null = null): ItemStackBase {
-        if (BlockLegacy$asItemInstance === null) {
-            if (BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT < 0) throw Error("BlockLegacy::asItemInstance: no slot in this build");
-            BlockLegacy$asItemInstance = makefunc.js([BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT * 8], ItemStackBase, { this: BlockLegacy, structureReturn: true }, Block, BlockActor);
-        }
-        return BlockLegacy$asItemInstance.call(this, block, blockActor);
-    },
-    () =>
-        procHacker.jsv(
-            "??_7BlockLegacy@@6B@",
-            "?asItemInstance@BlockLegacy@@UEBA?AVItemInstance@@AEBVBlock@@PEBVBlockActor@@@Z",
-            ItemStackBase,
-            { this: BlockLegacy, structureReturn: true },
-            Block,
-            BlockActor,
-        ),
-);
+// (2024's slot is the engineLayout fallback, so one body serves every build and no vftable name is needed)
+BlockLegacy.prototype.asItemInstance = function (this: BlockLegacy, block: Block, blockActor: BlockActor | null = null): ItemStackBase {
+    if (BlockLegacy$asItemInstance === null) {
+        BlockLegacy$asItemInstance = makefunc.js([BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT * 8], ItemStackBase, { this: BlockLegacy, structureReturn: true }, Block, BlockActor);
+    }
+    return BlockLegacy$asItemInstance.call(this, block, blockActor);
+};
 BlockLegacy.prototype.getSilkTouchedItemInstance = function (block) {
     return this.asItemInstance(this.getRenderBlock());
 };
@@ -6171,10 +6180,29 @@ Block.prototype.isUnbreakable = derived(
     },
     () => procHacker.js("?isUnbreakable@Block@@QEBA_NXZ", bool_t, { this: Block }),
 );
-Block.prototype.buildDescriptionId = procHacker.js("?buildDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: Block,
-    structureReturn: true,
-});
+// 2024 0x1ba5bc0: BlockDisplayNameComponent's string when the type has that component, else the type's virtual
+// buildDescriptionId(Block const&) (slot 119; 97 on 1.26, engine/blocktype.ts). The component is not read here
+// (docs/findings-inventory.md section 23), so a custom block's display-name override is not seen
+const Block$buildDescriptionIdCalls = new Map<string, (this: BlockLegacy, block: Block) => string>();
+Block.prototype.buildDescriptionId = derived(
+    "?buildDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function (this: Block): string {
+        const legacy = this.blockLegacy;
+        const fn = virtualFunction(legacy as any as StaticPointer, BLOCK_TYPE_BUILD_DESCRIPTION_ID_SLOT);
+        const key = fn.toString();
+        let call = Block$buildDescriptionIdCalls.get(key);
+        if (call === undefined) {
+            call = makefunc.js(fn, CxxString, { this: BlockLegacy, structureReturn: true }, Block) as any;
+            Block$buildDescriptionIdCalls.set(key, call!);
+        }
+        return call!.call(legacy, this);
+    },
+    () =>
+        procHacker.js("?buildDescriptionId@Block@@QEBA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
+            this: Block,
+            structureReturn: true,
+        }),
+);
 Block.prototype.isCropBlock = derived<(this: Block) => boolean>(
     "?isCropBlock@Block@@QEBA_NXZ",
     function (this: Block): boolean {

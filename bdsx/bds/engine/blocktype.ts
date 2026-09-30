@@ -178,7 +178,28 @@ export function blockActorSetChanged(blockActor: StaticPointer): void {
  * default_state_ (+0x240, Endstone +576) with count 1 and no tag into the return slot, ignoring both arguments -- 2024's
  * BlockLegacy::asItemInstance (0x1be8270: ItemInstance(mDefaultState, 1, nullptr)). docs/findings-blocks.md "asItemInstance".
  */
-export const BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT = engineLayout("BlockLegacy", "asItemInstanceSlot", -1);
+export const BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT = engineLayout("BlockLegacy", "asItemInstanceSlot", 96);
+
+/**
+ * BlockType::buildDescriptionId(Block const&) -> std::string is a virtual: slot 97 on both 1.26 builds (2024: 119, 0x3b8).
+ * The base body (40 0x1eec8b0) copies description_id_ (+8) and appends ".name" (the five bytes at 40 0xa8e354a), reading
+ * neither the Block nor r8; overrides answer through the type's own vftable. 2024's Block::buildDescriptionId was
+ * `BlockDisplayNameComponent string, else legacy->vf[119](out, block)`. docs/findings-inventory.md section 23.
+ */
+export const BLOCK_TYPE_BUILD_DESCRIPTION_ID_SLOT = engineLayout("BlockLegacy", "buildDescriptionIdSlot", 119);
+
+/**
+ * BlockPalette::getBlock(uint const& runtimeId) is a virtual: slot 3 on both 2024 and 1.26 (dtor, getPaletteType, appendBlock,
+ * getBlock, assignBlockNetworkId; Endstone block_palette.h). The table ??_7BlockPalette@@6B@ is only the base's: the live
+ * palettes carry their own vptr (a Sequential one reads the vector at +0x68, a Hashed one walks a map at +0x88 first), so the
+ * call goes through the object's vptr. docs/findings-inventory.md section 23.
+ */
+export const BLOCK_PALETTE_GET_BLOCK_SLOT = engineLayout("BlockPalette", "getBlockSlot", 3);
+
+/** the function at `slot` of the object's own vftable */
+export function virtualFunction(obj: StaticPointer, slot: number): NativePointer {
+    return obj.getPointer(0).getPointer(slot * 8);
+}
 
 /**
  * BlockType virtuals Block forwarded to in 2024 (`block_type_->vf(...)`, all inlined by 1.26), by slot on both builds:

@@ -366,3 +366,11 @@ export function itemDestroySpeed(item: StaticPointer, stack: VoidPointer, block:
     }
     return call(item, stack, block);
 }
+
+/**
+ * Item::getCooldownType() -> HashedString const& is a virtual: slot 103 on both 1.26 builds (2024: 90, where 0x1cab770 read
+ * the item's +0x210 component and returned its +0x48 string or the empty HashedString). Player::startCooldown (40 0x21d850,
+ * 51 0x2ac040) calls `item->vf[0x338](item)`, namespaces the result with "minecraft" and, when the string is not empty,
+ * calls slot 104 (getCooldownTime). docs/findings-slots.md "startCooldown", findings-inventory.md section 23.
+ */
+export const ITEM_GET_COOLDOWN_TYPE_SLOT = engineLayout("Item", "getCooldownTypeSlot", 90);
