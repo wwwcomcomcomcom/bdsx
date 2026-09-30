@@ -1,5 +1,6 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
+import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
@@ -1779,7 +1780,16 @@ const getNameableComponent = derived<(actor: Actor) => NameableComponent>(
     },
     () => procHacker.js("??$tryGetComponent@VNameableComponent@@@Actor@@QEAAPEAVNameableComponent@@XZ", NameableComponent, null, Actor),
 );
-const getNavigationComponent = procHacker.js("??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ", NavigationComponent, null, Actor);
+// 1.26 has no out-of-line try_get for it (docs/findings-navigation.md): an EnTT element of 0x60 bytes on both builds (hash fnv1a
+// "NavigationComponent"; 2024: 0x70).
+const getNavigationComponent = derived<(actor: Actor) => NavigationComponent>(
+    "??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ",
+    function tryGetNavigationComponent(actor: Actor): NavigationComponent {
+        const component = navigationComponent(actor);
+        return component === null ? (null as any) : component.as(NavigationComponent);
+    },
+    () => procHacker.js("??$tryGetComponent@VNavigationComponent@@@Actor@@QEAAPEAVNavigationComponent@@XZ", NavigationComponent, null, Actor),
+);
 const getNpcComponent = derived<(actor: Actor) => NpcComponent>(
     "??$tryGetComponent@VNpcComponent@@@Actor@@QEAAPEAVNpcComponent@@XZ",
     function tryGetNpcComponent(actor: Actor): NpcComponent {
@@ -1925,21 +1935,40 @@ NameableComponent.prototype.nameEntity = procHacker.js(
     Actor,
     CxxString,
 );
-const NavigationComponent$$createPath$$Actor = procHacker.js(
+// 1.26 (docs/findings-navigation.md): every accessor is a field read of the 0x60-byte component (bit field at +0, speed +0x14, tick pair
+// +4/+0xc, last stuck position +0x1c, the navigation object +0x50, the owned Path +0x58) and the three that ran path code are slots
+// 4/5/9 of the navigation object's vftable (engine/navigation.ts).
+const NavigationComponent$$createPath$$Actor = derived<(component: NavigationComponent, mob: Actor, target: Actor) => Path>(
     "?createPath@NavigationComponent@@QEAA?AV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@AEAVMob@@AEAVActor@@@Z",
-    Path.ref(),
-    null,
-    NavigationComponent,
-    Actor,
-    Actor,
+    function (component: NavigationComponent, mob: Actor, target: Actor): Path {
+        const path = navigationCreatePath(component, mob as Mob, target, false);
+        return path === null ? (null as any) : path.as(Path);
+    },
+    () =>
+        procHacker.js(
+            "?createPath@NavigationComponent@@QEAA?AV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@AEAVMob@@AEAVActor@@@Z",
+            Path.ref(),
+            null,
+            NavigationComponent,
+            Actor,
+            Actor,
+        ),
 );
-const NavigationComponent$$createPath$$Vec3 = procHacker.js(
+const NavigationComponent$$createPath$$Vec3 = derived<(component: NavigationComponent, mob: Actor, target: Vec3) => Path>(
     "?createPath@NavigationComponent@@QEAA?AV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@AEAVMob@@AEBVVec3@@@Z",
-    Path.ref(),
-    null,
-    NavigationComponent,
-    Actor,
-    Vec3,
+    function (component: NavigationComponent, mob: Actor, target: Vec3): Path {
+        const path = navigationCreatePath(component, mob as Mob, target, true);
+        return path === null ? (null as any) : path.as(Path);
+    },
+    () =>
+        procHacker.js(
+            "?createPath@NavigationComponent@@QEAA?AV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@AEAVMob@@AEBVVec3@@@Z",
+            Path.ref(),
+            null,
+            NavigationComponent,
+            Actor,
+            Vec3,
+        ),
 );
 (NavigationComponent.prototype as any)._createPath = function (component: NavigationComponent, actor: Actor, target: Actor | Vec3): Path {
     if (target instanceof Actor) {
@@ -1948,32 +1977,104 @@ const NavigationComponent$$createPath$$Vec3 = procHacker.js(
         return NavigationComponent$$createPath$$Vec3(component, actor, target);
     }
 };
-NavigationComponent.prototype.setPath = procHacker.js(
+NavigationComponent.prototype.setPath = derived(
     "?setPath@NavigationComponent@@QEAAXV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@@Z",
-    void_t,
-    { this: NavigationComponent },
-    Path.ref(),
+    function (this: NavigationComponent, path: Path): void {
+        navigationSetPath(this, path as any);
+    },
+    () => procHacker.js("?setPath@NavigationComponent@@QEAAXV?$unique_ptr@VPath@@U?$default_delete@VPath@@@std@@@std@@@Z", void_t, { this: NavigationComponent }, Path.ref()),
 );
-NavigationComponent.prototype.stop = procHacker.js("?stop@NavigationComponent@@QEAAXAEAVMob@@@Z", void_t, { this: NavigationComponent }, Mob);
-NavigationComponent.prototype.getMaxDistance = procHacker.js(
+NavigationComponent.prototype.stop = derived(
+    "?stop@NavigationComponent@@QEAAXAEAVMob@@@Z",
+    function (this: NavigationComponent, mob: Mob): void {
+        navigationStop(this, mob);
+    },
+    () => procHacker.js("?stop@NavigationComponent@@QEAAXAEAVMob@@@Z", void_t, { this: NavigationComponent }, Mob),
+);
+NavigationComponent.prototype.getMaxDistance = derived(
     "?getMaxDistance@NavigationComponent@@QEBAMAEBVActor@@@Z",
-    float32_t,
-    { this: NavigationComponent },
-    Actor,
+    function (this: NavigationComponent, actor: Actor): number {
+        return navigationOwn.getMaxDistance(actor);
+    },
+    () => procHacker.js("?getMaxDistance@NavigationComponent@@QEBAMAEBVActor@@@Z", float32_t, { this: NavigationComponent }, Actor),
 );
-NavigationComponent.prototype.isDone = procHacker.js("?isDone@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent });
-NavigationComponent.prototype.getSpeed = procHacker.js("?getSpeed@NavigationComponent@@QEBAMXZ", float32_t, { this: NavigationComponent });
-NavigationComponent.prototype.getAvoidSun = procHacker.js("?getAvoidSun@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent });
-NavigationComponent.prototype.getCanFloat = procHacker.js("?getCanFloat@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent });
-NavigationComponent.prototype.getCanPathOverLava = procHacker.js("?getCanPathOverLava@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent });
-NavigationComponent.prototype.getLastStuckCheckPosition = procHacker.js("?getLastStuckCheckPosition@NavigationComponent@@QEBA?AVVec3@@XZ", Vec3, {
-    this: NavigationComponent,
-});
-NavigationComponent.prototype.isStuck = procHacker.js("?isStuck@NavigationComponent@@QEBA_NH@Z", bool_t, { this: NavigationComponent }, int32_t);
-NavigationComponent.prototype.setCanFloat = procHacker.js("?setCanFloat@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t);
-NavigationComponent.prototype.setAvoidWater = procHacker.js("?setAvoidWater@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t);
-NavigationComponent.prototype.setAvoidSun = procHacker.js("?setAvoidSun@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t);
-NavigationComponent.prototype.setSpeed = procHacker.js("?setSpeed@NavigationComponent@@QEAAXM@Z", void_t, { this: NavigationComponent }, float32_t);
+NavigationComponent.prototype.isDone = derived(
+    "?isDone@NavigationComponent@@QEBA_NXZ",
+    function (this: NavigationComponent): boolean {
+        return navigationOwn.isDone(this);
+    },
+    () => procHacker.js("?isDone@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.getSpeed = derived(
+    "?getSpeed@NavigationComponent@@QEBAMXZ",
+    function (this: NavigationComponent): number {
+        return navigationOwn.getSpeed(this);
+    },
+    () => procHacker.js("?getSpeed@NavigationComponent@@QEBAMXZ", float32_t, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.getAvoidSun = derived(
+    "?getAvoidSun@NavigationComponent@@QEBA_NXZ",
+    function (this: NavigationComponent): boolean {
+        return navigationOwn.getAvoidSun(this);
+    },
+    () => procHacker.js("?getAvoidSun@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.getCanFloat = derived(
+    "?getCanFloat@NavigationComponent@@QEBA_NXZ",
+    function (this: NavigationComponent): boolean {
+        return navigationOwn.getCanFloat(this);
+    },
+    () => procHacker.js("?getCanFloat@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.getCanPathOverLava = derived(
+    "?getCanPathOverLava@NavigationComponent@@QEBA_NXZ",
+    function (this: NavigationComponent): boolean {
+        return navigationOwn.getCanPathOverLava(this);
+    },
+    () => procHacker.js("?getCanPathOverLava@NavigationComponent@@QEBA_NXZ", bool_t, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.getLastStuckCheckPosition = derived(
+    "?getLastStuckCheckPosition@NavigationComponent@@QEBA?AVVec3@@XZ",
+    function (this: NavigationComponent): Vec3 {
+        return navigationOwn.getLastStuckCheckPosition(this);
+    },
+    () => procHacker.js("?getLastStuckCheckPosition@NavigationComponent@@QEBA?AVVec3@@XZ", Vec3, { this: NavigationComponent }),
+);
+NavigationComponent.prototype.isStuck = derived(
+    "?isStuck@NavigationComponent@@QEBA_NH@Z",
+    function (this: NavigationComponent, t: number): boolean {
+        return navigationOwn.isStuck(this, t);
+    },
+    () => procHacker.js("?isStuck@NavigationComponent@@QEBA_NH@Z", bool_t, { this: NavigationComponent }, int32_t),
+);
+NavigationComponent.prototype.setCanFloat = derived(
+    "?setCanFloat@NavigationComponent@@QEAAX_N@Z",
+    function (this: NavigationComponent, v: boolean): void {
+        navigationOwn.setCanFloat(this, v);
+    },
+    () => procHacker.js("?setCanFloat@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t),
+);
+NavigationComponent.prototype.setAvoidWater = derived(
+    "?setAvoidWater@NavigationComponent@@QEAAX_N@Z",
+    function (this: NavigationComponent, v: boolean): void {
+        navigationOwn.setAvoidWater(this, v);
+    },
+    () => procHacker.js("?setAvoidWater@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t),
+);
+NavigationComponent.prototype.setAvoidSun = derived(
+    "?setAvoidSun@NavigationComponent@@QEAAX_N@Z",
+    function (this: NavigationComponent, v: boolean): void {
+        navigationOwn.setAvoidSun(this, v);
+    },
+    () => procHacker.js("?setAvoidSun@NavigationComponent@@QEAAX_N@Z", void_t, { this: NavigationComponent }, bool_t),
+);
+NavigationComponent.prototype.setSpeed = derived(
+    "?setSpeed@NavigationComponent@@QEAAXM@Z",
+    function (this: NavigationComponent, v: number): void {
+        navigationOwn.setSpeed(this, v);
+    },
+    () => procHacker.js("?setSpeed@NavigationComponent@@QEAAXM@Z", void_t, { this: NavigationComponent }, float32_t),
+);
 
 // 2024's body: passengers of the ride (ActorRiding::getPassengers) >= the int at component+0. 1.26 reads the same
 // two things in the core of canAddPassenger (40 0x1aff9d0: `movslq (%rsi)` against the VehicleComponent's vector size >> 4),
