@@ -145,3 +145,32 @@ export function networkConnectionFromId(system: StaticPointer, id: StaticPointer
     }
     return null;
 }
+
+/**
+ * ServerNetworkHandler::fetchConnectionRequest (docs/findings-inventory.md section 19).
+ *
+ * 2024 0x8859d0 found the NetworkIdentifier in a hash map, took the value's Client (node +0xb0) and returned `*client`, the
+ * `primary_request_` unique_ptr at Client +0. Endstone's server_network_handler.h declares the same members for 1.26
+ * (`std::unordered_map<NetworkIdentifier, std::unique_ptr<Client>> clients_`, Client { primary_request_, ... }). 1.26 has no
+ * copy of the lookup, but `_getActiveAndInProgressPlayerCount` (40 0xa9bbe0, 51 0x9ae640) walks that map's node list: the
+ * std::list head pointer is at +0x58 on 40 / +0x60 on 51 (the map at +0x50 / +0x58), each node is { next +0, prev +8, pair +0x10 }
+ * with the NetworkIdentifier key at +0x10 (0xb0 bytes) and the unique_ptr<Client> at +0xc0. The lookup here walks that list,
+ * like the engine's own loop, and compares keys with the caller's equality. An identifier nobody holds gives null (2024 would
+ * have dereferenced the end node).
+ */
+const SNH_CLIENTS_LIST = engineLayout("ServerNetworkHandler", "clientsList", 0x58);
+const CLIENTS_NODE_KEY = 0x10;
+const CLIENTS_NODE_VALUE = engineLayout("ServerNetworkHandler", "clientNodeValue", 0xc0);
+export function serverNetworkHandlerPrimaryRequest(snh: StaticPointer, equalsKey: (key: StaticPointer) => boolean): StaticPointer | null {
+    const head = snh.getNullablePointer(SNH_CLIENTS_LIST);
+    if (head === null) return null;
+    let node = head.getNullablePointer(0);
+    while (node !== null && !node.equals(head)) {
+        if (equalsKey(node.add(CLIENTS_NODE_KEY))) {
+            const client = node.getNullablePointer(CLIENTS_NODE_VALUE);
+            return client === null ? null : client.getNullablePointer(0);
+        }
+        node = node.getNullablePointer(0);
+    }
+    return null;
+}

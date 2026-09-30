@@ -1701,7 +1701,12 @@ export class Command extends NativeClass {
         abstract();
     }
 }
-Command.isWildcard = procHacker.js("?isWildcard@Command@@KA_NAEBVCommandSelectorBase@@@Z", bool_t, null, CommandSelectorBase);
+// 2024 0xccbef0: hasName() and the name is Command::WILDCARD_TOKEN, which its static initializer (0x259b0) builds from "*"
+Command.isWildcard = derived(
+    "?isWildcard@Command@@KA_NAEBVCommandSelectorBase@@@Z",
+    (selectorBase: CommandSelectorBase<any>): boolean => selectorBase.hasName() && selectorBase.getName() === "*",
+    () => procHacker.js("?isWildcard@Command@@KA_NAEBVCommandSelectorBase@@@Z", bool_t, null, CommandSelectorBase),
+);
 
 const MobEffectClass = MobEffect;
 const ActorDefinitionIdentifierClass = ActorDefinitionIdentifier;

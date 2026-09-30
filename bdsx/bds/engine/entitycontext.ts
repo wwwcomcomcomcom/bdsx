@@ -72,6 +72,31 @@ export function entityContextIsValid(context: StaticPointer): boolean {
     return enttValid(entityContextEntt(context), entityContextId(context));
 }
 
+const ENTITY_REGISTRY_ENTT = engineLayout("EntityRegistry", "registry", 0x30);
+
+/**
+ * `StackResultStorageEntity(WeakStorageEntity const&)` (docs/findings-inventory.md section 19). 2024 0x2728c90: the flag starts clear;
+ * the weak storage must be set (`_isSet` 0x2728fb0: its control block at +8 is not null and the id's index bits are not the null
+ * marker), its registry (weak +0, a WeakRef<EntityRegistry>: pointer and control block) must lock (the use count at control +8 is
+ * not zero: a lock takes a strong reference and gives it back), and an EntityContext(registry, id) built from them must be valid;
+ * then the three context words are copied in and the flag set. A WeakEntityRef is { EntityRegistry* +0, control +8, EntityId +0x10 }
+ * (engine/entt.ts), and the entt registry inside an EntityRegistry is at +0x30.
+ */
+export function stackResultStorageConstruct(storage: StaticPointer, weak: StaticPointer): void {
+    storage.setUint8(0, STORAGE_ENGAGED);
+    const registry = weak.getNullablePointer(0);
+    const control = weak.getNullablePointer(8);
+    const id = weak.getUint32(0x10);
+    if (control === null || (id & INDEX_MASK) === INDEX_MASK) return; // _isSet
+    if (registry === null || control.getInt32(8) <= 0) return; // the weak reference does not lock: no strong owner left
+    const entt = registry.add(ENTITY_REGISTRY_ENTT);
+    if (!enttValid(entt, id)) return;
+    storage.setPointer(registry, CONTEXT_REGISTRY);
+    storage.setPointer(entt, CONTEXT_ENTT);
+    storage.setUint32(id, CONTEXT_ID);
+    storage.setUint8(1, STORAGE_ENGAGED);
+}
+
 /** the engaged flag of an optional<EntityContext> storage (OwnerStorageEntity, StackResultStorageEntity `_hasValue`) */
 export function storageHasValue(storage: StaticPointer): boolean {
     return storage.getUint8(STORAGE_ENGAGED) !== 0;

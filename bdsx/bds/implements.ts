@@ -3,13 +3,14 @@ import { chestIsLarge, chestOpenBy, chestPairedPosition } from "./engine/chest";
 import { blockActorGetContainer, blockActorGetCustomName, blockActorSetCustomName, withRedactableString } from "./engine/blockactor";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
-import { entityContextIdBuffer, entityContextIsValid, entityContextRegistry, storageHasValue, storageStackRef } from "./engine/entitycontext";
+import { entityContextIdBuffer, entityContextIsValid, entityContextRegistry, stackResultStorageConstruct, storageHasValue, storageStackRef } from "./engine/entitycontext";
+import { actorFeetY } from "./engine/commandfields";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/serverfields";
-import { copyLevelServerNetworkHandler, networkConnectionFromId, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
+import { copyLevelServerNetworkHandler, networkConnectionFromId, networkConnectionIds, serverMaxNumPlayers, serverNetworkHandlerPrimaryRequest, serverNetworkHandlerServerName, setMaxNumPlayersOwn } from "./engine/networkhandler";
 import { freezeOnHitReadJson } from "./engine/freezeonhit";
 import { gameplayUserManagerUsers, playerInputMode } from "./engine/worldfields";
 import { createSimulatedPlayer, simDisconnect, simInteractActor, simInteractBlock, simStopDestroyingBlock } from "./engine/simulatedplayer";
@@ -348,7 +349,20 @@ namespace CommandUtils {
         StaticPointer,
         VoidPointer,
     );
-    export const getFeetPos = procHacker.js("?getFeetPos@CommandUtils@@YA?AVVec3@@PEBVActor@@@Z", Vec3, { structureReturn: true }, Actor);
+    // 1.26 inlined it into the origins' getWorldPosition (engine/commandfields.ts): x and z of the position, y = the AABB's min.y,
+    // raised to the vehicle's; the zero vector for no actor
+    export const getFeetPos = derived(
+        "?getFeetPos@CommandUtils@@YA?AVVec3@@PEBVActor@@@Z",
+        (actor: Actor | null): Vec3 => {
+            if (actor === null) return Vec3.create(0, 0, 0);
+            const position = actor.getPosition();
+            let y = actorFeetY(actor as any as StaticPointer);
+            const vehicle = actor.getVehicle();
+            if (vehicle !== null) y = Math.max(y, actorFeetY(vehicle as any as StaticPointer));
+            return Vec3.create(position.x, y, position.z);
+        },
+        () => procHacker.js("?getFeetPos@CommandUtils@@YA?AVVec3@@PEBVActor@@@Z", Vec3, { structureReturn: true }, Actor),
+    );
 }
 
 namespace OnFireSystem {
@@ -628,11 +642,22 @@ LevelData.prototype.setLightningLevel = procHacker.js("?setLightningLevel@LevelD
 LevelData.prototype.getLightningTime = procHacker.js("?getLightningTime@LevelData@@QEBAHXZ", int32_t, { this: LevelData });
 LevelData.prototype.setLightningTime = procHacker.js("?setLightningTime@LevelData@@QEAAXH@Z", void_t, { this: LevelData }, int32_t);
 
-JsonUtil.getBlockLegacy = procHacker.js(
+// 2024 0x1badb30: HashedString(name), BlockTypeRegistry::lookupByName(hashed, true), the WeakPtr's object or null
+JsonUtil.getBlockLegacy = derived<(name: string) => BlockLegacy>(
     "?getBlockLegacy@JsonUtil@@YAPEBVBlockLegacy@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    BlockLegacy,
-    null,
-    CxxString,
+    (name: string): BlockLegacy => {
+        const hashed = HashedString.constructWith(name);
+        const legacy = BlockTypeRegistry.lookupByName(hashed);
+        hashed.destruct();
+        return legacy as BlockLegacy;
+    },
+    () =>
+        procHacker.js(
+            "?getBlockLegacy@JsonUtil@@YAPEBVBlockLegacy@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+            BlockLegacy,
+            null,
+            CxxString,
+        ),
 );
 
 BlockPalette.prototype.getBlock = procHacker.jsv(
@@ -2660,11 +2685,12 @@ export class StackResultStorageEntity extends NativeClass {
         abstract();
     }
 }
-StackResultStorageEntity.prototype.constructWith = procHacker.js(
+StackResultStorageEntity.prototype.constructWith = derived(
     "??0StackResultStorageEntity@@IEAA@AEBVWeakStorageEntity@@@Z",
-    void_t,
-    { this: StackResultStorageEntity },
-    WeakEntityRef,
+    function (this: StackResultStorageEntity, weakEntityRef: WeakEntityRef): void {
+        stackResultStorageConstruct(this as unknown as StaticPointer, weakEntityRef as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0StackResultStorageEntity@@IEAA@AEBVWeakStorageEntity@@@Z", void_t, { this: StackResultStorageEntity }, WeakEntityRef),
 );
 StackResultStorageEntity.prototype._hasValue = derived(
     "?_hasValue@StackResultStorageEntity@@IEBA_NXZ",
@@ -4087,11 +4113,20 @@ Object.defineProperty(ServerNetworkHandler.prototype, "motd", {
     },
     configurable: true,
 });
-ServerNetworkHandler.prototype.fetchConnectionRequest = procHacker.js(
+// the client's primary ConnectionRequest, from the handler's clients_ list (engine/networkhandler.ts); null for an identifier it does not hold
+ServerNetworkHandler.prototype.fetchConnectionRequest = derived(
     "?fetchConnectionRequest@ServerNetworkHandler@@QEAAAEBVConnectionRequest@@AEBVNetworkIdentifier@@@Z",
-    ConnectionRequest,
-    { this: ServerNetworkHandler },
-    NetworkIdentifier,
+    function fetchConnectionRequest(this: ServerNetworkHandler, target: NetworkIdentifier): ConnectionRequest {
+        const request = serverNetworkHandlerPrimaryRequest(this as unknown as StaticPointer, key => (key.as(NetworkIdentifier) as NetworkIdentifier).equals(target));
+        return (request === null ? null : request.as(ConnectionRequest)) as ConnectionRequest;
+    },
+    () =>
+        procHacker.js(
+            "?fetchConnectionRequest@ServerNetworkHandler@@QEAAAEBVConnectionRequest@@AEBVNetworkIdentifier@@@Z",
+            ConnectionRequest,
+            { this: ServerNetworkHandler },
+            NetworkIdentifier,
+        ),
 );
 
 // connreq.ts
@@ -5937,14 +5972,18 @@ BlockLegacy.prototype.getStateFromLegacyData = derived<(this: BlockLegacy, data:
     },
     () => procHacker.js("?getStateFromLegacyData@BlockLegacy@@QEBAAEBVBlock@@G@Z", Block.ref(), { this: BlockLegacy }, uint16_t),
 );
-BlockLegacy.prototype.use = procHacker.jsv(
-    "??_7JukeboxBlock@@6B@",
+// 2024's BlockLegacy::use was a virtual (the name carries JukeboxBlock because that table was where bdsx found the slot); 1.26's
+// BlockType vftable has no `use`. Block::use (bdsx:Block::use, below) is what the engine's own interact path calls with the block
+// at the position, so this is that call with the block the player's region holds there -- or this type's default state when the
+// position holds another block type
+BlockLegacy.prototype.use = derived(
     "?use@JukeboxBlock@@UEBA_NAEAVPlayer@@AEBVBlockPos@@E@Z",
-    bool_t,
-    { this: BlockLegacy },
-    Player,
-    BlockPos,
-    uint8_t,
+    function (this: BlockLegacy, player: Player, blockPos: BlockPos, face: number): boolean {
+        let block = player.getRegion().getBlock(blockPos);
+        if (!(block.blockLegacy as any as StaticPointer).equals(this as any as StaticPointer)) block = this.getDefaultState();
+        return simInteractBlock(player as any as StaticPointer, block as any as StaticPointer, blockPos as any as StaticPointer, face);
+    },
+    () => procHacker.jsv("??_7JukeboxBlock@@6B@", "?use@JukeboxBlock@@UEBA_NAEAVPlayer@@AEBVBlockPos@@E@Z", bool_t, { this: BlockLegacy }, Player, BlockPos, uint8_t),
 );
 // through the block type's own vftable (engine/blocktype.ts: slot 77 on both 1.26 builds), so an override answers too
 let BlockLegacy$asItemInstance: ((this: BlockLegacy, block: Block, blockActor: BlockActor | null) => ItemStackBase) | null = null;
