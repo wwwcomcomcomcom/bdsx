@@ -46,6 +46,7 @@ import { FOOD_USING_CONVERTS_TO, projectileShootDir, throwableLaunchPower } from
 import {
     BLOCK_TYPE_AS_ITEM_INSTANCE_SLOT,
     BLOCK_TYPE_SLOTS,
+    blockActorSetChanged,
     blockActorType,
     blockDestroySpeed,
     blockExplosionResistance,
@@ -5760,7 +5761,14 @@ BlockActor.prototype.load = function (tag) {
         allocated.dispose();
     }
 };
-BlockActor.prototype.setChanged = procHacker.js("?setChanged@BlockActor@@QEAAXXZ", void_t, { this: BlockActor });
+// the Changed bit of VanillaBlockActor's properties_ on 1.26 (engine/blocktype.ts); 2024's was a bool on BlockActor itself
+BlockActor.prototype.setChanged = derived(
+    "?setChanged@BlockActor@@QEAAXXZ",
+    function (this: BlockActor): void {
+        blockActorSetChanged(this as any as StaticPointer);
+    },
+    () => procHacker.js("?setChanged@BlockActor@@QEAAXXZ", void_t, { this: BlockActor }),
+);
 BlockActor.prototype.setCustomName = procHacker.js(
     "?setCustomName@BlockActor@@UEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
     void_t,

@@ -133,6 +133,20 @@ export function blockActorType(blockActor: StaticPointer): number {
 }
 
 /**
+ * BlockActor::setChanged. 2024's was a non-virtual `movb $1, 0xc0(%rcx)` on BlockActor's own bool. 1.26 moved the flag
+ * into VanillaBlockActor's `EnumSet<BlockActor::Property> properties_`, whose Changed is bit 0 (Endstone
+ * vanilla_block_actor.h: `properties_.insert(Changed)`). That is +68 on 40 (0.11.7: BlockActor 40 bytes + three interface
+ * vptrs, tick_count_ +64) and +76 on 51 (HEAD: BlockActor 48 bytes). Each build has one out-of-line copy, slot 22 of 31
+ * IVanillaMainBlockActorComponent vftables, `orb $1, 0x1c(%rcx); ret` on the interface sub-object (40 0x4614200, 51
+ * 0x486c4a0; isChanged at slot 23 is `movzbl 0x1c(%rcx),%eax; and $1`), and about 120 inlined `orb $1` writes at +0x44 on
+ * 40 and +0x4c on 51 (40 0x290aaac, 51 0x1f2931c). docs/findings-layouts.md "BlockActor::setChanged".
+ */
+const BLOCK_ACTOR_PROPERTIES = engineLayout("BlockActor", "properties", 0xc0);
+export function blockActorSetChanged(blockActor: StaticPointer): void {
+    blockActor.setUint8(blockActor.getUint8(BLOCK_ACTOR_PROPERTIES) | 1, BLOCK_ACTOR_PROPERTIES);
+}
+
+/**
  * BlockType::asItemInstance(Block const&, BlockActor const*) is a virtual: slot 77 on both builds (Endstone block_type.h
  * counts 76 from the top, which is off by one). The base body (40 0x1eeb770, 51 0x1a24b60) builds an ItemInstance of
  * default_state_ (+0x240, Endstone +576) with count 1 and no tag into the return slot, ignoring both arguments -- 2024's
