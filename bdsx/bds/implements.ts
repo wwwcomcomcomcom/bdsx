@@ -1,5 +1,6 @@
 import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as LA_LAYER_COUNT, LAYER_STRIDE as LA_LAYER_STRIDE, LAYERS as LA_LAYERS, noSuchLayer, topmostAbility, writeUpdateAbilitiesPayload } from "./engine/abilities";
-import { chestIsLarge, chestPairedPosition } from "./engine/chest";
+import { chestIsLarge, chestOpenBy, chestPairedPosition } from "./engine/chest";
+import { blockActorGetContainer, blockActorGetCustomName, blockActorSetCustomName } from "./engine/blockactor";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
@@ -6162,17 +6163,28 @@ BlockActor.prototype.setChanged = derived(
     },
     () => procHacker.js("?setChanged@BlockActor@@QEAAXXZ", void_t, { this: BlockActor }),
 );
-BlockActor.prototype.setCustomName = procHacker.js(
+// 1.26 moved the custom name and the container onto the main interface's vftable (engine/blockactor.ts); 2024's own
+// virtuals are the fallback when the table names them
+BlockActor.prototype.setCustomName = derived(
     "?setCustomName@BlockActor@@UEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
-    void_t,
-    { this: BlockActor },
-    CxxString,
+    function (this: BlockActor, name: string): void {
+        blockActorSetCustomName(this as any as StaticPointer, name);
+    },
+    () => procHacker.js("?setCustomName@BlockActor@@UEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", void_t, { this: BlockActor }, CxxString),
 );
-BlockActor.prototype.getContainer = procHacker.jsv(
-    "??_7ChestBlockActor@@6BRandomizableBlockActorContainerBase@@@",
+BlockActor.prototype.getContainer = derived(
     "?getContainer@ChestBlockActor@@UEBAPEBVContainer@@XZ",
-    Container,
-    { this: BlockActor },
+    function (this: BlockActor): Container | null {
+        const p = blockActorGetContainer(this as any as StaticPointer);
+        return p === null ? null : p.as(Container);
+    },
+    () =>
+        procHacker.jsv(
+            "??_7ChestBlockActor@@6BRandomizableBlockActorContainerBase@@@",
+            "?getContainer@ChestBlockActor@@UEBAPEBVContainer@@XZ",
+            Container,
+            { this: BlockActor },
+        ),
 );
 BlockActor.prototype.getType = derived(
     "?getType@BlockActor@@QEBAAEBW4BlockActorType@@XZ",
@@ -6198,9 +6210,13 @@ BlockActor.prototype.updateClientSide = function (player: ServerPlayer): void {
     nbtData.dispose();
     pk.dispose();
 };
-BlockActor.prototype.getCustomName = procHacker.js("?getCustomName@BlockActor@@UEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, {
-    this: BlockActor,
-});
+BlockActor.prototype.getCustomName = derived(
+    "?getCustomName@BlockActor@@UEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
+    function (this: BlockActor): string {
+        return blockActorGetCustomName(this as any as StaticPointer);
+    },
+    () => procHacker.js("?getCustomName@BlockActor@@UEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", CxxString, { this: BlockActor }),
+);
 
 ChestBlockActor.prototype.isLargeChest = derived(
     "?isLargeChest@ChestBlockActor@@QEBA_NXZ",
@@ -6209,7 +6225,13 @@ ChestBlockActor.prototype.isLargeChest = derived(
     },
     () => procHacker.js("?isLargeChest@ChestBlockActor@@QEBA_NXZ", bool_t, { this: ChestBlockActor }),
 );
-ChestBlockActor.prototype.openBy = procHacker.js("?openBy@ChestBlockActor@@UEAAXAEAVPlayer@@@Z", void_t, { this: ChestBlockActor }, Player);
+ChestBlockActor.prototype.openBy = derived(
+    "?openBy@ChestBlockActor@@UEAAXAEAVPlayer@@@Z",
+    function (this: ChestBlockActor, player: Player): void {
+        chestOpenBy(this, player);
+    },
+    () => procHacker.js("?openBy@ChestBlockActor@@UEAAXAEAVPlayer@@@Z", void_t, { this: ChestBlockActor }, Player),
+);
 ChestBlockActor.prototype.getPairedChestPosition = derived(
     "?getPairedChestPosition@ChestBlockActor@@QEAAAEBVBlockPos@@XZ",
     function getPairedChestPosition(this: ChestBlockActor): BlockPos {
