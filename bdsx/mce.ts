@@ -6,6 +6,7 @@ import { AbstractClass, nativeClass, NativeClass, nativeField, NativeStruct } fr
 import { bin128_t, bin64_t, float32_t, NativeType, uint16_t, uint32_t, uint64_as_float_t, uint8_t, void_t } from "./nativetype";
 import { Wrapper } from "./pointer";
 import { procHacker } from "./prochacker";
+import { blobConstruct, blobDestruct } from "./bds/engine/blob";
 import { derived } from "./bds/symbols";
 
 export namespace mce {
@@ -135,8 +136,22 @@ export namespace mce {
     }
 }
 
-mce.Blob.prototype[NativeType.ctor] = procHacker.js("??0Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob });
-mce.Blob.prototype[NativeType.dtor] = procHacker.js("??1Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob });
+// 1.26 has no out-of-line Blob constructor or destructor: bdsx stores the ucrt free as the deleter and calls the stored
+// deleter on a non-null pointer, which is 2024's pair (bds/engine/blob.ts). The binary wins when a build resolves them.
+mce.Blob.prototype[NativeType.ctor] = derived(
+    "??0Blob@mce@@QEAA@XZ",
+    function (this: mce.Blob): void {
+        blobConstruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob }),
+);
+mce.Blob.prototype[NativeType.dtor] = derived(
+    "??1Blob@mce@@QEAA@XZ",
+    function (this: mce.Blob): void {
+        blobDestruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??1Blob@mce@@QEAA@XZ", void_t, { this: mce.Blob }),
+);
 // Crypto::Random::generateUUID has no address in the 1.26 builds (the
 // generation is inlined into every CommandOrigin constructor), and a UUID's
 // only contract is to be 128 random bits with the version-4 marks, so bdsx

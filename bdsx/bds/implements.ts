@@ -740,7 +740,21 @@ Dimension.prototype.isDay = derived(
     },
     () => procHacker.jsv("??_7OverworldDimension@@6BIDimension@@@", "?isDay@Dimension@@UEBA_NXZ", bool_t, { this: Dimension }),
 );
-Dimension.prototype.distanceToNearestPlayerSqr2D = procHacker.js("?distanceToNearestPlayerSqr2D@Dimension@@QEAAMVVec3@@@Z", float32_t, { this: Dimension }, Vec3);
+// 2024 0x1f490d0: FLT_MAX, then a forEachPlayer over this dimension's players (a lambda, 0x1f40600) keeping the minimum of
+// (x - px)^2 + 0 + (z - pz)^2 -- the argument's y is zeroed before the loop and never subtracted from the player's y
+Dimension.prototype.distanceToNearestPlayerSqr2D = derived(
+    "?distanceToNearestPlayerSqr2D@Dimension@@QEAAMVVec3@@@Z",
+    function (this: Dimension, pos: Vec3): number {
+        let nearest = 3.4028234663852886e38;
+        for (const player of this.getPlayers()) {
+            const p = player.getPosition();
+            const d = Math.fround(Math.fround(Math.fround(pos.x - p.x) ** 2) + Math.fround(Math.fround(pos.z - p.z) ** 2));
+            if (d < nearest) nearest = d;
+        }
+        return nearest;
+    },
+    () => procHacker.js("?distanceToNearestPlayerSqr2D@Dimension@@QEAAMVVec3@@@Z", float32_t, { this: Dimension }, Vec3),
+);
 Dimension.prototype.transferEntityToUnloadedChunk = procHacker.js(
     "?transferEntityToUnloadedChunk@Dimension@@QEAAXAEAVActor@@PEAVLevelChunk@@@Z",
     void_t,
