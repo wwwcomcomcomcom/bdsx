@@ -75,5 +75,13 @@ export namespace Bedrock {
      * stub implement of Bedrock::Result<void, std::error_code>
      */
     @nativeClass(0x48, 8)
-    export class VoidErrorCodeResult extends AbstractClass {}
+    export class VoidErrorCodeResult extends AbstractClass {
+        /**
+         * the value flag: 1.26's ReadOnlyBinaryStream::read writes `1` at +0x40 on success (its zeroed
+         * error info is 0x40 bytes) and the error path leaves it 0 (docs/findings-inventory.md section 22)
+         */
+        isOk(): boolean {
+            return this.getUint8(0x40) !== 0;
+        }
+    }
 }
