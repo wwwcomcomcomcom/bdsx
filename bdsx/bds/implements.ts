@@ -2,6 +2,7 @@ import { abilityIn, ABILITY_VALUE, BASE_LAYER as LA_BASE_LAYER, LAYER_COUNT as L
 import { chestIsLarge, chestPairedPosition } from "./engine/chest";
 import { navigationComponent, navigationCreatePath, navigationOwn, navigationSetPath, navigationStop } from "./engine/navigation";
 import { enttActorFromWeakRef, enttComponent, enttHas, enttTypeHash } from "./engine/entt";
+import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
 import { componentHash, engineLayout } from "./engine/deps";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
@@ -7273,7 +7274,15 @@ CompoundTagVariant.prototype.emplace = derived(
 );
 
 // structure.ts
-StructureSettings.prototype[NativeType.ctor] = procHacker.js("??0StructureSettings@@QEAA@XZ", void_t, { this: StructureSettings });
+// 1.26 has no out-of-line StructureSettings constructor, destructor or accessor: bdsx writes the object itself
+// (engine/structuresettings.ts, docs/findings-structure.md). The class is 0x68 bytes and the fields moved.
+StructureSettings.prototype[NativeType.ctor] = derived(
+    "??0StructureSettings@@QEAA@XZ",
+    function (this: StructureSettings): void {
+        structureSettingsConstruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??0StructureSettings@@QEAA@XZ", void_t, { this: StructureSettings }),
+);
 StructureSettings.constructWith = function (size: BlockPos, ignoreEntities: boolean = false, ignoreBlocks: boolean = false): StructureSettings {
     const settings = StructureSettings.construct();
     settings.setStructureSize(size);
@@ -7282,11 +7291,23 @@ StructureSettings.constructWith = function (size: BlockPos, ignoreEntities: bool
     settings.setIgnoreBlocks(ignoreBlocks);
     return settings;
 };
-StructureSettings.prototype[NativeType.dtor] = procHacker.js("??1StructureSettings@@QEAA@XZ", void_t, { this: StructureSettings });
+StructureSettings.prototype[NativeType.dtor] = derived(
+    "??1StructureSettings@@QEAA@XZ",
+    function (this: StructureSettings): void {
+        structureSettingsDestruct(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("??1StructureSettings@@QEAA@XZ", void_t, { this: StructureSettings }),
+);
 // deleted
 // StructureSettings.prototype.getIgnoreBlocks = procHacker.js("?getIgnoreBlocks@StructureSettings@@QEBA_NXZ", bool_t, { this: StructureSettings });
 // StructureSettings.prototype.getIgnoreEntities = procHacker.js("?getIgnoreEntities@StructureSettings@@QEBA_NXZ", bool_t, { this: StructureSettings });
-StructureSettings.prototype.isAnimated = procHacker.js("?isAnimated@StructureSettings@@QEBA_NXZ", bool_t, { this: StructureSettings });
+StructureSettings.prototype.isAnimated = derived(
+    "?isAnimated@StructureSettings@@QEBA_NXZ",
+    function isAnimated(this: StructureSettings): boolean {
+        return structureSettingsIsAnimated(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("?isAnimated@StructureSettings@@QEBA_NXZ", bool_t, { this: StructureSettings }),
+);
 // StructureSettings.prototype.getStructureOffset = procHacker.js("?getStructureOffset@StructureSettings@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: StructureSettings });
 // StructureSettings.prototype.getStructureSize = procHacker.js("?getStructureSize@StructureSettings@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: StructureSettings });
 // StructureSettings.prototype.getPivot = procHacker.js("?getPivot@StructureSettings@@QEBAAEBVVec3@@XZ", Vec3, { this: StructureSettings });
@@ -7295,7 +7316,13 @@ StructureSettings.prototype.isAnimated = procHacker.js("?isAnimated@StructureSet
 // StructureSettings.prototype.getRotation = procHacker.js("?getRotation@StructureSettings@@QEBA?AW4Rotation@@XZ", uint32_t, { this: StructureSettings });
 // StructureSettings.prototype.getAnimationSeconds = procHacker.js("?getAnimationSeconds@StructureSettings@@QEBAMXZ", float32_t, { this: StructureSettings });
 // StructureSettings.prototype.getIntegrityValue = procHacker.js("?getIntegrityValue@StructureSettings@@QEBAMXZ", float32_t, { this: StructureSettings });
-StructureSettings.prototype.getAnimationTicks = procHacker.js("?getAnimationTicks@StructureSettings@@QEBAIXZ", uint32_t, { this: StructureSettings });
+StructureSettings.prototype.getAnimationTicks = derived(
+    "?getAnimationTicks@StructureSettings@@QEBAIXZ",
+    function getAnimationTicks(this: StructureSettings): number {
+        return structureSettingsGetAnimationTicks(this as unknown as StaticPointer);
+    },
+    () => procHacker.js("?getAnimationTicks@StructureSettings@@QEBAIXZ", uint32_t, { this: StructureSettings }),
+);
 // StructureSettings.prototype.getIntegritySeed = procHacker.js("?getIntegritySeed@StructureSettings@@QEBAIXZ", float32_t, { this: StructureSettings });
 // StructureSettings.prototype.setAnimationMode = procHacker.js(
 //     "?setAnimationMode@StructureSettings@@QEAAXW4AnimationMode@@@Z",
@@ -7304,17 +7331,43 @@ StructureSettings.prototype.getAnimationTicks = procHacker.js("?getAnimationTick
 //     uint8_t,
 // );
 // StructureSettings.prototype.setAnimationSeconds = procHacker.js("?setAnimationSeconds@StructureSettings@@QEAAXM@Z", void_t, { this: StructureSettings }, float32_t);
-StructureSettings.prototype.setIgnoreBlocks = procHacker.js("?setIgnoreBlocks@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t);
-StructureSettings.prototype.setIgnoreEntities = procHacker.js("?setIgnoreEntities@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t);
-StructureSettings.prototype.setIgnoreJigsawBlocks = procHacker.js(
-    "?setIgnoreJigsawBlocks@StructureSettings@@QEAAX_N@Z",
-    void_t,
-    { this: StructureSettings },
-    bool_t,
+StructureSettings.prototype.setIgnoreBlocks = derived(
+    "?setIgnoreBlocks@StructureSettings@@QEAAX_N@Z",
+    function setIgnoreBlocks(this: StructureSettings, ignoreBlocks: boolean): void {
+        structureSettingsSetIgnoreBlocks(this as unknown as StaticPointer, ignoreBlocks);
+    },
+    () => procHacker.js("?setIgnoreBlocks@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t),
 );
-StructureSettings.prototype.setIntegritySeed = procHacker.js("?setIntegritySeed@StructureSettings@@QEAAXI@Z", void_t, { this: StructureSettings }, float32_t);
+StructureSettings.prototype.setIgnoreEntities = derived(
+    "?setIgnoreEntities@StructureSettings@@QEAAX_N@Z",
+    function setIgnoreEntities(this: StructureSettings, ignoreEntities: boolean): void {
+        structureSettingsSetIgnoreEntities(this as unknown as StaticPointer, ignoreEntities);
+    },
+    () => procHacker.js("?setIgnoreEntities@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t),
+);
+StructureSettings.prototype.setIgnoreJigsawBlocks = derived(
+    "?setIgnoreJigsawBlocks@StructureSettings@@QEAAX_N@Z",
+    function setIgnoreJigsawBlocks(this: StructureSettings, ignoreJigsawBlocks: boolean): void {
+        structureSettingsSetIgnoreJigsawBlocks(this as unknown as StaticPointer, ignoreJigsawBlocks);
+    },
+    () => procHacker.js("?setIgnoreJigsawBlocks@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t),
+);
+// the seed is a uint32 (2024's body stores %edx); bdsx bound it as a float32
+StructureSettings.prototype.setIntegritySeed = derived(
+    "?setIntegritySeed@StructureSettings@@QEAAXI@Z",
+    function setIntegritySeed(this: StructureSettings, seed: number): void {
+        structureSettingsSetIntegritySeed(this as unknown as StaticPointer, seed);
+    },
+    () => procHacker.js("?setIntegritySeed@StructureSettings@@QEAAXI@Z", void_t, { this: StructureSettings }, uint32_t),
+);
 // StructureSettings.prototype.setIntegrityValue = procHacker.js("?setIntegrityValue@StructureSettings@@QEAAXM@Z", void_t, { this: StructureSettings }, float32_t);
-StructureSettings.prototype.setMirror = procHacker.js("?setMirror@StructureSettings@@QEAAXW4Mirror@@@Z", void_t, { this: StructureSettings }, uint8_t);
+StructureSettings.prototype.setMirror = derived(
+    "?setMirror@StructureSettings@@QEAAXW4Mirror@@@Z",
+    function setMirror(this: StructureSettings, mirror: number): void {
+        structureSettingsSetMirror(this as unknown as StaticPointer, mirror);
+    },
+    () => procHacker.js("?setMirror@StructureSettings@@QEAAXW4Mirror@@@Z", void_t, { this: StructureSettings }, uint8_t),
+);
 // StructureSettings.prototype.setPaletteName = procHacker.js(
 //     "?setPaletteName@StructureSettings@@QEAAXV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
 //     void_t,
@@ -7322,24 +7375,33 @@ StructureSettings.prototype.setMirror = procHacker.js("?setMirror@StructureSetti
 //     CxxString,
 // );
 // StructureSettings.prototype.setPivot = procHacker.js("?setPivot@StructureSettings@@QEAAXAEBVVec3@@@Z", void_t, { this: StructureSettings }, Vec3);
-StructureSettings.prototype.setReloadActorEquipment = procHacker.js(
+StructureSettings.prototype.setReloadActorEquipment = derived(
     "?setReloadActorEquipment@StructureSettings@@QEAAX_N@Z",
-    void_t,
-    { this: StructureSettings },
-    bool_t,
+    function setReloadActorEquipment(this: StructureSettings, reloadActorEquipment: boolean): void {
+        structureSettingsSetReloadActorEquipment(this as unknown as StaticPointer, reloadActorEquipment);
+    },
+    () => procHacker.js("?setReloadActorEquipment@StructureSettings@@QEAAX_N@Z", void_t, { this: StructureSettings }, bool_t),
 );
-StructureSettings.prototype.setRotation = procHacker.js("?setRotation@StructureSettings@@QEAAXW4Rotation@@@Z", void_t, { this: StructureSettings }, uint8_t);
-StructureSettings.prototype.setStructureOffset = procHacker.js(
+StructureSettings.prototype.setRotation = derived(
+    "?setRotation@StructureSettings@@QEAAXW4Rotation@@@Z",
+    function setRotation(this: StructureSettings, rotation: number): void {
+        structureSettingsSetRotation(this as unknown as StaticPointer, rotation);
+    },
+    () => procHacker.js("?setRotation@StructureSettings@@QEAAXW4Rotation@@@Z", void_t, { this: StructureSettings }, uint8_t),
+);
+StructureSettings.prototype.setStructureOffset = derived(
     "?setStructureOffset@StructureSettings@@QEAAXAEBVBlockPos@@@Z",
-    void_t,
-    { this: StructureSettings },
-    BlockPos,
+    function setStructureOffset(this: StructureSettings, offset: BlockPos): void {
+        structureSettingsSetStructureOffset(this as unknown as StaticPointer, offset.x, offset.y, offset.z);
+    },
+    () => procHacker.js("?setStructureOffset@StructureSettings@@QEAAXAEBVBlockPos@@@Z", void_t, { this: StructureSettings }, BlockPos),
 );
-StructureSettings.prototype.setStructureSize = procHacker.js(
+StructureSettings.prototype.setStructureSize = derived(
     "?setStructureSize@StructureSettings@@QEAAXAEBVBlockPos@@@Z",
-    void_t,
-    { this: StructureSettings },
-    BlockPos,
+    function setStructureSize(this: StructureSettings, size: BlockPos): void {
+        structureSettingsSetStructureSize(this as unknown as StaticPointer, size.x, size.y, size.z);
+    },
+    () => procHacker.js("?setStructureSize@StructureSettings@@QEAAXAEBVBlockPos@@@Z", void_t, { this: StructureSettings }, BlockPos),
 );
 StructureTemplateData.prototype.allocateAndSave = procHacker.js(
     "?save@StructureTemplateData@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
@@ -7365,7 +7427,10 @@ StructureTemplate.prototype.fillFromWorld = procHacker.js(
     BlockPos,
     StructureSettings,
 );
-StructureTemplate.prototype.placeInWorld = procHacker.js(
+// The full prototype: the telemetry pointer and a trailing bool follow the settings (1.26 and 2024 alike). bdsx bound only
+// the first four, so both read the stack's leftovers; the engine's own callers pass null and false (WorldBlockTarget::
+// placeStructure). Read in docs/findings-structure.md.
+const StructureTemplate$placeInWorld = procHacker.js(
     "?placeInWorld@StructureTemplate@@QEBAXAEAVBlockSource@@AEBVBlockPalette@@AEBVBlockPos@@AEBVStructureSettings@@PEAVStructureTelemetryServerData@@_N@Z",
     void_t,
     { this: StructureTemplate },
@@ -7373,14 +7438,35 @@ StructureTemplate.prototype.placeInWorld = procHacker.js(
     BlockPalette,
     BlockPos,
     StructureSettings,
+    VoidPointer,
+    bool_t,
 );
-StructureTemplate.prototype.tryGetBlockAtPos = procHacker.js(
+StructureTemplate.prototype.placeInWorld = function (this: StructureTemplate, region, palette, pos, settings): void {
+    StructureTemplate$placeInWorld.call(this, region, palette, pos, settings, null, false);
+};
+// 1.26 inlines it at every caller around one out-of-line helper on the template's data (engine/structuresettings.ts)
+StructureTemplate.prototype.tryGetBlockAtPos = derived(
     "?tryGetBlockAtPos@StructureTemplate@@QEBAPEBVBlock@@AEBVBlockPos@@@Z",
-    Block,
-    { this: StructureTemplate },
-    BlockPos,
+    function tryGetBlockAtPos(this: StructureTemplate, pos: BlockPos): Block | null {
+        const block = structureTemplateTryGetBlockAtPos(this as unknown as StaticPointer, pos);
+        return block === null ? null : block.as(Block);
+    },
+    () =>
+        procHacker.js(
+            "?tryGetBlockAtPos@StructureTemplate@@QEBAPEBVBlock@@AEBVBlockPos@@@Z",
+            Block,
+            { this: StructureTemplate },
+            BlockPos,
+        ),
 );
-StructureTemplate.prototype.getSize = procHacker.js("?getSize@StructureTemplate@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: StructureTemplate });
+// the size is the template data's own (+0x28 in the template, layouts.StructureTemplateData.structureSize)
+StructureTemplate.prototype.getSize = derived(
+    "?getSize@StructureTemplate@@QEBAAEBVBlockPos@@XZ",
+    function getSize(this: StructureTemplate): BlockPos {
+        return this.data.size;
+    },
+    () => procHacker.js("?getSize@StructureTemplate@@QEBAAEBVBlockPos@@XZ", BlockPos, { this: StructureTemplate }),
+);
 StructureTemplate.prototype.allocateAndSave = procHacker.js(
     "?save@StructureTemplate@@QEBA?AV?$unique_ptr@VCompoundTag@@U?$default_delete@VCompoundTag@@@std@@@std@@XZ",
     CompoundTag.ref(),

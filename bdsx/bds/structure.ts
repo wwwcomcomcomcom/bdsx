@@ -6,6 +6,7 @@ import { Block, BlockSource } from "./block";
 import { BlockPos, Vec3 } from "./blockpos";
 import type { BlockPalette } from "./level";
 import { engineLayout } from "./engine/deps";
+import { structureSettingsGetIgnoreJigsawBlocks, structureSettingsGetReloadActorEquipment } from "./engine/structuresettings";
 import { CompoundTag, NBT } from "./nbt";
 
 export enum Rotation {
@@ -23,7 +24,7 @@ export enum Mirror {
     XZ,
 }
 
-@nativeClass(0x60)
+@nativeClass(0x68)
 export class StructureSettings extends AbstractClass {
     static constructWith(size: BlockPos, ignoreEntities: boolean = false, ignoreBlocks: boolean = false): StructureSettings {
         abstract();
@@ -37,7 +38,7 @@ export class StructureSettings extends AbstractClass {
     //     abstract();
     // }
     getIgnoreJigsawBlocks(): boolean {
-        return this.getBoolean(0x23);
+        return structureSettingsGetIgnoreJigsawBlocks(this as any);
     }
     isAnimated(): boolean {
         abstract();
@@ -61,7 +62,7 @@ export class StructureSettings extends AbstractClass {
     //     abstract();
     // }
     getReloadActorEquipment(): boolean {
-        return this.getBoolean(0x21);
+        return structureSettingsGetReloadActorEquipment(this as any);
     }
     // getRotation(): Rotation {
     //     abstract();
