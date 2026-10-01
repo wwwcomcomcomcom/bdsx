@@ -2181,12 +2181,40 @@ export enum ItemStackRequestActionType {
     CraftResults_DEPRECATEDASKTYLAING,
 }
 
-@nativeClass()
+/**
+ * 1.26 keeps a request's actions by value, each a 0x60-byte std::variant slot (2024 held `unique_ptr<polymorphic Action>` with the type
+ * byte at +8). The alternative index sits at +0x58 as one byte and is the protocol's wire id for the action
+ * (0 take ... 6 create, 7 lab table, 8 beacon, 9 mine block, ... 17 results), which differs from `ItemStackRequestActionType` from
+ * lab table on (docs/findings-inventory.md section 25).
+ */
+const ACTION_VARIANT_TYPES: ItemStackRequestActionType[] = [
+    ItemStackRequestActionType.Take,
+    ItemStackRequestActionType.Place,
+    ItemStackRequestActionType.Swap,
+    ItemStackRequestActionType.Drop,
+    ItemStackRequestActionType.Destroy,
+    ItemStackRequestActionType.Consume,
+    ItemStackRequestActionType.Create,
+    ItemStackRequestActionType.ScreenLabTableCombine,
+    ItemStackRequestActionType.ScreenBeaconPayment,
+    ItemStackRequestActionType.ScreenHUDMineBlock,
+    ItemStackRequestActionType.CraftRecipe,
+    ItemStackRequestActionType.CraftRecipeAuto,
+    ItemStackRequestActionType.CraftCreative,
+    ItemStackRequestActionType.CraftRecipeOptional,
+    ItemStackRequestActionType.CraftRepairAndDisenchant,
+    ItemStackRequestActionType.CraftLoom,
+    ItemStackRequestActionType.CraftNonImplemented_DEPRECATEDASKTYLAING,
+    ItemStackRequestActionType.CraftResults_DEPRECATEDASKTYLAING,
+];
+export const ITEM_STACK_REQUEST_ACTION_SIZE = 0x60;
+
+@nativeClass(null)
 export class ItemStackRequestAction extends AbstractClass {
-    @nativeField(VoidPointer)
-    vftable: VoidPointer;
-    @nativeField(uint8_t)
-    type: ItemStackRequestActionType;
+    get type(): ItemStackRequestActionType {
+        const index = this.getUint8(0x58);
+        return index < ACTION_VARIANT_TYPES.length ? ACTION_VARIANT_TYPES[index] : (-1 as ItemStackRequestActionType);
+    }
 }
 
 ItemStackRequestAction.setResolver(ptr => {
@@ -2213,6 +2241,7 @@ export class ItemStackRequestActionTransferBase extends ItemStackRequestAction {
     }
 }
 
+/** One request of an `ItemStackRequestPacket`; 0x48 bytes, stored inline in the packet's request vector. */
 @nativeClass(null)
 export class ItemStackRequestData extends AbstractClass {
     @nativeField(int32_t, 0x08)
@@ -2220,31 +2249,32 @@ export class ItemStackRequestData extends AbstractClass {
     get stringsToFilter(): CxxVector<CxxString> {
         return this.getStringsToFilter();
     }
-    /** @deprecated use getActions */
-    get actions(): CxxVector<ItemStackRequestAction> {
+    get actions(): ItemStackRequestAction[] {
         return this.getActions();
     }
     getStringsToFilter(): CxxVector<CxxString> {
         abstract();
     }
-    getActions(): CxxVector<ItemStackRequestAction> {
+    /** the request's actions in wire order (1.26: the vector of 0x60-byte variant slots at +0x10) */
+    getActions(): ItemStackRequestAction[] {
         abstract();
     }
+    /** the first action of that type, or null */
     tryFindAction(action: ItemStackRequestActionType): ItemStackRequestAction | null {
         abstract();
     }
 }
 
-@nativeClass()
-export class ItemStackRequestBatch extends AbstractClass {
-    @nativeField(CxxVector.make(ItemStackRequestData.ref()))
-    data: CxxVector<ItemStackRequestData>;
-}
-
 @nativeClass(null)
 export class ItemStackRequestPacket extends Packet {
-    getRequestBatch(): ItemStackRequestBatch {
-        return ItemStackRequestBatch[makefunc.getFromParam](this.add(), 0x30);
+    /** the requests, stored inline in a vector at +0x30 (0x48 bytes each) */
+    getRequests(): ItemStackRequestData[] {
+        const begin = this.getPointer(0x30);
+        const end = this.getPointer(0x38);
+        const n = (end.subptr(begin) as number) / 0x48;
+        const out: ItemStackRequestData[] = [];
+        for (let i = 0; i < n; i++) out.push(begin.add(i * 0x48).as(ItemStackRequestData));
+        return out;
     }
 }
 

@@ -270,6 +270,8 @@ import {
     BlockActorDataPacket,
     GameRulesChangedPacket,
     ItemStackRequestAction,
+    ITEM_STACK_REQUEST_ACTION_SIZE,
+    ItemStackRequestActionType,
     ItemStackRequestData,
     PlayerAuthInputPacket,
     PlayerListEntry,
@@ -314,7 +316,6 @@ const CxxVector$EntityContext = CxxVector.make(EntityContext);
 const CxxVector$CommandName = CxxVector.make(CommandName);
 const CxxVector$CxxStringWith8Bytes = CxxVector.make(CxxStringWith8Bytes);
 const CxxVector$PlayerRef = CxxVector.make(Player.ref());
-const CxxVector$ItemStackRequestActionRef = CxxVector.make(ItemStackRequestAction.ref());
 
 // utils
 namespace CommandUtils {
@@ -4071,18 +4072,38 @@ Packet.prototype.read = procHacker.jsv(
 );
 
 ItemStackRequestData.prototype.getStringsToFilter = function () {
-    // assuming it is put before the actions vector, it can be tested by renaming an item with an anvil.
-    return this.addAs(CxxVector$string, 0x10);
+    // 1.26: after the actions vector (+0x10), at +0x28 (seen with two custom names in a hand-written request, docs/findings-inventory.md section 25)
+    return this.addAs(CxxVector$string, 0x28);
 };
 ItemStackRequestData.prototype.getActions = function () {
-    // accessed in tryFindAction, to check if the vector is empty
-    return this.addAs(CxxVector$ItemStackRequestActionRef, 0x30);
+    const self = this as unknown as StaticPointer;
+    const begin = self.getPointer(0x10);
+    const end = self.getPointer(0x18);
+    const n = (end.subptr(begin) as number) / ITEM_STACK_REQUEST_ACTION_SIZE;
+    const out: ItemStackRequestAction[] = [];
+    for (let i = 0; i < n; i++) out.push(begin.add(i * ITEM_STACK_REQUEST_ACTION_SIZE).as(ItemStackRequestAction));
+    return out;
 };
-ItemStackRequestData.prototype.tryFindAction = procHacker.js(
+// 2024 0x1aa0860 scanned a vector of unique_ptr<Action> (+0x30/+0x38, type byte at +8) for the first action of the given type. 1.26 inlines
+// that loop into its one caller (ServerPlayerBlockUseHandler::onBeforeMovementSimulation, 40 0xaa3290, 51 0x13e5680: `cmpb $0xb, 0x8(%rdx)`),
+// on the legacy object the PlayerAuthInput path builds, so there is no function to call. The request an ItemStackRequestPacket carries is the
+// other layout (actions by value at +0x10, 0x60-byte variants), and that is what a plugin can reach: the scan is done here over it
+// (docs/findings-inventory.md section 25).
+ItemStackRequestData.prototype.tryFindAction = derived(
     "?tryFindAction@ItemStackRequestData@@QEBAPEBVItemStackRequestAction@@W4ItemStackRequestActionType@@@Z",
-    ItemStackRequestAction,
-    { this: ItemStackRequestData },
-    uint8_t,
+    function (this: ItemStackRequestData, type: ItemStackRequestActionType): ItemStackRequestAction | null {
+        for (const action of this.getActions()) {
+            if (action.type === type) return action;
+        }
+        return null;
+    },
+    () =>
+        procHacker.js(
+            "?tryFindAction@ItemStackRequestData@@QEBAPEBVItemStackRequestAction@@W4ItemStackRequestActionType@@@Z",
+            ItemStackRequestAction,
+            { this: ItemStackRequestData },
+            uint8_t,
+        ),
 );
 
 // 1.26 keeps no out-of-line getInput. Endstone's player_auth_input_packet.h (v0.11.7 for 1.26.40.8,
