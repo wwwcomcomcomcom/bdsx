@@ -4072,7 +4072,7 @@ Packet.prototype.read = procHacker.jsv(
 );
 
 ItemStackRequestData.prototype.getStringsToFilter = function () {
-    // 1.26: after the actions vector (+0x10), at +0x28 (seen with two custom names in a hand-written request, docs/findings-inventory.md section 25)
+    // 1.26: after the actions vector (+0x10), at +0x28 (seen with two custom names in a hand-written request, docs/findings-inventory.md section 26)
     return this.addAs(CxxVector$string, 0x28);
 };
 ItemStackRequestData.prototype.getActions = function () {
@@ -4088,7 +4088,7 @@ ItemStackRequestData.prototype.getActions = function () {
 // that loop into its one caller (ServerPlayerBlockUseHandler::onBeforeMovementSimulation, 40 0xaa3290, 51 0x13e5680: `cmpb $0xb, 0x8(%rdx)`),
 // on the legacy object the PlayerAuthInput path builds, so there is no function to call. The request an ItemStackRequestPacket carries is the
 // other layout (actions by value at +0x10, 0x60-byte variants), and that is what a plugin can reach: the scan is done here over it
-// (docs/findings-inventory.md section 25).
+// (docs/findings-inventory.md section 26).
 ItemStackRequestData.prototype.tryFindAction = derived(
     "?tryFindAction@ItemStackRequestData@@QEBAPEBVItemStackRequestAction@@W4ItemStackRequestActionType@@@Z",
     function (this: ItemStackRequestData, type: ItemStackRequestActionType): ItemStackRequestAction | null {

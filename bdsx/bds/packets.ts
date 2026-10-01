@@ -2185,7 +2185,7 @@ export enum ItemStackRequestActionType {
  * 1.26 keeps a request's actions by value, each a 0x60-byte std::variant slot (2024 held `unique_ptr<polymorphic Action>` with the type
  * byte at +8). The alternative index sits at +0x58 as one byte and is the protocol's wire id for the action
  * (0 take ... 6 create, 7 lab table, 8 beacon, 9 mine block, ... 17 results), which differs from `ItemStackRequestActionType` from
- * lab table on (docs/findings-inventory.md section 25).
+ * lab table on (docs/findings-inventory.md section 26).
  */
 const ACTION_VARIANT_TYPES: ItemStackRequestActionType[] = [
     ItemStackRequestActionType.Take,
