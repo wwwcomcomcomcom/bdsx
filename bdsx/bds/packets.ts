@@ -31,7 +31,7 @@ import { ConnectionRequest, JsonValue } from "./connreq";
 import { CxxOptional } from "./cxxoptional";
 import type { Form } from "./form";
 import { HashedString } from "./hashedstring";
-import { ComplexInventoryTransaction, ContainerId, ContainerType, ItemStackNetIdVariant, NetworkItemStackDescriptor } from "./inventory";
+import { ComplexInventoryTransaction, ContainerId, ContainerType, NetworkItemStackDescriptor } from "./inventory";
 import { Difficulty } from "./level";
 import { MolangVariableMap } from "./molangvariablemap";
 import { CompoundTag } from "./nbt";
@@ -2146,14 +2146,19 @@ export class PlayerEnchantOptionsPacket extends Packet {
     // unknown
 }
 
-@nativeClass(null)
+/**
+ * A slot reference inside an item stack request action, 0x28 bytes on 1.26: the container id at +0, the slot at +0xc, the client's stack
+ * id (an `ItemStackNetIdVariant`, index 0 = the plain id) at +0x10. Read off hand-written requests on 40 and 51 with distinct values
+ * (docs/findings-inventory.md section 27).
+ */
+@nativeClass(0x28)
 export class ItemStackRequestSlotInfo extends NativeStruct {
-    @nativeField(uint8_t)
+    @nativeField(uint8_t, 0x00)
     openContainerNetId: uint8_t;
-    @nativeField(uint8_t)
+    @nativeField(uint8_t, 0x0c)
     slot: uint8_t;
-    @nativeField(ItemStackNetIdVariant)
-    readonly netIdVariant: ItemStackNetIdVariant;
+    @nativeField(int32_t, 0x10)
+    stackNetId: int32_t;
 }
 
 export enum ItemStackRequestActionType {
@@ -2217,13 +2222,15 @@ export class ItemStackRequestAction extends AbstractClass {
     }
 }
 
-ItemStackRequestAction.setResolver(ptr => {
+/** the action at `ptr` as its most specific class (the transfer family gets `ItemStackRequestActionTransferBase`) */
+export function resolveItemStackRequestAction(ptr: StaticPointer | null): ItemStackRequestAction | null {
     if (ptr === null) return null;
     const action = ptr.as(ItemStackRequestAction);
     switch (action.type) {
         case ItemStackRequestActionType.Take:
         case ItemStackRequestActionType.Place:
         case ItemStackRequestActionType.Swap:
+        case ItemStackRequestActionType.Drop:
         case ItemStackRequestActionType.Destroy:
         case ItemStackRequestActionType.Consume:
         case ItemStackRequestActionType.PlaceInItemContainer:
@@ -2232,12 +2239,34 @@ ItemStackRequestAction.setResolver(ptr => {
         default:
             return action;
     }
-});
+}
+ItemStackRequestAction.setResolver(resolveItemStackRequestAction);
 
+/**
+ * take / place / swap / drop / destroy / consume. The slot infos sit at fixed offsets inside the 0x60-byte variant slot (all but swap
+ * start with a count byte at +0): take and place `[count, src +8, dst +0x30]`, swap `[src +0, dst +0x28]`, drop `[count, src +8,
+ * randomly +0x30]`, destroy and consume `[count, src +8]`.
+ */
 @nativeClass(null)
 export class ItemStackRequestActionTransferBase extends ItemStackRequestAction {
+    /** the stack count, or null for swap, which carries none */
+    getAmount(): number | null {
+        return this.type === ItemStackRequestActionType.Swap ? null : this.getUint8(0);
+    }
     getSrc(): ItemStackRequestSlotInfo {
-        return this.addAs(ItemStackRequestSlotInfo, 0x18);
+        return this.addAs(ItemStackRequestSlotInfo, this.type === ItemStackRequestActionType.Swap ? 0 : 8);
+    }
+    /** the destination of take / place / swap; null for drop, destroy and consume, which have none */
+    getDst(): ItemStackRequestSlotInfo | null {
+        switch (this.type) {
+            case ItemStackRequestActionType.Take:
+            case ItemStackRequestActionType.Place:
+                return this.addAs(ItemStackRequestSlotInfo, 0x30);
+            case ItemStackRequestActionType.Swap:
+                return this.addAs(ItemStackRequestSlotInfo, 0x28);
+            default:
+                return null;
+        }
     }
 }
 

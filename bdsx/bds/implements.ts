@@ -271,6 +271,7 @@ import {
     GameRulesChangedPacket,
     ItemStackRequestAction,
     ITEM_STACK_REQUEST_ACTION_SIZE,
+    resolveItemStackRequestAction,
     ItemStackRequestActionType,
     ItemStackRequestData,
     PlayerAuthInputPacket,
@@ -4081,7 +4082,7 @@ ItemStackRequestData.prototype.getActions = function () {
     const end = self.getPointer(0x18);
     const n = (end.subptr(begin) as number) / ITEM_STACK_REQUEST_ACTION_SIZE;
     const out: ItemStackRequestAction[] = [];
-    for (let i = 0; i < n; i++) out.push(begin.add(i * ITEM_STACK_REQUEST_ACTION_SIZE).as(ItemStackRequestAction));
+    for (let i = 0; i < n; i++) out.push(resolveItemStackRequestAction(begin.add(i * ITEM_STACK_REQUEST_ACTION_SIZE))!);
     return out;
 };
 // 2024 0x1aa0860 scanned a vector of unique_ptr<Action> (+0x30/+0x38, type byte at +8) for the first action of the given type. 1.26 inlines
