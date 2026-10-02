@@ -4487,8 +4487,10 @@ GameMode.abstract({
     actor: [Player.ref(), 8],
 });
 
+// 1.26's music discs are component items (they carry minecraft:record) with RecordItem's own vftable, which
+// overrides ComponentItem's setDescriptionId, buildDescriptionId ("item.record.name") and the icon pair
 @nativeClass(null)
-class RecordItem extends Item {
+class RecordItem extends ComponentItem {
     @nativeField(VoidPointer)
     vftable: VoidPointer;
 }
@@ -4507,7 +4509,8 @@ Item.setResolver(ptr => {
 });
 
 Item.prototype.isMusicDisk = function () {
-    return this instanceof RecordItem;
+    // by the vftable, not instanceof: 1.26's ItemStackBase.getItem() is a derived() read that skips the resolver
+    return this instanceof RecordItem || (this as any as StaticPointer).getPointer(0).equalsptr(RecordItem$vftable);
 };
 
 // inventory.ts
