@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.51.1",
  "exeMd5": "a92cff3b1324d612219510582e9fb3da",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-02T17:48:35.151Z",
+ "generatedAt": "2026-10-02T18:18:17.328Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 26995440,
   "bdsx:BlockTypeRegistry::instance": 214631944,
@@ -15031,7 +15031,7 @@
   "ConnectionRequest": {
    "gameServerToken": 144,
    "authenticationType": 176,
-   "note": "BaseConnectionRequest (Endstone base_connection_request.h): the client-data WebToken (optional) at +0x8 (its payload JSON at +0x8+0x30), the RawGameServerToken string at +0x90 -- a JWT whose payload carries xid / xname / identity / cpk, 2024's certificate extraData XUID / displayName / identity -- and the PlayerAuthenticationType at +0xb0 (2 = SelfSigned for the offline bot). Read off live logins on both builds (loginprobe, login40/login51). clientDataJson +0x58 / clientDataEngaged +0x88: the optional WebToken at +0x8 is 0x80 bytes on Windows (Endstone web_token.h: header string, header Json::Value, data string, data Json::Value at +0x50, signature string), so its parsed payload is the Json::Value at +0x58 and std::optional's engaged byte follows at +0x88, right before the game server token at +0x90 (docs/findings-examples.md). Consumed by engine/identity.ts (ConnectionRequest.getCertificate / ExtendedCertificate).",
+   "note": "BaseConnectionRequest (Endstone base_connection_request.h): the client-data WebToken (optional) at +0x8 (its payload JSON at +0x8+0x30), the RawGameServerToken string at +0x90 -- a JWT whose payload carries xid / xname / identity / cpk, 2024's certificate extraData XUID / displayName / identity -- and the PlayerAuthenticationType at +0xb0 (2 = SelfSigned for the offline bot). Read off live logins on both builds (loginprobe, login40/login51). clientDataJson +0x58 / clientDataEngaged +0x88: the optional WebToken at +0x8 is 0x80 bytes on Windows (Endstone web_token.h: header string, header Json::Value, data string, data Json::Value at +0x50, signature string), so its parsed payload is the Json::Value at +0x58 and std::optional's engaged byte follows at +0x88, right before the game server token at +0x90 (docs/findings-inventory.md section 29). Consumed by engine/identity.ts (ConnectionRequest.getCertificate / ExtendedCertificate).",
    "clientDataJson": 88,
    "clientDataEngaged": 136
   },
@@ -15336,7 +15336,7 @@
   },
   "DedicatedServer": {
    "stopThis": 0,
-   "note": "DedicatedServer::stop (0x7a410) takes the object itself: the constructor (0x78890) stores one vftable, ??_7DedicatedServer@@6BAppIsland@Bedrock@@@, at +0, and the live this of stop carried that table (docs/findings-instances.md). 2024 called it at +8, AppIsland's base behind IMinecraftApp's vptr; bdsx's +8 on 1.26 set +0x50 instead of the stop flag at +0x48 and the server died (rel40, docs/findings-examples.md). Consumed by launcher.ts bedrockServer.stop()"
+   "note": "DedicatedServer::stop (0x7a410) takes the object itself: the constructor (0x78890) stores one vftable, ??_7DedicatedServer@@6BAppIsland@Bedrock@@@, at +0, and the live this of stop carried that table (docs/findings-instances.md). 2024 called it at +8, AppIsland's base behind IMinecraftApp's vptr; bdsx's +8 on 1.26 set +0x50 instead of the stop flag at +0x48 and the server died (rel40, docs/findings-inventory.md section 29). Consumed by launcher.ts bedrockServer.stop()"
   }
  },
  "accessors": {
