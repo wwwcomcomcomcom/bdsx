@@ -16,7 +16,7 @@ const CONNREQ_AUTHENTICATION_TYPE = engineLayout("ConnectionRequest", "authentic
 // the client-data WebToken is a std::optional<WebToken> at +0x8: WebToken is 0x80 bytes on Windows (header string,
 // header Json::Value, data string, data Json::Value at +0x50, signature string), so the parsed payload (DeviceId,
 // DeviceOS, skin, ...) is the Json::Value at +0x58 and the optional's engaged flag the byte at +0x88. -1: no such field
-// (a 2024 table, whose ConnectionRequest held a Certificate instead). docs/findings-examples.md
+// (a 2024 table, whose ConnectionRequest held a Certificate instead). docs/findings-inventory.md section 29
 const CONNREQ_CLIENT_DATA_JSON = engineLayout("ConnectionRequest", "clientDataJson", -1);
 const CONNREQ_CLIENT_DATA_ENGAGED = engineLayout("ConnectionRequest", "clientDataEngaged", -1);
 

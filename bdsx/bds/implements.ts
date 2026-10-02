@@ -8400,7 +8400,7 @@ bedrockServer.executeCommand = function (
 // statusMessage from the text the engine hands CommandOutputSender::send (events.commandOutput, the one place 1.26
 // joins the messages): the command runs with output on, a first listener collects the lines, and, when Output was
 // not asked for, cancels them, so neither the console nor a later listener sees them -- as a muted 2024 run showed
-// nothing. An origin whose output does not go through the sender (a player's) gets "" (docs/findings-examples.md).
+// nothing. An origin whose output does not go through the sender (a player's) gets "" (docs/findings-inventory.md section 29).
 function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: CommandResultType = null): CommandResult<CommandResult.Any> {
     if (mute === true || mute == null) mute = CommandResultType.Mute;
     else if (mute === false) mute = CommandResultType.Output;

@@ -972,7 +972,7 @@ export namespace bedrockServer {
     export function stop(): void {
         // DedicatedServer::stop's `this` is the Bedrock::AppIsland base: +8 in 2024 (IMinecraftApp's vptr came first),
         // the object itself on 1.26, whose constructor stores only AppIsland's vftable, at +0. Calling it at +8 there
-        // set the wrong byte as the stop flag and killed the server (docs/findings-examples.md)
+        // set the wrong byte as the stop flag and killed the server (docs/findings-inventory.md section 29)
         stopfunc(bedrockServer.dedicatedServer.add(engineLayout("DedicatedServer", "stopThis", 8)));
     }
 
