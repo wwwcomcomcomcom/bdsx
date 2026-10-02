@@ -1,6 +1,6 @@
 import { LoopbackPacketSender } from "../bds/loopbacksender";
 import { abstract } from "../common";
-import { VoidPointer } from "../core";
+import { StaticPointer, VoidPointer } from "../core";
 import { events } from "../event";
 import { AbstractClass, nativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, uint16_t } from "../nativetype";
@@ -107,7 +107,25 @@ export class ScriptFramework extends AbstractClass {
     vftable: VoidPointer;
 }
 
-@nativeClass(0x70)
+/**
+ * Reads a Bedrock::StaticOptimizedString (8 bytes): a packed pointer whose bits 48..55 hold the length, or 128 when
+ * the string is heap-allocated with its length in the 8 bytes before the data (Endstone static_optimized_string.h).
+ */
+function readStaticOptimizedString(base: StaticPointer, offset: number): string {
+    const lengthByte = base.getUint8(offset + 6);
+    let ptr = base.getPointer(offset);
+    if (lengthByte !== 0) ptr = ptr.add(0, -(lengthByte << 16));
+    if (ptr.isNull()) return "";
+    const length = lengthByte === 128 ? ptr.add(-8).getInt32() : lengthByte;
+    return length === 0 ? "" : ptr.getString(length);
+}
+
+/**
+ * 1.26's SemVersion (Endstone sem_version.h): 24 bytes, the version numbers and two flags, then the pre-release and
+ * build-meta strings as Bedrock::StaticOptimizedString. 2024's was 0x70 bytes of std::string fields; the string
+ * fields are read-only getters now, and fullVersionString is built the way SemVersion::asString builds it.
+ */
+@nativeClass(0x18)
 export class SemVersion extends AbstractClass {
     @nativeField(uint16_t)
     major: uint16_t;
@@ -115,16 +133,26 @@ export class SemVersion extends AbstractClass {
     minor: uint16_t;
     @nativeField(uint16_t)
     patch: uint16_t;
-    @nativeField(CxxString, 0x08)
-    preRelease: CxxString;
-    @nativeField(CxxString)
-    buildMeta: CxxString;
-    @nativeField(CxxString)
-    fullVersionString: CxxString;
     @nativeField(bool_t)
     validVersion: bool_t;
     @nativeField(bool_t)
     anyVersion: bool_t;
+
+    get preRelease(): string {
+        return readStaticOptimizedString(this as any as StaticPointer, 0x08);
+    }
+    get buildMeta(): string {
+        return readStaticOptimizedString(this as any as StaticPointer, 0x10);
+    }
+    get fullVersionString(): string {
+        if (this.anyVersion) return "*";
+        let out = `${this.major}.${this.minor}.${this.patch}`;
+        const pre = this.preRelease;
+        if (pre.length !== 0) out += "-" + pre;
+        const meta = this.buildMeta;
+        if (meta.length !== 0) out += "+" + meta;
+        return out;
+    }
 }
 
 export class BaseGameVersion extends SemVersion {}
