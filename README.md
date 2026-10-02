@@ -46,6 +46,12 @@ The rest of this README is upstream's text. The VSCode and `bdsx.bat` instructio
 ## Known limits
 
 -   **Windows only.** Linux with Wine has not been tried.
+-   **NetherNet on 1.26.51.1.** BDS 1.26.51.1 ships `transport=nethernet` in `server.properties`, and it warns
+    that players cannot connect over RakNet. Under NetherNet, the RakNet part of bdsx is unavailable:
+    `bedrockServer.rakPeer`, player IP addresses (`NetworkIdentifier.getAddress()`) and ping. bdsx prints a
+    `connector: unavailable` line at boot, and the `net-ping.ts` example fails to load. All of the 1.26.51.1
+    testing used `transport=raknet` and a RakNet test client, so it has not been tested whether packet and
+    player events fire for a real NetherNet client. 1.26.40.8 ships `transport=raknet`, the tested setup.
 -   **Some names have no address.** When the server boots, it prints red `Symbol not found: ...` lines. These
     are expected: they are the names that are not in this build's table. bdsx only fails if a plugin calls
     one of them.
@@ -54,7 +60,8 @@ The rest of this README is upstream's text. The VSCode and `bdsx.bat` instructio
     "not available on BDS 1.26".
 -   **Some upstream examples do not work on 1.26.** In `example_and_test/`, `hidemapmarker.ts` and
     `lowlevel-apihooking.ts` hook functions that have a different signature in 1.26.
-    `SurvivalMode::destroyBlock`, which `blockevent.ts` uses, is not in the table.
+    `SurvivalMode::destroyBlock`, which `blockevent.ts` uses, is not in the table. The `example_score` command
+    of `net-scorepacket.ts` fails with an error, because `SetScorePacket` still has its 2024 layout.
 -   **bdsx no longer reads the console.** BDS 1.26 builds its console reader into its startup code, so bdsx
     cannot replace it. Typed commands still work, but BDS reads them itself, and
     `bedrockServer.DefaultStdInHandler` is not installed. `bedrockServer.executeCommandOnConsole` still works.
