@@ -648,10 +648,15 @@ function _launch(asyncResolve: () => void): void {
                 attempt("connector", () => {
                     const c = sns.getPointer(layouts.ServerNetworkSystem.connector);
                     if (c === null || c.isNull()) throw Error("connector member is null");
-                    connector = c.as(RakNetConnector);
-                    if ("??_7RakNetConnector@@6BConnector@@@" in proc) {
-                        bdsxEqualsAssert(connector.vftable, proc["??_7RakNetConnector@@6BConnector@@@"], "Invalid connector");
+                    const typed = c.as(RakNetConnector);
+                    // 1.26.51's server.properties ships transport=nethernet, and then the member holds NetherNet's
+                    // connector. Calling RakNetConnector's slots on it runs some other function, so refuse it:
+                    // connector and rakPeer stay null and the RakNet-only API (IP address, ping) is unavailable.
+                    const vftable = "??_7RakNetConnector@@6BConnector@@@";
+                    if (vftable in proc && !typed.vftable.equalsptr(proc[vftable])) {
+                        throw Error("not RakNet's connector (server.properties transport=nethernet?): RakNet peer, IP addresses and ping unavailable");
                     }
+                    connector = typed;
                 });
                 // The listening peer is the connector's own: RakNetConnector::getPeer
                 // (an Endstone slot, checked by execution on 1.26.40.8) returns a
@@ -661,7 +666,7 @@ function _launch(asyncResolve: () => void): void {
                 // only a fallback for a table without getPeer.
                 if ("?getPeer@RakNetConnector@@UEAAPEAVRakPeerInterface@RakNet@@XZ" in proc) {
                     rakPeerLazy = () => {
-                        if (connector === null) return null;
+                        if (connector === null) throw Error("no RakNet connector (see the connector line at boot)");
                         const rp: RakNet.RakPeer | null = RakNetConnector$getPeer(connector);
                         if (rp === null || rp.isNull()) return null;
                         if ("??_7RakPeer@RakNet@@6BRakPeerInterface@1@@" in proc) {
