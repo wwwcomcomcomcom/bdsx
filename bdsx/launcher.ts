@@ -478,23 +478,49 @@ function _launch(asyncResolve: () => void): void {
     /**
      * it hooks the sleep part of the server and inject the node message loop.
      */
-    procHacker.patching(
-        "update-hook",
-        "<lambda_261fc769b4b17f58193d57d5f3ee7db9>::operator()", // caller of ServerInstance::_update
-        0x8b6,
-        asmcode.updateWithSleep,
-        Register.rax,
-        true,
-        // prettier-ignore
-        [
-            0x48, 0x2B, 0xC8,                         // sub rcx,rax
-            0x48, 0x81, 0xF9, 0x88, 0x13, 0x00, 0x00, // cmp rcx,1388
-            0x7C, 0x0B,                               // jl bedrock_server.7FF743BA7B50
-            0x48, 0x8D, 0x4C, 0x24, 0x20,             // lea rcx,qword ptr ss:[rsp+20]
-            0xE8, null, null, null, null,             // call <bedrock_server.void __cdecl std::this_thread::sleep_until<struct std::chrono::steady_clock,class std::chrono::duration<__int64,struct std::ratio<1,1000000000> > >(class std::chrono::ti
-            0x90,                                     // nop
-        ],
-    );
+    if (GAME_THREAD_LAMBDA in proc) {
+        procHacker.patching(
+            "update-hook",
+            GAME_THREAD_LAMBDA, // caller of ServerInstance::_update
+            0x8b6,
+            asmcode.updateWithSleep,
+            Register.rax,
+            true,
+            // prettier-ignore
+            [
+                0x48, 0x2B, 0xC8,                         // sub rcx,rax
+                0x48, 0x81, 0xF9, 0x88, 0x13, 0x00, 0x00, // cmp rcx,1388
+                0x7C, 0x0B,                               // jl bedrock_server.7FF743BA7B50
+                0x48, 0x8D, 0x4C, 0x24, 0x20,             // lea rcx,qword ptr ss:[rsp+20]
+                0xE8, null, null, null, null,             // call <bedrock_server.void __cdecl std::this_thread::sleep_until<struct std::chrono::steady_clock,class std::chrono::duration<__int64,struct std::ratio<1,1000000000> > >(class std::chrono::ti
+                0x90,                                     // nop
+            ],
+        );
+    } else if (GAME_THREAD_INVOKE in proc) {
+        // 1.26 inlined the lambda and its std::this_thread::sleep_until into _Invoke, so without this nothing ran node's
+        // loop while the server ran: timers and sockets fired at shutdown (docs/findings-bot.md section 7). The sleep is a
+        // QPC loop that starts at _Invoke+0xfd8 on 1.26.40.8 and 1.26.51.1 alike, once r15 holds the next tick's deadline
+        // (the same steady-clock nanoseconds nodeLoop takes). A call to updateWithSleep with rcx = r15 takes the 21 bytes
+        // below: node's loop runs until the deadline, and the inlined sleep loop after it finds the deadline passed and
+        // leaves through the `mov r12,r15` in front of the loop top, as the jl would have.
+        const updateThunk = asm().mov_r_r(Register.rcx, Register.r15).jmp64(asmcode.updateWithSleep, Register.rax).alloc("update-hook thunk");
+        procHacker.patching(
+            "update-hook",
+            GAME_THREAD_INVOKE,
+            0xfd8,
+            updateThunk,
+            Register.rax,
+            true,
+            // prettier-ignore
+            [
+                0x4C, 0x89, 0xF8,                         // mov rax,r15
+                0x48, 0x29, 0xD0,                         // sub rax,rdx
+                0x4D, 0x89, 0xFC,                         // mov r12,r15
+                0x48, 0x3D, 0x88, 0x13, 0x00, 0x00,       // cmp rax,1388h
+                0x0F, 0x8C, null, null, null, null,       // jl <loop top>
+            ],
+        );
+    }
 
     // The open block. Every acquisition is attempted on its own: with the
     // static symbol table incomplete (docs/status.md), a missing getter must
