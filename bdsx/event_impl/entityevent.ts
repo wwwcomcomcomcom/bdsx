@@ -13,6 +13,7 @@ import { Player, ServerPlayer, SimulatedPlayer } from "../bds/player";
 import { CANCEL } from "../common";
 import { engineLayout } from "../bds/engine/deps";
 import { jumpExhaustionActor } from "../bds/engine/jump";
+import { holdSwimStart, playerActionActor, startsSwimming } from "../bds/engine/playeraction";
 import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
@@ -483,6 +484,30 @@ events.entityStartSwimming.setInstaller(() => {
     }
     const _onEntityStartSwimming = procHacker.hooking("?startSwimming@Actor@@UEAAXXZ", void_t, null, Actor)(onEntityStartSwimming);
     const _onPlayerStartSwimming = procHacker.hooking("?startSwimming@Player@@UEAAXXZ", void_t, null, Player)(onPlayerStartSwimming);
+    // 1.26: a client's swim never calls Player::startSwimming (what a simulated player's swim still does). The swim start
+    // in the tick's player actions sets the flag inside an ECS system (bds/engine/playeraction.ts; docs/findings-bot.md
+    // section 9), so the event is also raised there, on the call that turns the flag on; a cancel hides the start bit
+    // from that one call
+    const ACTION_FLAGS = "bdsx:PlayerActionFlagSystem::_tickEntity";
+    if (ACTION_FLAGS in proc) {
+        const _tickEntity = procHacker.hooking(ACTION_FLAGS, void_t, null, StaticPointer, StaticPointer, StaticPointer, StaticPointer, StaticPointer)(
+            (entity: StaticPointer, actions: StaticPointer, flags: StaticPointer, dirty: StaticPointer, entityRegistry: StaticPointer): void => {
+                if (startsSwimming(actions, flags)) {
+                    const p = playerActionActor(entity, entityRegistry);
+                    const actor = p === null ? null : Actor.from(p);
+                    if (actor !== null && events.entityStartSwimming.fire(new EntityStartSwimmingEvent(actor)) === CANCEL) {
+                        const restore = holdSwimStart(actions);
+                        try {
+                            return _tickEntity(entity, actions, flags, dirty, entityRegistry);
+                        } finally {
+                            restore();
+                        }
+                    }
+                }
+                return _tickEntity(entity, actions, flags, dirty, entityRegistry);
+            },
+        );
+    }
 });
 
 // 1.26 added a third argument to Actor::startRiding and a fourth to Actor::stopRiding, so both hooks
