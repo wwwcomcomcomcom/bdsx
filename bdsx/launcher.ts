@@ -19,7 +19,8 @@ import { engineLayout } from "./bds/engine/deps";
 import { StructureManager } from "./bds/structure";
 import { derived, proc } from "./bds/symbols";
 import { minecraftCommandsRegistry, minecraftLevel } from "./bds/engine/serverfields";
-import type { CommandResult, CommandResultType } from "./commandresult";
+import type { CommandResult } from "./commandresult";
+import { CommandResultType } from "./commandresult";
 import { CANCEL, Encoding } from "./common";
 import { Config } from "./config";
 import { capi } from "./capi";
@@ -87,6 +88,9 @@ const bedrockLogLiner = new Liner();
 
 const commandQueue = new MultiThreadQueue(CxxString[NativeType.size]);
 const commandQueueBuffer = new CxxStringWrapper(true);
+/** the getLine patch below is what dequeues commandQueue; without the symbol executeCommandOnConsole runs commands itself */
+const CONSOLE_GETLINE = "?getLine@ConsoleInputReader@@QEAA_NAEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z";
+const consoleCommands: string[] = [];
 
 function patchForStdio(): void {
     // hook bedrock log
@@ -209,7 +213,7 @@ function patchForStdio(): void {
     asmcode.MultiThreadQueueTryDequeue = MultiThreadQueue.tryDequeue;
     procHacker.patching(
         "hook-stdin-command",
-        "?getLine@ConsoleInputReader@@QEAA_NAEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z",
+        CONSOLE_GETLINE,
         0,
         asmcode.ConsoleInputReader_getLine_hook,
         Register.rax,
@@ -983,9 +987,28 @@ export namespace bedrockServer {
      * pass to stdin
      */
     export function executeCommandOnConsole(command: string): void {
-        commandQueueBuffer.construct();
-        commandQueueBuffer.value = command;
-        commandQueue.enqueue(commandQueueBuffer); // assumes the string is moved, and does not have the buffer anymore.
+        if (CONSOLE_GETLINE in proc) {
+            commandQueueBuffer.construct();
+            commandQueueBuffer.value = command;
+            commandQueue.enqueue(commandQueueBuffer); // assumes the string is moved, and does not have the buffer anymore.
+            return;
+        }
+        // 1.26 inlined ConsoleInputReader, so nothing drains commandQueue: run the command as the console would,
+        // as the server with its output printed, from the node loop on the game thread like a dequeued line was
+        consoleCommands.push(command);
+        if (consoleCommands.length !== 1) return;
+        openIsFired.then(() =>
+            setImmediate(() => {
+                const commands = consoleCommands.splice(0);
+                for (const cmd of commands) {
+                    try {
+                        bedrockServer.executeCommand(cmd, CommandResultType.Output);
+                    } catch (err) {
+                        events.errorFire(err);
+                    }
+                }
+            }),
+        );
     }
 
     export declare function executeCommand(
