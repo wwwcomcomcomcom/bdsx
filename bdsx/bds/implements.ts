@@ -88,7 +88,7 @@ import { bin } from "../bin";
 import { capi } from "../capi";
 import { commandParser } from "../commandparser";
 import { CommandResult, CommandResultType } from "../commandresult";
-import { AttributeName, Direction, VectorXYZ, abstract } from "../common";
+import { AttributeName, CANCEL, Direction, VectorXYZ, abstract } from "../common";
 import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { CxxPair } from "../cxxpair";
 import { CxxVector, CxxVectorToArray } from "../cxxvector";
@@ -8396,18 +8396,30 @@ bedrockServer.executeCommand = function (
 // On 1.26 the engine runs the command itself: MinecraftCommands::executeCommand builds its own CommandOutput (whose
 // constructor and error() bdsx has no address for) and drives CommandRegistry::Parser inline. bdsx's own copy of that
 // loop, which also fired events.command by hand, is gone; CommandRegistry.Parser stays as a plugin API
-// (docs/findings-scoreboard.md sections 5 and 12). The output reaches the origin unless muted; Data mode gets the
-// status code, not the messages.
+// (docs/findings-scoreboard.md sections 5 and 12). The output reaches the origin unless muted. Data mode takes its
+// statusMessage from the text the engine hands CommandOutputSender::send (events.commandOutput, the one place 1.26
+// joins the messages): the command runs with output on, a first listener collects the lines, and, when Output was
+// not asked for, cancels them, so neither the console nor a later listener sees them -- as a muted 2024 run showed
+// nothing. An origin whose output does not go through the sender (a player's) gets "" (docs/findings-examples.md).
 function executeCommandWithOutput(command: string, origin: CommandOrigin, mute: CommandResultType = null): CommandResult<CommandResult.Any> {
     if (mute === true || mute == null) mute = CommandResultType.Mute;
     else if (mute === false) mute = CommandResultType.Output;
+    const wantData = (mute & CommandResultType.Data) !== 0;
+    const wantOutput = (mute & CommandResultType.Output) !== 0;
+    const lines: string[] = [];
+    const collect = (line: string): CANCEL | void => {
+        lines.push(line);
+        if (!wantOutput) return CANCEL;
+    };
     const ctx = CommandContext.constructWith(command, origin);
+    if (wantData) events.commandOutput.onFirst(collect);
     try {
         // through bdsx's own wrapper, so events.command fires exactly once
-        const res = bedrockServer.minecraftCommands.executeCommand(ctx, (mute & CommandResultType.Output) === 0) as CommandResult<CommandResult.Any>;
-        if ((mute & CommandResultType.Data) !== 0) res.data = { statusCode: res.getFullCode(), statusMessage: "" };
+        const res = bedrockServer.minecraftCommands.executeCommand(ctx, !wantOutput && !wantData) as CommandResult<CommandResult.Any>;
+        if (wantData) res.data = { statusCode: res.getFullCode(), statusMessage: lines.join("\n") };
         return res;
     } finally {
+        if (wantData) events.commandOutput.remove(collect);
         ctx.destruct();
     }
 }
