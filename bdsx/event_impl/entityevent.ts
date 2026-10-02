@@ -12,6 +12,7 @@ import { CompletedUsingItemPacket, PlayerAuthInputPacket, SetLocalPlayerAsInitia
 import { Player, ServerPlayer, SimulatedPlayer } from "../bds/player";
 import { CANCEL } from "../common";
 import { engineLayout } from "../bds/engine/deps";
+import { jumpExhaustionActor } from "../bds/engine/jump";
 import { AllocatedPointer, NativePointer, StaticPointer, VoidPointer } from "../core";
 import { decay } from "../decay";
 import { events } from "../event";
@@ -205,6 +206,22 @@ const KNOCKBACK_PARAMETERS_SIZE = 28;
 const HURT_PARAMETERS_SIZE = 24;
 
 events.playerJump.setInstaller(() => {
+    // 1.26 has no Player::handleJumpEffects: the PlayerActionPacket handler sends StartJump to its exit, and the jump's
+    // effects are the ECS system the binary names "JumpExhaustion", which runs once for each player holding a
+    // TriggerJumpRequestComponent. The event is raised from that system's per-entity function, which has the entity id
+    // and the EntityRegistry rather than a Player (bds/engine/jump.ts; docs/findings-slots.md "Q7 through a simulated player")
+    const JUMP_EXHAUSTION = "bdsx:JumpExhaustionSystem::_tickEntity";
+    if (!("?handleJumpEffects@Player@@QEAAXXZ" in proc) && JUMP_EXHAUSTION in proc) {
+        const _tickEntity = procHacker.hooking(JUMP_EXHAUSTION, void_t, null, StaticPointer, StaticPointer, StaticPointer, StaticPointer, StaticPointer, StaticPointer)(
+            (entity: StaticPointer, flags: StaticPointer, gameType: StaticPointer, exhaustion: StaticPointer, context: StaticPointer, defaultGameType: StaticPointer): void => {
+                const p = jumpExhaustionActor(entity, context);
+                const player = p === null ? null : Actor.from(p);
+                if (player instanceof Player) events.playerJump.fire(new PlayerJumpEvent(player));
+                return _tickEntity(entity, flags, gameType, exhaustion, context, defaultGameType);
+            },
+        );
+        return;
+    }
     function onMobJump(player: Player): void {
         const event = new PlayerJumpEvent(player);
         events.playerJump.fire(event);

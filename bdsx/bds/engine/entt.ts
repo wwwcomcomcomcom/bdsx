@@ -134,3 +134,12 @@ export function enttActorFromWeakRef(ref: StaticPointer): StaticPointer | null {
     const owner = enttComponent(holder as unknown as EntityOwner, ACTOR_OWNER_COMPONENT, 8);
     return owner === null ? null : owner.getNullablePointer(0);
 }
+
+/**
+ * The actor an entity id names in an EntityRegistry, or null: what an ECS system's per-entity function has instead of an
+ * Actor (engine/jump.ts). The same ActorOwnerComponent lookup as enttActorFromWeakRef, without the weak reference.
+ */
+export function enttActorIn(entityRegistry: StaticPointer, entity: number): StaticPointer | null {
+    const owner = enttComponentIn(entityRegistry.add(ENTITY_REGISTRY_ENTT), entity, ACTOR_OWNER_COMPONENT, 8);
+    return owner === null ? null : owner.getNullablePointer(0);
+}

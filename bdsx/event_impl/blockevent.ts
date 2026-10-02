@@ -158,6 +158,20 @@ events.blockDestroy.setInstaller(() => {
 });
 
 events.blockDestructionStart.setInstaller(() => {
+    // 1.26: sendBlockDestructionStarted gained an int (its lambda's scope reads ...AEBVBlock@@EH@Z) and is inlined into
+    // its one sender, ServerPlayerBlockUseHandler::onStartDestroyBlock, which sends it unconditionally. That function's
+    // callers are the client's auth-input block actions and SimulatedPlayer's preAiStep (the first tick of a dig), so
+    // the event is raised at its entry (docs/findings-slots.md "Q7 through a simulated player")
+    const ON_START_DESTROY = "?onStartDestroyBlock@ServerPlayerBlockUseHandler@@YAXAEAVServerPlayer@@AEBVBlockPos@@H@Z";
+    if (!("?sendBlockDestructionStarted@BlockEventCoordinator@@QEAAXAEAVPlayer@@AEBVBlockPos@@AEBVBlock@@E@Z" in proc) && ON_START_DESTROY in proc) {
+        const _onStartDestroy = procHacker.hooking(ON_START_DESTROY, void_t, null, Player, BlockPos, int32_t)((player: Player, blockPos: BlockPos, face: number): void => {
+            const event = new BlockDestructionStartEvent(player, blockPos);
+            events.blockDestructionStart.fire(event);
+            _onStartDestroy(event.player, event.blockPos, face);
+            decay(blockPos);
+        });
+        return;
+    }
     function onBlockDestructionStart(blockEventCoordinator: StaticPointer, player: Player, blockPos: BlockPos, block: Block, v: uint8_t): void {
         const event = new BlockDestructionStartEvent(player, blockPos);
         events.blockDestructionStart.fire(event);
