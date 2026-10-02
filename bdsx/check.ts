@@ -71,8 +71,8 @@ import { BdsxExitCode } from "./shellprepare/exitcode";
 // (docs/findings-utils.md) -- and reading them back is a check that the table
 // describes the binary that is running.
 //
-// What they are NOT is a reason to stop: the version bdsx was released against
-// (version-bds.json, 1.21.3.01) is not the version the table was built for, and
+// What they are NOT is a reason to stop: version-bds.json is only the installer's
+// default download, not the version the installed table was built for, and
 // demanding the former is how this check used to kill a perfectly good server.
 // The comparison is against the table, and the MD5 the table is keyed on is
 // the guarantee underneath it.

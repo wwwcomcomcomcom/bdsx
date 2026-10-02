@@ -1,3 +1,81 @@
+# BDSX revival: bdsx on BDS 1.26
+
+This is a fork of [bdsx](https://github.com/bdsx/bdsx), which was archived on 2024-11-14. It runs bdsx on
+current Bedrock Dedicated Server builds.
+
+**Why bdsx stopped working.** bdsx read `bedrock_server.pdb` at runtime to find the address of every
+function it hooks or calls. Mojang has not shipped that PDB since BDS 1.21.20, so upstream bdsx cannot start
+on any newer server.
+
+**What this fork does instead.** The `name -> address` table is generated offline, once per BDS build, and
+shipped with the project as `symbols/<version>/symbols.json`. bdsx loads it at startup, and it refuses to
+run if the table was built for a different `bedrock_server.exe` (it checks the MD5). The table also carries
+some object layouts and constants that no longer have a function to read them. Where a function no longer
+exists, bdsx implements it itself. Plugins use the same bdsx API, except for the parts listed under Known limits.
+
+## Supported BDS builds
+
+| BDS                     | table                |
+| ----------------------- | -------------------- |
+| **1.26.51.1** (default) | `symbols/1.26.51.1/` |
+| 1.26.40.8               | `symbols/1.26.40.8/` |
+
+Only these exact builds will run. A table matches one `bedrock_server.exe`, so any other version, including
+later 1.26 patches, needs a new table. The installer refuses a version it has no table for.
+
+## Install (Windows)
+
+Requirements: [node.js](https://nodejs.org/) (tested with 20), [git](https://git-scm.com/download), and the
+[Microsoft Visual C++ 2015-2022 x64 redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+Windows Server does not include that runtime, and BDS will not start without it.
+
+```bat
+git clone https://github.com/wwwcomcomcomcom/bdsx.git
+cd bdsx
+npm i
+bdsx.bat
+```
+
+`npm i` runs bdsx's installer. It downloads BDS from minecraft.net and bdsx-core from
+[bdsx/bdsx-core](https://github.com/bdsx/bdsx-core/releases), and copies the matching symbol table into
+`bedrock_server/`. To install 1.26.40.8 instead, run `set BDSX_BDS_VERSION=1.26.40.8` before `npm i`.
+After a `git pull`, run `npm i` again (or `update.bat`) so that `bedrock_server/` gets the updated table.
+
+The rest of this README is upstream's text. The VSCode and `bdsx.bat` instructions still apply.
+
+## Known limits
+
+-   **Windows only.** Linux with Wine has not been tried.
+-   **Some names have no address.** When the server boots, it prints red `Symbol not found: ...` lines. These
+    are expected: they are the names that are not in this build's table. bdsx only fails if a plugin calls
+    one of them.
+-   **Some upstream APIs are gone,** because BDS 1.26 no longer has them: `DyePowderItemComponent`,
+    `KnockbackResistanceItemComponent`, and copying or moving a `SerializedSkin`. Calling them throws
+    "not available on BDS 1.26".
+-   **Some upstream examples do not work on 1.26.** In `example_and_test/`, `hidemapmarker.ts` and
+    `lowlevel-apihooking.ts` hook functions that have a different signature in 1.26.
+    `SurvivalMode::destroyBlock`, which `blockevent.ts` uses, is not in the table.
+-   **bdsx no longer reads the console.** BDS 1.26 builds its console reader into its startup code, so bdsx
+    cannot replace it. Typed commands still work, but BDS reads them itself, and
+    `bedrockServer.DefaultStdInHandler` is not installed. `bedrockServer.executeCommandOnConsole` still works.
+-   **Development tools that need the PDB do not work:** `pdbcachegen` and searching for symbols by
+    name at runtime. Only the names in the shipped table resolve.
+-   **Login certificates:** the XUID of a player who logs in with online-mode authentication has not been
+    tested. Testing ran with `online-mode=false`.
+-   **Old plugins:** compatibility with plugins written for bdsx in 2024 is not a goal. APIs for things that
+    BDS 1.26 removed are dropped instead of emulated.
+
+## Credits and licence
+
+bdsx is by karikera and its contributors, MIT ([LICENSE.txt](LICENSE.txt), unchanged). The revival's
+changes are under the same licence. The 1.26 class layouts and virtual-table slots were cross-checked
+against the headers of [Endstone](https://github.com/EndstoneMC/endstone) (Apache-2.0). This fork contains no
+Mojang code: the tables hold addresses, offsets and a few constant values, not code from
+`bedrock_server.exe`. Minecraft and Bedrock Dedicated Server are Mojang's. Downloading BDS means you accept
+the [Minecraft EULA](https://account.mojang.com/terms).
+
+---
+
 # BDSX : BDS + node.js
 
 ![logo](bdsx/images/icon.png)\

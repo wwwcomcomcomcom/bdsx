@@ -1,5 +1,6 @@
-import * as child_process from "child_process";
 import * as colors from "colors";
+import * as crypto from "crypto";
+import * as fs from "fs";
 import * as path from "path";
 import { fsutil } from "../fsutil";
 import { spropsUtil } from "../serverproperties";
@@ -12,13 +13,11 @@ import { BDSInstaller, InstallItem } from "./installercls";
 // listed at https://net-secondary.web.minecraft-services.net/api/v1.0/download/links
 const BDS_LINK_DEFAULT = "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-%BDS_VERSION%.zip";
 const BDSX_CORE_LINK_DEFAULT = "https://github.com/bdsx/bdsx-core/releases/download/%BDSX_CORE_VERSION%/bdsx-core-%BDSX_CORE_VERSION%.zip";
-const PDBCACHE_LINK_DEFAULT = "https://github.com/bdsx/pdbcache/releases/download/%BDS_VERSION%/pdbcache.zip";
 
 const BDS_VERSION = process.env.BDSX_BDS_VERSION || BDS_VERSION_DEFAULT;
 const BDSX_CORE_VERSION = process.env.BDSX_CORE_VERSION || BDSX_CORE_VERSION_DEFAULT;
 const BDS_LINK = replaceVariable(process.env.BDSX_BDS_LINK || BDS_LINK_DEFAULT);
 const BDSX_CORE_LINK = replaceVariable(process.env.BDSX_CORE_LINK || BDSX_CORE_LINK_DEFAULT);
-const PDBCACHE_LINK = replaceVariable(process.env.BDSX_PDBCACHE_LINK || PDBCACHE_LINK_DEFAULT);
 
 function replaceVariable(str: string): string {
     return str.replace(/%(.*?)%/g, (match, name: string) => {
@@ -50,27 +49,62 @@ function filterFiles(files: string[]): string[] {
         });
 }
 
-const pdbcache = new InstallItem({
-    name: "pdbcache",
-    version: BDS_VERSION,
-    url: PDBCACHE_LINK,
-    targetPath: ".",
-    key: "pdbcacheVersion",
-    keyFile: "pdbcache.bin",
-    async fallback(installer, statusCode) {
-        if (statusCode !== 404) return;
-        console.error(colors.yellow(`pdbcache-${BDS_VERSION} does not exist on the server`));
-        console.error(colors.yellow("Generate through pdbcachegen.exe"));
-        const pdbcachegen = path.join(installer.bdsPath, "pdbcachegen.exe");
-        const pdbcachebin = path.join(installer.bdsPath, "pdbcache.bin");
-        const bedrockserver = path.join(installer.bdsPath, "bedrock_server.exe");
-        const res = child_process.spawnSync(pdbcachegen, [bedrockserver, pdbcachebin], { stdio: "inherit" });
-        if (res.status !== 0) throw new InstallItem.Report(`Failed to generate pdbcache`);
+// Mojang stopped shipping bedrock_server.pdb, so there is no pdbcache to download or
+// generate any more. Each supported BDS build instead has a pair under symbols/<version>/,
+// generated offline and shipped with the project:
+//   symbols.json  the name -> RVA table bdsx reads at startup (bdsx/pdbcache.ts)
+//   pdbcache.bin  the 28-byte header bdsx-core reads before any JS runs: format version,
+//                 MD5 of bedrock_server.exe, and the RVA of main
+// Both are keyed on the MD5 of bedrock_server.exe, and the pair is picked by that MD5.
+const TABLES_DIR = path.join(fsutil.projectPath, "symbols");
+const TABLE_FILES = ["symbols.json", "pdbcache.bin"];
 
-        await installer.gitPublish(this, "pdbcache.bin", installer.bdsPath, "pdbcache.zip");
-        return false;
-    },
-});
+function supportedVersions(): string[] {
+    let dirs: string[];
+    try {
+        dirs = fs.readdirSync(TABLES_DIR);
+    } catch (err) {
+        return [];
+    }
+    return dirs.filter(v => TABLE_FILES.every(file => fs.existsSync(path.join(TABLES_DIR, v, file)))).sort();
+}
+
+function unsupportedReport(what: string): InstallItem.Report {
+    const supported = supportedVersions();
+    return new InstallItem.Report(
+        `${what} is not supported by this bdsx: there is no symbol table for it.\n` +
+            `Supported BDS versions: ${supported.length === 0 ? "(none found in symbols/)" : supported.join(", ")}\n` +
+            `Set BDSX_BDS_VERSION to one of them and run 'npm i' again.`,
+    );
+}
+
+/** the shipped table whose exe MD5 is the installed bedrock_server.exe's, by version directory */
+async function findTable(exeMd5: string): Promise<string | null> {
+    for (const version of supportedVersions()) {
+        const dir = path.join(TABLES_DIR, version);
+        const header = await fsutil.readFile(path.join(dir, "pdbcache.bin"), null);
+        if (header.length !== 28 || header.readUInt32LE(0) !== 1 || header.subarray(4, 20).toString("hex") !== exeMd5) continue;
+        const table = JSON.parse(await fsutil.readFile(path.join(dir, "symbols.json")));
+        if (table.exeMd5 !== exeMd5) continue;
+        return version;
+    }
+    return null;
+}
+
+async function installSymbolTable(installer: BDSInstaller): Promise<void> {
+    const exe = path.join(installer.bdsPath, "bedrock_server.exe");
+    const exeMd5 = crypto
+        .createHash("md5")
+        .update(await fsutil.readFile(exe, null))
+        .digest("hex");
+    const version = await findTable(exeMd5);
+    if (version === null) throw unsupportedReport(`bedrock_server.exe (MD5 ${exeMd5})`);
+    for (const file of TABLE_FILES) {
+        await fsutil.copyFile(path.join(TABLES_DIR, version, file), path.join(installer.bdsPath, file));
+    }
+    installer.info.pdbcacheVersion = version;
+    console.log(`symbol table: ${version}`);
+}
 
 const bds = new InstallItem({
     name: "BDS",
@@ -132,9 +166,10 @@ export async function installBDS(bdsPath: string, opts: BDSInstaller.Options): P
     }
     await installer.info.load();
     try {
+        if (supportedVersions().indexOf(BDS_VERSION) === -1) throw unsupportedReport(`BDS ${BDS_VERSION}`);
         await bds.install(installer);
         await bdsxCore.install(installer);
-        await pdbcache.install(installer);
+        await installSymbolTable(installer);
         await installer.info.save();
         return true;
     } catch (err) {

@@ -5,3 +5,4 @@
 bdsx/asm/asmcode.d.ts
 bdsx/externs/generated.addons.d.ts
 bedrock_server
+symbols
