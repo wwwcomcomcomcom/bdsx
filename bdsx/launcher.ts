@@ -965,7 +965,10 @@ export namespace bedrockServer {
      * It will stop next tick
      */
     export function stop(): void {
-        stopfunc(bedrockServer.dedicatedServer.add(8));
+        // DedicatedServer::stop's `this` is the Bedrock::AppIsland base: +8 in 2024 (IMinecraftApp's vptr came first),
+        // the object itself on 1.26, whose constructor stores only AppIsland's vftable, at +0. Calling it at +8 there
+        // set the wrong byte as the stop flag and killed the server (docs/findings-examples.md)
+        stopfunc(bedrockServer.dedicatedServer.add(engineLayout("DedicatedServer", "stopThis", 8)));
     }
 
     export function forceKill(exitCode: number): never {
@@ -1002,7 +1005,8 @@ export namespace bedrockServer {
                 const commands = consoleCommands.splice(0);
                 for (const cmd of commands) {
                     try {
-                        bedrockServer.executeCommand(cmd, CommandResultType.Output);
+                        // a console line reaches the engine (and events.command) with its leading slash
+                        bedrockServer.executeCommand(cmd.startsWith("/") ? cmd : "/" + cmd, CommandResultType.Output);
                     } catch (err) {
                         events.errorFire(err);
                     }
