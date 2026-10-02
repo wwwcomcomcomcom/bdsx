@@ -6,9 +6,10 @@ import { events } from "../event";
 import { HashSet, Hashable } from "../hashset";
 import { makefunc } from "../makefunc";
 import { AbstractClass, NativeClass, NativeStruct, nativeClass, nativeField } from "../nativeclass";
-import { NativeType, bin64_t, bool_t, int32_t, void_t } from "../nativetype";
+import { NativeType, bin64_t, int32_t, void_t } from "../nativetype";
 import { CxxStringWrapper } from "../pointer";
 import { procHacker } from "../prochacker";
+import { proc } from "./symbols";
 import { remapAndPrintError } from "../source-map-support";
 import { ConnectionRequest } from "./connreq";
 import type { Packet } from "./packet";
@@ -274,10 +275,15 @@ NetworkIdentifier.setResolver(ptr => {
 /** @deprecated use bedrockServer.networkSystem */
 export let networkSystem: NetworkSystem;
 
+// 1.26 added two arguments (the body override and a Json::Value session summary, Endstone connector.h), so the
+// decoration is unknowable and the table ships ConnectionCallbacks slot 3 under bdsx's own key. The four register
+// arguments are 2024's; the hook reads only those and leaves the stack ones to the original.
+const ON_CONNECTION_CLOSED_2024 =
+    "?onConnectionClosed@NetworkSystem@@EEAAXAEBVNetworkIdentifier@@W4DisconnectFailReason@Connection@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@_N@Z";
 procHacker.hookingRawWithCallOriginal(
-    "?onConnectionClosed@NetworkSystem@@EEAAXAEBVNetworkIdentifier@@W4DisconnectFailReason@Connection@@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@_N@Z",
+    "bdsx:NetworkSystem::onConnectionClosed" in proc ? "bdsx:NetworkSystem::onConnectionClosed" : ON_CONNECTION_CLOSED_2024,
     makefunc.np(
-        (handler, ni, reason, msg, b) => {
+        (handler, ni, reason, msg) => {
             try {
                 events.networkDisconnected.fire(ni);
             } catch (err) {
@@ -295,7 +301,6 @@ procHacker.hookingRawWithCallOriginal(
         NetworkIdentifier,
         int32_t,
         CxxStringWrapper,
-        bool_t,
     ),
     [Register.rcx, Register.rdx, Register.r8, Register.r9],
     [],
