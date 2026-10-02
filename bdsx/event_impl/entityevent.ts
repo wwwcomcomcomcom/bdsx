@@ -553,6 +553,24 @@ events.playerAttack.setInstaller(() => {
     // `retracted`). Hooking the shim is enough: original() replays its own untouched bytes, so the
     // extra argument never has to be known. ActorHurtResult is variant<bool, float> (payload at +0,
     // tag at +4) then a bool at +8, the same layout Mob::_hurt returns; "not hurt" is all-zero.
+    // A client's attack never passes that shim (docs/findings-bot.md "playerAttack: the client path"): GameMode::attack
+    // (GameMode vftable slot 15) runs a lambda that calls the combat body directly with a fifth argument of its own (the
+    // attack direction), so a hook on the shim saw only attacks made through the actor's attack virtual (a simulated
+    // player's). The body (bdsx:Player::_attack) is what the shim, that lambda and a third caller share; the fifth
+    // argument is passed through untouched.
+    if ("bdsx:Player::_attack" in proc) {
+        const _attack = procHacker.hooking("bdsx:Player::_attack", StaticPointer, null, Player, StaticPointer, Actor, Wrapper.make(int32_t), StaticPointer)(
+            (player: Player, result: StaticPointer, victim: Actor, cause: Wrapper<ActorDamageCause>, params: StaticPointer): StaticPointer => {
+                const event = new PlayerAttackEvent(player, victim);
+                if (events.playerAttack.fire(event) === CANCEL) {
+                    result.fill(0, 12);
+                    return result;
+                }
+                return _attack(event.player, result, event.victim, cause, params);
+            },
+        );
+        return;
+    }
     if ("bdsx:Actor::attack" in proc) {
         function onPlayerAttack(player: Player, result: StaticPointer, victim: Actor, cause: Wrapper<ActorDamageCause>): StaticPointer {
             const event = new PlayerAttackEvent(player, victim);
