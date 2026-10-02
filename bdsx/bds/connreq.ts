@@ -2,9 +2,11 @@ import { CommandParameterType } from "../commandparam";
 import { abstract } from "../common";
 import { CxxVector } from "../cxxvector";
 import { makefunc } from "../makefunc";
+import { StaticPointer } from "../core";
 import { mce } from "../mce";
 import { AbstractClass, nativeClass, NativeClass, nativeField } from "../nativeclass";
 import { bool_t, CxxString, int32_t, NativeType, uint8_t, void_t } from "../nativetype";
+import { clientDataJsonOffset } from "./engine/identity";
 import { jsonArrayElementInsert, jsonObjectGet, jsonObjectMemberInsert, jsonObjectMembers, jsonSize } from "./engine/json";
 import { derived, proc } from "./symbols";
 
@@ -329,6 +331,9 @@ export class ConnectionRequest extends AbstractClass {
     }
 
     getJson(): JsonValue | null {
+        // 1.26: the client data is the request's own optional WebToken, not a Certificate behind +0x10
+        const at = clientDataJsonOffset(this as any as StaticPointer);
+        if (at !== undefined) return at === null ? null : (this as any as StaticPointer).addAs(JsonValue, at);
         const ptr = this.something;
         if (ptr === null) return null;
         return ptr.json;

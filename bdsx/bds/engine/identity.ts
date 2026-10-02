@@ -13,6 +13,22 @@ import { engineLayout } from "./deps";
 const CONNREQ_GAME_SERVER_TOKEN = engineLayout("ConnectionRequest", "gameServerToken", 0x90);
 const CONNREQ_AUTHENTICATION_TYPE = engineLayout("ConnectionRequest", "authenticationType", 0xb0);
 
+// the client-data WebToken is a std::optional<WebToken> at +0x8: WebToken is 0x80 bytes on Windows (header string,
+// header Json::Value, data string, data Json::Value at +0x50, signature string), so the parsed payload (DeviceId,
+// DeviceOS, skin, ...) is the Json::Value at +0x58 and the optional's engaged flag the byte at +0x88. -1: no such field
+// (a 2024 table, whose ConnectionRequest held a Certificate instead). docs/findings-examples.md
+const CONNREQ_CLIENT_DATA_JSON = engineLayout("ConnectionRequest", "clientDataJson", -1);
+const CONNREQ_CLIENT_DATA_ENGAGED = engineLayout("ConnectionRequest", "clientDataEngaged", -1);
+
+/**
+ * the offset of the client data's parsed payload (a Json::Value) in the request, null when the request carries no
+ * client data token, or undefined when this build's table does not describe one (2024: ConnectionRequest.something)
+ */
+export function clientDataJsonOffset(request: StaticPointer): number | null | undefined {
+    if (CONNREQ_CLIENT_DATA_JSON < 0 || CONNREQ_CLIENT_DATA_ENGAGED < 0) return undefined;
+    return request.getUint8(CONNREQ_CLIENT_DATA_ENGAGED) === 0 ? null : CONNREQ_CLIENT_DATA_JSON;
+}
+
 /** PlayerAuthenticationType: 0 Full, 1 Guest, 2 SelfSigned (Endstone player_authentication_info.h) */
 export function authenticationType(request: StaticPointer): number {
     return request.getInt32(CONNREQ_AUTHENTICATION_TYPE);
