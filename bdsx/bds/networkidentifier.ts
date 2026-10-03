@@ -17,6 +17,7 @@ import type { ServerPlayer } from "./player";
 import { RakNet } from "./raknet";
 import { RakNetConnector } from "./raknetinstance";
 import { pdbcache } from "../pdbcache";
+import { netherNetIdHash, netherNetIdKey } from "./engine/nethernetid";
 
 // TODO: fill
 enum SubClientId {}
@@ -178,7 +179,8 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
 
     /**
      * The comparison the binary makes, spelled out from the type (Endstone's
-     * header does the same): only the part the type says is live counts.
+     * header does the same): only the part the type says is live counts
+     * (for NetherNet, the variant's index and active alternative: bds/engine/nethernetid.ts).
      * Used when ?equalsTypeData@NetworkIdentifier@@ has no address.
      */
     equalsTypeDataByLayout(other: NetworkIdentifier): boolean {
@@ -193,8 +195,8 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
                 for (let i = 0; i < 16; i += 4) if (this.getUint32(L.sock + 8 + i) !== other.getUint32(L.sock + 8 + i)) return false;
                 return true;
             case NetworkIdentifierType.NetherNet:
-                for (let i = 0; i < 24; i += 4) if (this.getUint32(L.netherNetId + i) !== other.getUint32(L.netherNetId + i)) return false;
-                return true;
+                // the variant's index and active alternative only: the rest of its 24 bytes is not cleared
+                return netherNetIdKey(this as unknown as StaticPointer, L.netherNetId) === netherNetIdKey(other as unknown as StaticPointer, L.netherNetId);
             case NetworkIdentifierType.Invalid:
                 return other.type === NetworkIdentifierType.Invalid;
             default:
@@ -220,8 +222,7 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
                 for (let i = 0; i < 16; i += 4) h ^= this.getInt32(L.sock + 8 + i);
                 return h;
             case NetworkIdentifierType.NetherNet:
-                for (let i = 0; i < 24; i += 4) h ^= this.getInt32(L.netherNetId + i);
-                return h;
+                return h ^ netherNetIdHash(this as unknown as StaticPointer, L.netherNetId);
             default:
                 return h;
         }

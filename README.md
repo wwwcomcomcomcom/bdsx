@@ -133,12 +133,12 @@ before the build is booted.
 -   **Large engine changes are expensive to follow.** Every BDS build needs a new table, slot numbers shift
     between builds, and there is still no PDB to start from. The change from RakNet to NetherNet shows the
     cost. BDS 1.26.51.1 ships `transport=nethernet` in `server.properties` (1.26.40.8 ships
-    `transport=raknet`), and it warns that players cannot connect over RakNet. On 1.26.51.1, packet events,
-    player events, chat and kicks work for a NetherNet test client over LAN signalling, because everything
-    above the transport is shared. The RakNet part of bdsx has no NetherNet counterpart yet:
-    `bedrockServer.rakPeer`, player IP addresses (`NetworkIdentifier.getAddress()` returns an empty string)
-    and ping. Under NetherNet, bdsx prints a `connector: unavailable` line at boot, and the `net-ping.ts`
-    example fails to load. A change of that size in a future build means new work, not just a new table.
+    `transport=raknet`). Packet events, player events, chat, kicks and `NetworkIdentifier.getAddress()`
+    work with NetherNet clients on both builds, tested with a NetherNet test client over LAN and HTTP
+    signalling. But `getAddress()` needed new native hooks inside BDS's WebRTC code, and
+    `bedrockServer.rakPeer` and ping are still RakNet-only: under NetherNet, bdsx prints a
+    `connector: unavailable` line at boot, and the `net-ping.ts` example fails to load. A change of that size
+    in a future build means new work, not just a new table.
 -   **Some functions have not been found yet.** About 60 of the names that bdsx's code asks for have neither
     an address nor a derived implementation. Among them is `SurvivalMode::destroyBlock`, which the
     `blockevent.ts` example uses.

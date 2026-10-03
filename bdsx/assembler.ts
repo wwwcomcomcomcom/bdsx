@@ -1896,12 +1896,14 @@ export class X64Assembler {
             if (signed) operbit |= 0x10;
         }
 
+        // the register's fourth bit is REX.B (_rex above); left in the ModRM byte it lands in the /digit field and
+        // turns shl r8..r15 into shr (and shr into sar)
         if (chr === 1) {
             this.put(0xd1);
-            this.put(operbit | dest);
+            this.put(operbit | (dest & 7));
         } else {
             this.put(0xc1);
-            this.put(operbit | dest);
+            this.put(operbit | (dest & 7));
             this.put(chr % 128);
         }
         return this;

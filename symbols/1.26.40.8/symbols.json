@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.40.8",
  "exeMd5": "0fecd1f7b9e1e8bc7154f461e67d9fdc",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-02T18:18:16.374Z",
+ "generatedAt": "2026-10-03T10:06:52.102Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 42275520,
   "bdsx:BlockTypeRegistry::instance": 211156536,
@@ -427,6 +427,8 @@
   "?startLeaveGame@Minecraft@@QEAAX_N@Z": 3031360,
   "??_7RecordItem@@6B@": 174804176,
   "printf": 54704480,
+  "?ReceiveFromSignalingChannel@SimpleNetworkInterfaceImpl@NetherNet@@AEAAXUNetworkID@2@V?$basic_string_view@DU?$char_traits@D@std@@@std@@W4SignalingChannelId@2@@Z": 18918736,
+  "?SwitchSelectedConnectionInternal@P2PTransportChannel@webrtc@@AEAAXPEAVConnection@2@W4IceSwitchReason@2@@Z": 170116848,
   "??_7ServerLevel@@6BILevel@@@": 173973216,
   "??_7ServerLevel@@6BBlockSourceListener@@@": 173976496,
   "??_7ServerLevel@@6BIWorldRegistriesProvider@@@": 173976576,
@@ -13230,6 +13232,22 @@
   "DedicatedServer": {
    "stopThis": 0,
    "note": "DedicatedServer::stop (0x7a400) takes the object itself: the constructor (0x78800) stores one vftable, ??_7DedicatedServer@@6BAppIsland@Bedrock@@@, at +0, and the live this of stop carried that table (docs/findings-instances.md). 2024 called it at +8, AppIsland's base behind IMinecraftApp's vptr; bdsx's +8 on 1.26 set +0x50 instead of the stop flag at +0x48 and the server died (rel40, docs/findings-inventory.md section 29). Consumed by launcher.ts bedrockServer.stop()"
+  },
+  "NetherNetNetworkID": {
+   "size": 24,
+   "index": 16,
+   "note": "NetherNet::NetworkID is std::variant<monostate, P2P::NetworkID (u64), Realms::NetworkID (UUID)>: 16 bytes of storage and the index byte at +16 (Endstone v0.11.7 network_id.h; ReceiveFromSignalingChannel switches on movzbl 0x10(%rdx) on 1.26.51.1). Only the active alternative is defined: a live P2P id carried non-zero bytes after its 8 (nn51, 2026-10-03). Consumed by bds/engine/nethernetid.ts for NetworkIdentifier equals/hash and the address lookup."
+  },
+  "WebRtcCandidate": {
+   "ipFamily": 144,
+   "ip": 148,
+   "port": 168,
+   "username": 192,
+   "note": "webrtc::Candidate per Endstone HEAD candidate.h (1.26.51; v0.11.7 for this build has no webrtc headers: the same libwebrtc layout, SwitchSelectedConnectionInternal's body and member offsets being identical to 1.26.51.1's) on MSVC (std::string 32 bytes): address_ (SocketAddress) at +104 = { hostname_ +104, ip_ IPAddress { vftable +136, family_ +144, u_ +148 }, port_ +168 }, username_ +192. Consumed by bds/engine/nethernet.ts, which copies the remote candidate in its hook of SwitchSelectedConnectionInternal."
+  },
+  "WebRtcConnection": {
+   "remoteCandidateSlot": 2,
+   "note": "remote_candidate() is slot 2 (+0x10) of webrtc::Connection's table (CandidatePairInterface: dtor, local_candidate, remote_candidate): SwitchSelectedConnectionInternal (0xa23c6f0 here) calls [vftable+0x10] on this+0x528 and passes the result to SignalRouteChange as the Candidate&. Consumed by bds/engine/nethernet.ts."
   }
  },
  "accessors": {

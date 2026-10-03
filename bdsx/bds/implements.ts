@@ -8,6 +8,7 @@ import { actorFeetY } from "./engine/commandfields";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
 import { nearestAttackablePlayer } from "./engine/attackable";
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
+import { netherNetAddress } from "./engine/nethernet";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/serverfields";
@@ -262,7 +263,7 @@ import {
     Tag,
     TagPointer,
 } from "./nbt";
-import { NetworkConnection, NetworkIdentifier, NetworkIdentifierType, NetworkSystem, ServerNetworkHandler } from "./networkidentifier";
+import { NetworkConnection, NetworkIdentifier, NetworkIdentifierType, networkIdentifierLayout, NetworkSystem, ServerNetworkHandler } from "./networkidentifier";
 import { Packet } from "./packet";
 import {
     AnimateEntityPacket,
@@ -3880,7 +3881,9 @@ NetworkIdentifier.prototype.getActor = function (): ServerPlayer | null {
 };
 // "ip|port". A RakNet connection is looked up by its GUID, as Endstone's EndstoneSocketAddress does (1.26 dropped
 // RakPeer::GetSystemAddressFromIndex); an Address/Address6 identifier carries its own sockaddr, which is a
-// SystemAddress's first part. A NetherNet identifier has no IP address: "" (docs/findings-packets.md "IP and ping").
+// SystemAddress's first part. A NetherNet identifier's address is the remote ICE candidate the client's connection
+// settled on, joined to its NetworkID by bds/engine/nethernet.ts; "" while unknown, or on a build without those hooks
+// (docs/findings-nethernet.md).
 NetworkIdentifier.prototype.getAddress = function (): string {
     switch (this.type) {
         case NetworkIdentifierType.RakNet:
@@ -3888,6 +3891,8 @@ NetworkIdentifier.prototype.getAddress = function (): string {
         case NetworkIdentifierType.Address:
         case NetworkIdentifierType.Address6:
             return this.address.systemAddress.toString();
+        case NetworkIdentifierType.NetherNet:
+            return netherNetAddress(this as unknown as StaticPointer, networkIdentifierLayout.netherNetId) ?? "";
         default:
             return "";
     }

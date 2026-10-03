@@ -654,7 +654,7 @@ function _launch(asyncResolve: () => void): void {
                     // connector and rakPeer stay null and the RakNet-only API (IP address, ping) is unavailable.
                     const vftable = "??_7RakNetConnector@@6BConnector@@@";
                     if (vftable in proc && !typed.vftable.equalsptr(proc[vftable])) {
-                        throw Error("not RakNet's connector (server.properties transport=nethernet?): RakNet peer, IP addresses and ping unavailable");
+                        throw Error("not RakNet's connector (server.properties transport=nethernet?): RakNet peer and ping unavailable; NetherNet clients' getAddress() still works");
                     }
                     connector = typed;
                 });
