@@ -23,7 +23,6 @@ command.register("example_score", "score packet example").overload((params, orig
         entry.score = 1000;
 
         const packet = SetScorePacket.allocate();
-        packet.type = SetScorePacket.Type.CHANGE;
         packet.entries.push(entry);
         packet.sendTo(actor.getNetworkIdentifier());
         packet.dispose();

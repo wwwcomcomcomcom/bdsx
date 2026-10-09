@@ -910,7 +910,6 @@ export class Player extends Mob implements HasStorage {
         }
         {
             const pk = SetScorePacket.allocate();
-            pk.type = SetScorePacket.Type.CHANGE;
             const entries: Array<ScorePacketInfo> = [];
             for (const [i, line] of lines.entries()) {
                 const entry = ScorePacketInfo.construct();

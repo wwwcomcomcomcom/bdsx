@@ -1733,43 +1733,140 @@ export class SetDisplayObjectivePacket extends Packet {
     sortOrder: ObjectiveSortOrder;
 }
 
-@nativeClass()
+// 1.26 ScorePacketInfo (0x60, both builds) is a `std::variant<Remove, ChangePlayer, ChangeEntity, ChangeFakePlayer>`
+// whose four alternatives share a prefix; the index byte at +0x58 is Endstone's ScorePacketEntryAction
+// (set_score_packet.h: Remove 0, ChangePlayer 1, ChangeEntity 2, ChangeFakePlayer 3). Read from the element
+// destructor every SetScorePacket teardown calls (40 0x15cdf0 / 51 0x20cb20: a jump table on index+1) and the
+// engine's own builders (40 0x1ca02a0 change / 0x1ca0010 remove, 51 0x268d340):
+//   +0x00 ScoreboardId (all)
+//   +0x10 objective name: std::string in the three Change alternatives, std::optional<std::string> in Remove
+//         (engaged byte +0x30, which the Change alternatives use for the score)
+//   +0x30 int32 score (Change*)
+//   +0x38 ActorUniqueID (ChangePlayer, ChangeEntity) or std::string custom name (ChangeFakePlayer)
+// bdsx keeps the objective name constructed in every entry it builds (Remove gets an engaged optional), and switches
+// the +0x38 storage itself when `type` changes. Setting `customName`, `playerEntityUniqueId` or `entityUniqueId`
+// moves the entry to that field's alternative first, the way TextPacket's `name` setter does.
+// docs/findings-packets.md "SetScorePacket".
+@nativeClass(0x60, 0x8)
 export class ScorePacketInfo extends NativeClass {
-    @nativeField(ScoreboardId)
+    @nativeField(ScoreboardId, 0x00)
     scoreboardId: ScoreboardId;
-    @nativeField(CxxString)
-    objectiveName: CxxString;
-
-    @nativeField(int32_t)
+    /** Change* only: in a Remove entry this int is the optional objective name's engaged byte */
+    @nativeField(int32_t, 0x30)
     score: int32_t;
-    @nativeField(uint8_t)
-    type: ScorePacketInfo.Type;
-    @nativeField(bin64_t)
-    playerEntityUniqueId: bin64_t;
-    @nativeField(bin64_t)
-    entityUniqueId: bin64_t;
-    @nativeField(CxxString)
-    customName: CxxString;
+
+    [NativeType.ctor](): void {
+        this.setBin(bin64_t.zero, 0x00);
+        this.setBin(bin64_t.zero, 0x08); // ScoreboardId::identityDef, null
+        TextPacket$stringCtor(this.add(0x10));
+        this.setInt32(0, 0x30);
+        this.setBin(bin64_t.zero, 0x38);
+        this.setInt8(ScorePacketInfo.Type.PLAYER, 0x58);
+    }
+    [NativeType.dtor](): void {
+        if (ScorePacketInfo$hasObjective(this)) TextPacket$stringDtor(this.add(0x10));
+        if (this.getInt8(0x58) === ScorePacketInfo.Type.FAKE_PLAYER) TextPacket$stringDtor(this.add(0x38));
+        this.setInt8(-1, 0x58);
+    }
+    [NativeType.ctor_copy](o: ScorePacketInfo): void {
+        const type = o.getInt8(0x58);
+        this.setBin(o.getBin64(0x00), 0x00);
+        this.setPointer(o.getPointer(0x08), 0x08);
+        this.setInt32(o.getInt32(0x30), 0x30);
+        if (ScorePacketInfo$hasObjective(o)) {
+            TextPacket$stringCtor(this.add(0x10));
+            this.setCxxString(o.getCxxString(0x10), 0x10);
+        }
+        if (type === ScorePacketInfo.Type.FAKE_PLAYER) {
+            TextPacket$stringCtor(this.add(0x38));
+            this.setCxxString(o.getCxxString(0x38), 0x38);
+        } else {
+            this.setBin(o.getBin64(0x38), 0x38);
+        }
+        this.setInt8(type, 0x58);
+    }
+    [NativeType.ctor_move](o: ScorePacketInfo): void {
+        this[NativeType.ctor_copy](o);
+    }
+
+    get type(): ScorePacketInfo.Type {
+        return this.getInt8(0x58);
+    }
+    set type(type: ScorePacketInfo.Type) {
+        const old = this.getInt8(0x58);
+        if (old === type) return;
+        if (!ScorePacketInfo$hasObjective(this)) TextPacket$stringCtor(this.add(0x10));
+        if (old === ScorePacketInfo.Type.FAKE_PLAYER) TextPacket$stringDtor(this.add(0x38));
+        if (type === ScorePacketInfo.Type.FAKE_PLAYER) TextPacket$stringCtor(this.add(0x38));
+        else this.setBin(bin64_t.zero, 0x38);
+        // Remove: the objective name's optional is engaged; leaving Remove: the score starts at 0
+        this.setInt32(type === ScorePacketInfo.Type.REMOVE ? 1 : 0, 0x30);
+        this.setInt8(type, 0x58);
+    }
+    get objectiveName(): CxxString {
+        return ScorePacketInfo$hasObjective(this) ? this.getCxxString(0x10) : "";
+    }
+    set objectiveName(name: CxxString) {
+        if (!ScorePacketInfo$hasObjective(this)) {
+            TextPacket$stringCtor(this.add(0x10));
+            this.setUint8(1, 0x30);
+        }
+        this.setCxxString(name, 0x10);
+    }
+    /** ChangeFakePlayer only ("" otherwise); setting it moves the entry to FAKE_PLAYER */
+    get customName(): CxxString {
+        return this.getInt8(0x58) === ScorePacketInfo.Type.FAKE_PLAYER ? this.getCxxString(0x38) : "";
+    }
+    set customName(name: CxxString) {
+        this.type = ScorePacketInfo.Type.FAKE_PLAYER;
+        this.setCxxString(name, 0x38);
+    }
+    /** ChangePlayer only (bin64_t.zero otherwise); setting it moves the entry to PLAYER */
+    get playerEntityUniqueId(): bin64_t {
+        return this.getInt8(0x58) === ScorePacketInfo.Type.PLAYER ? this.getBin64(0x38) : bin64_t.zero;
+    }
+    set playerEntityUniqueId(id: bin64_t) {
+        this.type = ScorePacketInfo.Type.PLAYER;
+        this.setBin(id, 0x38);
+    }
+    /** ChangeEntity only (bin64_t.zero otherwise); setting it moves the entry to ENTITY */
+    get entityUniqueId(): bin64_t {
+        return this.getInt8(0x58) === ScorePacketInfo.Type.ENTITY ? this.getBin64(0x38) : bin64_t.zero;
+    }
+    set entityUniqueId(id: bin64_t) {
+        this.type = ScorePacketInfo.Type.ENTITY;
+        this.setBin(id, 0x38);
+    }
+}
+/** the objective name at +0x10 is a live std::string: always, except in a Remove entry whose optional is empty */
+function ScorePacketInfo$hasObjective(info: ScorePacketInfo): boolean {
+    const p = info as unknown as StaticPointer;
+    return p.getInt8(0x58) !== ScorePacketInfo.Type.REMOVE || p.getUint8(0x30) === 1;
 }
 
 export namespace ScorePacketInfo {
     export enum Type {
+        /** 1.26: a removal is an entry type (the packet-level CHANGE/REMOVE is gone) */
+        REMOVE = 0,
         PLAYER = 1,
         ENTITY = 2,
         FAKE_PLAYER = 3,
     }
 }
 
-@nativeClass(null)
+// 1.26 SetScorePacket (0x50, both builds): the payload is only the entry vector at +0x30, and the serialization
+// mode follows it at +0x48 (getSerializationMode returns it; createPacket and every engine builder store 5,
+// CerealOnly). The 2024 packet-level `type` byte is gone: whether an entry changes or removes a score is the
+// entry's own `type`. bdsx's 2024 layout put the vector at +0x38, so its capacity pointer was the mode field and
+// push() wrote through a null begin pointer (`Access Violation: 0x0`). docs/findings-packets.md "SetScorePacket".
+@nativeClass(0x50, 0x8)
 export class SetScorePacket extends Packet {
-    @nativeField(uint8_t)
-    type: uint8_t;
-
-    @nativeField(CxxVector.make(ScorePacketInfo))
+    @nativeField(CxxVector.make(ScorePacketInfo), 0x30)
     readonly entries: CxxVector<ScorePacketInfo>;
 }
 
 export namespace SetScorePacket {
+    /** @deprecated 1.26 has no packet-level type: an entry's `type` is ScorePacketInfo.Type.REMOVE for a removal */
     export enum Type {
         CHANGE = 0,
         REMOVE = 1,
