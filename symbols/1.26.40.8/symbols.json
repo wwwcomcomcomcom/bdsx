@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.40.8",
  "exeMd5": "0fecd1f7b9e1e8bc7154f461e67d9fdc",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-09T19:59:46.721Z",
+ "generatedAt": "2026-10-09T20:48:35.315Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 42275520,
   "bdsx:BlockTypeRegistry::instance": 211156536,
@@ -429,6 +429,7 @@
   "printf": 54704480,
   "?ReceiveFromSignalingChannel@SimpleNetworkInterfaceImpl@NetherNet@@AEAAXUNetworkID@2@V?$basic_string_view@DU?$char_traits@D@std@@@std@@W4SignalingChannelId@2@@Z": 18918736,
   "?SwitchSelectedConnectionInternal@P2PTransportChannel@webrtc@@AEAAXPEAVConnection@2@W4IceSwitchReason@2@@Z": 170116848,
+  "bdsx:CommandRegistry::parseEnum<int>": 1129232,
   "??_7ServerLevel@@6BILevel@@@": 173973216,
   "??_7ServerLevel@@6BBlockSourceListener@@@": 173976496,
   "??_7ServerLevel@@6BIWorldRegistriesProvider@@@": 173976576,

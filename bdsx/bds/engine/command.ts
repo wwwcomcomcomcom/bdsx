@@ -73,6 +73,17 @@ export function commandEnumBackedRule(): NativePointer {
     return enumBackedRule as unknown as NativePointer;
 }
 
+/**
+ * The parse function of every built-in enum whose value is a 4-byte int (docs/findings-scoreboard.md section 20).
+ * 1.26 keeps four out-of-line enum parse bodies, each `if (!storage) return false;` then getEnumData inlined (a binary
+ * search of enums_[token->symbol & 0xe00fffff].values, 16-byte { value index, data } pairs) and a store of the data:
+ * bool (`setne`, 40 0x3d2ed0 / 51 0x126bd00), 8 bytes (40 0x3d2f60 / 51 0x430950), 1 byte (40 0x3f7c90 / 51 0x4309e0)
+ * and this one, 4 bytes (`mov eax,[rax+8]; mov [rdx],eax`; 40 0x113b10, 51 0x113af0; 2024's folded 0xfb5d0). The
+ * registry setup passes it for GameMode (40 0x345c16, 51 0x122583a) and ~75 other enums. commandParser.getType reads
+ * an enum with this parse as Int, so command.rawEnum("GameMode") gives the engine's GameType (default = 5).
+ */
+export const commandEnumIntParse = engineSymbol("bdsx:CommandRegistry::parseEnum<int>");
+
 /** CommandRegistry::enums_ (+0xe0, a vector of 0x48-byte Enum { name, type id +0x20, parse +0x28, values +0x30 }) */
 const REGISTRY_ENUMS = 0xe0;
 const ENUM_STRIDE = 0x48;
