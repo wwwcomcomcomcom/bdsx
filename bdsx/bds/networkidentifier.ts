@@ -17,6 +17,7 @@ import type { ServerPlayer } from "./player";
 import { RakNet } from "./raknet";
 import { RakNetConnector } from "./raknetinstance";
 import { pdbcache } from "../pdbcache";
+import { netherNetForget } from "./engine/nethernet";
 import { netherNetIdHash, netherNetIdKey } from "./engine/nethernetid";
 
 // TODO: fill
@@ -236,6 +237,15 @@ export class NetworkIdentifier extends NativeStruct implements Hashable {
         abstract();
     }
 
+    /**
+     * The round-trip time in milliseconds: RakPeer's average ping for a RakNet client, libwebrtc's smoothed RTT of
+     * the selected ICE connection for a NetherNet client (bds/engine/nethernet.ts). -1 when it is not known: an
+     * identifier that is not connected, or a transport without one.
+     */
+    getPing(): number {
+        abstract();
+    }
+
     toString(): string {
         return this.getAddress();
     }
@@ -285,6 +295,12 @@ procHacker.hookingRawWithCallOriginal(
     "bdsx:NetworkSystem::onConnectionClosed" in proc ? "bdsx:NetworkSystem::onConnectionClosed" : ON_CONNECTION_CLOSED_2024,
     makefunc.np(
         (handler, ni, reason, msg) => {
+            try {
+                // before any listener: the NetherNet connection may already be gone, so its RTT is no longer read
+                if (ni.type === NetworkIdentifierType.NetherNet) netherNetForget(ni as unknown as StaticPointer, networkIdentifierLayout.netherNetId);
+            } catch (err) {
+                remapAndPrintError(err);
+            }
             try {
                 events.networkDisconnected.fire(ni);
             } catch (err) {

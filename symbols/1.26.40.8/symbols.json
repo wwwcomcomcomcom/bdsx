@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.40.8",
  "exeMd5": "0fecd1f7b9e1e8bc7154f461e67d9fdc",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-03T10:06:52.102Z",
+ "generatedAt": "2026-10-09T19:59:46.721Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 42275520,
   "bdsx:BlockTypeRegistry::instance": 211156536,
@@ -13247,7 +13247,13 @@
   },
   "WebRtcConnection": {
    "remoteCandidateSlot": 2,
-   "note": "remote_candidate() is slot 2 (+0x10) of webrtc::Connection's table (CandidatePairInterface: dtor, local_candidate, remote_candidate): SwitchSelectedConnectionInternal (0xa23c6f0 here) calls [vftable+0x10] on this+0x528 and passes the result to SignalRouteChange as the Candidate&. Consumed by bds/engine/nethernet.ts."
+   "rtt": 2840,
+   "rttSamples": 2848,
+   "note": "remote_candidate() is slot 2 (+0x10) of webrtc::Connection's table (CandidatePairInterface: dtor, local_candidate, remote_candidate): SwitchSelectedConnectionInternal (0xa23c6f0 here) calls [vftable+0x10] on this+0x528 and passes the result to SignalRouteChange as the Candidate&. Consumed by bds/engine/nethernet.ts. rtt (+0xb18) and rttSamples (+0xb20), 2026-10-10: cricket::Connection::rtt_ (webrtc::TimeDelta, int64 microseconds) and rtt_samples_ (int). Connection::ReceivedPingResponse (0xa323300, reached from the only lea user of \", code=0, rtt=\" in Connection's code, OnConnectionRequestResponse, right before ++this+0x5a8) ends with: if (+0xb20 > 0) +0xb18 = (3 * +0xb18 + rtt) / 4 (TimeDelta +-infinity checks, then cqo/and 3/sar 2) else +0xb18 = rtt; +++0xb20 -- libwebrtc's rtt_ = GetNextMovingAverage(rtt_, rtt, RTT_RATIO = 3); rtt_samples_++. It also rounds rtt to milliseconds (/1000) for rtt_estimate_.AddSample, so rtt is in microseconds. Connection::UpdateState (0xa322110, the only user of \" ms without a response, rtt=\") clamps 2 * +0xb18 to [0x186a0, 0x3938700] = [100 ms, 60 s] in microseconds: ConservativeRTTEstimate. The bodies are identical on both builds. Consumed by bds/engine/nethernet.ts (NetworkIdentifier.getPing)."
+  },
+  "WebRtcP2PTransportChannel": {
+   "selectedConnection": 1320,
+   "note": "webrtc::P2PTransportChannel::selected_connection_ (+0x528): SwitchSelectedConnectionInternal (0xa23c6f0) loads the old one from this+0x528 and stores the new Connection* (rdx) there (`mov r15,[rcx+0x528]; mov [rcx+0x528],rdx` at function+0x4f, once per image). bds/engine/nethernet.ts reads a client's RTT only while its channel still has the connection the hook recorded selected."
   }
  },
  "accessors": {

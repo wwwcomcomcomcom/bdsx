@@ -14,9 +14,17 @@
  * Both run on NetherNet threads, where JS cannot run. So each hook is native code that copies the bytes it needs into
  * a ring (an interlocked counter picks the slot; the slot's sequence word is written last) and then jumps to the
  * original; JS reads the rings on the node thread when an address is asked for, and once a second.
+ *
+ * The ping is the selected connection's smoothed RTT, cricket::Connection::rtt_ (a webrtc::TimeDelta, microseconds):
+ * Connection::ReceivedPingResponse (51 0xa442230, 40 0xa323300) sets rtt_ (+0xb18) = (3 * rtt_ + rtt) / 4 once
+ * rtt_samples_ (+0xb20) is above 0, and UpdateState clamps 2 * rtt_ to [100 ms, 60 s] in microseconds. The switch hook
+ * also records the channel (rcx) and the connection (rdx); JS reads rtt_ only while the client is connected (bdsx
+ * forgets the route when NetworkSystem::onConnectionClosed runs) and only while the channel's selected connection
+ * (+0x528) is still that connection. That is a plain read of an int another thread writes, which is all a ping needs.
  */
 import { asm, Register } from "../../assembler";
-import { AllocatedPointer, StaticPointer } from "../../core";
+import { bin } from "../../bin";
+import { AllocatedPointer, NativePointer, StaticPointer } from "../../core";
 import { dllraw } from "../../dllraw";
 import { procHacker } from "../../prochacker";
 import { engineLayout, engineSymbol } from "./deps";
@@ -38,6 +46,10 @@ const CANDIDATE_IP = engineLayout("WebRtcCandidate", "ip", 148);
 const CANDIDATE_PORT = engineLayout("WebRtcCandidate", "port", 168);
 const CANDIDATE_USERNAME = engineLayout("WebRtcCandidate", "username", 192);
 const CONNECTION_REMOTE_CANDIDATE_SLOT = engineLayout("WebRtcConnection", "remoteCandidateSlot", 2);
+// cricket::Connection: rtt_ (TimeDelta, int64 microseconds) and rtt_samples_ (int); P2PTransportChannel: selected_connection_
+const CONNECTION_RTT = engineLayout("WebRtcConnection", "rtt", 0xb18);
+const CONNECTION_RTT_SAMPLES = engineLayout("WebRtcConnection", "rttSamples", 0xb20);
+const CHANNEL_SELECTED_CONNECTION = engineLayout("WebRtcP2PTransportChannel", "selectedConnection", 0x528);
 
 const SLOTS = 64; // a power of two
 // signal slot: u64 sequence, NetworkID (24), u64 length, the message's first SIGNAL_MAX bytes
@@ -48,6 +60,9 @@ const SIGNAL_MAX = (1 << SIGNAL_SLOT_SHIFT) - 40;
 const CANDIDATE_SLOT_SHIFT = 9;
 const CANDIDATE_COPY = 256;
 const USERNAME_HEAP_MAX = 63;
+// and, at the slot's end, the channel (the hook's rcx) and the connection it switched to (rdx)
+const CANDIDATE_CHANNEL_AT = (1 << CANDIDATE_SLOT_SHIFT) - 16;
+const CANDIDATE_CONNECTION_AT = (1 << CANDIDATE_SLOT_SHIFT) - 8;
 
 const AF_INET = 2;
 const AF_INET6 = 23;
@@ -68,6 +83,13 @@ let candidatesRead = 0;
 const idByUfrag = new Map<string, string>();
 const addressByUfrag = new Map<string, string>();
 const addressById = new Map<string, string>();
+interface Route {
+    channel: NativePointer;
+    connection: NativePointer;
+    connectionValue: string; // the pointer itself as a bin64, to compare with the channel's selected connection
+}
+const routeByUfrag = new Map<string, Route>();
+const routeById = new Map<string, Route>();
 
 function bounded<K, V>(map: Map<K, V>, key: K, value: V): void {
     map.delete(key);
@@ -83,8 +105,11 @@ function latin1(p: StaticPointer, off: number, n: number): string {
 
 function link(ufrag: string): void {
     const id = idByUfrag.get(ufrag);
+    if (id === undefined) return;
     const address = addressByUfrag.get(ufrag);
-    if (id !== undefined && address !== undefined) bounded(addressById, id, address);
+    if (address !== undefined) bounded(addressById, id, address);
+    const route = routeByUfrag.get(ufrag);
+    if (route !== undefined) bounded(routeById, id, route);
 }
 
 function readSignals(): void {
@@ -136,9 +161,13 @@ function readCandidates(): void {
             capacity > 15
                 ? latin1(candidateRing, c + CANDIDATE_COPY, Math.min(length, USERNAME_HEAP_MAX))
                 : latin1(candidateRing, c + CANDIDATE_USERNAME, Math.min(length, 15));
+        const channel = candidateRing.getPointer(off + CANDIDATE_CHANNEL_AT);
+        const connection = candidateRing.getPointer(off + CANDIDATE_CONNECTION_AT);
+        const connectionValue = candidateRing.getBin64(off + CANDIDATE_CONNECTION_AT);
         if (candidateRing.getInt32(off) !== seq) continue;
         if (ip === null || ufrag === "") continue;
         bounded(addressByUfrag, ufrag, `${ip}|${port}`);
+        bounded(routeByUfrag, ufrag, { channel, connection, connectionValue });
         link(ufrag);
     }
     candidatesRead = k;
@@ -156,8 +185,46 @@ export function netherNetAddress(p: StaticPointer, off: number): string | null {
     return addressById.get(netherNetIdKey(p, off)) ?? null;
 }
 
+/**
+ * The NetherNet client's round-trip time in milliseconds, libwebrtc's smoothed estimate for the connection ICE
+ * selected; -1 when the client is not known, has disconnected, its channel has moved off that connection, or no
+ * ping response has come back yet.
+ */
+export function netherNetPing(p: StaticPointer, off: number): number {
+    const raw = netherNetRtt(p, off);
+    return raw === null || raw.samples <= 0 || raw.micros < 0 ? -1 : Math.round(raw.micros / 1000);
+}
+
+/** rtt_ in microseconds and rtt_samples_ as read, or null when nothing may be read; for probes */
+export function netherNetRtt(p: StaticPointer, off: number): { micros: number; samples: number } | null {
+    if (!installed) return null;
+    poll();
+    const route = routeById.get(netherNetIdKey(p, off));
+    if (route === undefined) return null;
+    if (route.channel.getBin64(CHANNEL_SELECTED_CONNECTION) !== route.connectionValue) return null;
+    const hi = route.connection.getInt32(CONNECTION_RTT + 4);
+    const lo = route.connection.getUint32(CONNECTION_RTT);
+    // anything outside 0..2^31 us (TimeDelta's +-infinity included) is not a measurement
+    const micros = hi === 0 && lo <= 0x7fffffff ? lo : -1;
+    return { micros, samples: route.connection.getInt32(CONNECTION_RTT_SAMPLES) };
+}
+
+/**
+ * The client at p+off disconnected: stop reading its connection, and drop its ufrags so that a late switch on the
+ * old channel cannot bring the route back (a reconnect sends a new offer with a new ufrag).
+ */
+export function netherNetForget(p: StaticPointer, off: number): void {
+    const id = netherNetIdKey(p, off);
+    routeById.delete(id);
+    for (const [ufrag, owner] of idByUfrag) {
+        if (owner !== id) continue;
+        idByUfrag.delete(ufrag);
+        routeByUfrag.delete(ufrag);
+    }
+}
+
 /** what the recorder has seen, for probes */
-export function netherNetAddressStats(): { installed: boolean; signals: number; candidates: number; ufrags: number; addresses: number } {
+export function netherNetAddressStats(): { installed: boolean; signals: number; candidates: number; ufrags: number; addresses: number; routes: number } {
     if (installed) poll();
     return {
         installed,
@@ -165,6 +232,7 @@ export function netherNetAddressStats(): { installed: boolean; signals: number; 
         candidates: candidateCounter.getInt32(0),
         ufrags: idByUfrag.size,
         addresses: addressById.size,
+        routes: routeById.size,
     };
 }
 
@@ -186,7 +254,13 @@ export function netherNetAddressDump(chars = 160): string[] {
         const capacity = candidateRing.getInt32(c + CANDIDATE_USERNAME + 24);
         const user = capacity > 15 ? latin1(candidateRing, c + CANDIDATE_COPY, Math.min(length, USERNAME_HEAP_MAX)) : latin1(candidateRing, c + CANDIDATE_USERNAME, Math.min(length, 15));
         out.push(
-            `candidate ${k} seq ${candidateRing.getInt32(off)} family ${family} ip ${ipText(family, candidateRing, c + CANDIDATE_IP)} port ${candidateRing.getUint16(c + CANDIDATE_PORT)} username(len ${length} cap ${capacity}) ${JSON.stringify(user)}`,
+            `candidate ${k} seq ${candidateRing.getInt32(off)} family ${family} ip ${ipText(family, candidateRing, c + CANDIDATE_IP)} port ${candidateRing.getUint16(c + CANDIDATE_PORT)} username(len ${length} cap ${capacity}) ${JSON.stringify(user)} channel ${bin.toString(candidateRing.getBin64(off + CANDIDATE_CHANNEL_AT), 16)} connection ${bin.toString(candidateRing.getBin64(off + CANDIDATE_CONNECTION_AT), 16)}`,
+        );
+    }
+    // the live routes: what the channel has selected now against what the hook recorded (only while connected)
+    for (const [id, route] of routeById) {
+        out.push(
+            `route ${id} channel ${route.channel.toString(16)} selected now ${bin.toString(route.channel.getBin64(CHANNEL_SELECTED_CONNECTION), 16)} recorded ${bin.toString(route.connectionValue, 16)}`,
         );
     }
     return out;
@@ -279,6 +353,10 @@ function install(): void {
             .add_r_r(Register.rdi, Register.r10)
             .xor_r_r(Register.rax, Register.rax)
             .mov_rp_r(Register.rdi, 1, 0, Register.rax)
+            .mov_r_rp(Register.rax, Register.rsp, 1, 0x50) // the pushed rcx: the channel
+            .mov_rp_r(Register.rdi, 1, CANDIDATE_CHANNEL_AT, Register.rax)
+            .mov_r_rp(Register.rax, Register.rsp, 1, 0x48) // the pushed rdx: the connection
+            .mov_rp_r(Register.rdi, 1, CANDIDATE_CONNECTION_AT, Register.rax)
             .lea_r_rp(Register.rcx, Register.rdi, 1, 8)
             .mov_r_r(Register.rdx, Register.rsi)
             .mov_r_c(Register.r8, CANDIDATE_COPY)

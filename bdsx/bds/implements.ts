@@ -8,7 +8,7 @@ import { actorFeetY } from "./engine/commandfields";
 import { structureSettingsConstruct, structureSettingsDestruct, structureSettingsGetAnimationTicks, structureSettingsIsAnimated, structureSettingsSetIgnoreBlocks, structureSettingsSetIgnoreEntities, structureSettingsSetIgnoreJigsawBlocks, structureSettingsSetIntegritySeed, structureSettingsSetMirror, structureSettingsSetReloadActorEquipment, structureSettingsSetRotation, structureSettingsSetStructureOffset, structureSettingsSetStructureSize, structureTemplateTryGetBlockAtPos } from "./engine/structuresettings";
 import { nearestAttackablePlayer } from "./engine/attackable";
 import { componentHash, engineLayout, engineSymbol } from "./engine/deps";
-import { netherNetAddress } from "./engine/nethernet";
+import { netherNetAddress, netherNetPing } from "./engine/nethernet";
 import { dimensionCloudHeight, dimensionIsDay, dimensionTimeOfDay, MOON_BRIGHTNESS_PER_PHASE, moonPhaseOf } from "./engine/dimension";
 import { mobEffectById, mobEffectInstanceComponentName, mobEffectInstanceConstruct, MOB_EFFECT_ID } from "./engine/mobeffect";
 import { chunkSourceLevel, serverPlayerNextContainerCounter } from "./engine/serverfields";
@@ -3895,6 +3895,18 @@ NetworkIdentifier.prototype.getAddress = function (): string {
             return netherNetAddress(this as unknown as StaticPointer, networkIdentifierLayout.netherNetId) ?? "";
         default:
             return "";
+    }
+};
+// milliseconds, -1 when unknown. RakNet: RakPeer's average over its ping list (-1 for a GUID it does not hold). NetherNet:
+// rtt_ of the connection ICE selected, read only while the client is connected and the connection is still selected.
+NetworkIdentifier.prototype.getPing = function (): number {
+    switch (this.type) {
+        case NetworkIdentifierType.RakNet:
+            return bedrockServer.rakPeer.GetAveragePing(this.address);
+        case NetworkIdentifierType.NetherNet:
+            return netherNetPing(this as unknown as StaticPointer, networkIdentifierLayout.netherNetId);
+        default:
+            return -1;
     }
 };
 // Both comparisons are spelled out from the type when the build has no
