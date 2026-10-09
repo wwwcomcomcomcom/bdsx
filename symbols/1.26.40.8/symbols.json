@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.40.8",
  "exeMd5": "0fecd1f7b9e1e8bc7154f461e67d9fdc",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-09T20:48:35.315Z",
+ "generatedAt": "2026-10-09T21:16:15.213Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 42275520,
   "bdsx:BlockTypeRegistry::instance": 211156536,
@@ -13622,6 +13622,9 @@
   },
   "?NetworkProtocolVersion@SharedConstants@@3HB": {
    "bytes": "78080000"
+  },
+  "?CurrentVersion@CommandVersion@@2HB": {
+   "bytes": "32000000"
   }
  }
 }

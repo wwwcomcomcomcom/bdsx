@@ -5,7 +5,7 @@ import { installMinecraftAddons } from "./addoninstaller";
 import { asmcode } from "./asm/asmcode";
 import { asm, Register } from "./assembler";
 import { Bedrock } from "./bds/bedrock";
-import { CommandOutputSender, CommandPermissionLevel, CommandRegistry, MinecraftCommands } from "./bds/command";
+import { CommandContext, CommandOutputSender, CommandPermissionLevel, CommandRegistry, MinecraftCommands } from "./bds/command";
 import { Dimension } from "./bds/dimension";
 import { GameRules } from "./bds/gamerules";
 import { Level, ServerLevel } from "./bds/level";
@@ -90,6 +90,8 @@ const commandQueue = new MultiThreadQueue(CxxString[NativeType.size]);
 const commandQueueBuffer = new CxxStringWrapper(true);
 /** the getLine patch below is what dequeues commandQueue; without the symbol executeCommandOnConsole runs commands itself */
 const CONSOLE_GETLINE = "?getLine@ConsoleInputReader@@QEAA_NAEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z";
+/** mce::UUID::EMPTY.asString(): the request id of the origin BDS builds for a console line */
+const CONSOLE_REQUEST_ID = "00000000-0000-0000-0000-000000000000";
 const consoleCommands: string[] = [];
 
 function patchForStdio(): void {
@@ -1002,7 +1004,7 @@ export namespace bedrockServer {
             return;
         }
         // 1.26 inlined ConsoleInputReader, so nothing drains commandQueue: run the command as the console would,
-        // as the server with its output printed, from the node loop on the game thread like a dequeued line was
+        // from the node loop on the game thread like a dequeued line was
         consoleCommands.push(command);
         if (consoleCommands.length !== 1) return;
         openIsFired.then(() =>
@@ -1011,13 +1013,33 @@ export namespace bedrockServer {
                 for (const cmd of commands) {
                     try {
                         // a console line reaches the engine (and events.command) with its leading slash
-                        bedrockServer.executeCommand(cmd.startsWith("/") ? cmd : "/" + cmd, CommandResultType.Output);
+                        runConsoleLine(cmd.startsWith("/") ? cmd : "/" + cmd);
                     } catch (err) {
                         events.errorFire(err);
                     }
                 }
             }),
         );
+    }
+
+    /**
+     * What BDS does with a line typed on its console (40 0xf6d90 / 51 0xf67c0): a ServerCommandOrigin whose request id
+     * is the static string mce::UUID::EMPTY.asString(), at permission level 4 in the overworld, a CommandContext at the
+     * engine's own command version, then MinecraftCommands::executeCommand(ctx, false), output on. 2024's
+     * executeCommandOnConsole fed that same handler; bedrockServer.executeCommand's origin is bdsx's own ("Server" as
+     * the request id). docs/findings-inventory.md section 30.
+     */
+    function runConsoleLine(line: string): void {
+        const { ServerCommandOrigin } = require("./bds/commandorigin") as typeof import("./bds/commandorigin");
+        const origin = ServerCommandOrigin.constructWith(CONSOLE_REQUEST_ID, bedrockServer.level as ServerLevel, CommandPermissionLevel.Admin, null);
+        const ctx = CommandContext.constructWith(line, origin);
+        try {
+            // through bdsx's own wrapper, so events.command fires exactly once
+            bedrockServer.minecraftCommands.executeCommand(ctx, false);
+        } finally {
+            ctx.destruct();
+            origin.destruct();
+        }
     }
 
     export declare function executeCommand(
