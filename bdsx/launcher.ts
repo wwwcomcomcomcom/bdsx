@@ -424,7 +424,7 @@ function _launch(asyncResolve: () => void): void {
     const thisGetter = new ThisGetter(instances);
     thisGetter.register(
         bd_server.ServerInstance,
-        "??0ServerInstance@@QEAA@AEAVIMinecraftApp@@AEBV?$not_null@V?$NonOwnerPointer@VServerInstanceEventCoordinator@@@Bedrock@@@gsl@@@Z",
+        "?initializeServer@ServerInstance@@QEAA?AUServerInitResult@ServerInitialization@@$$QEAUServerInstanceInitArguments@@@Z",
         "serverInstance",
     );
     thisGetter.register(
