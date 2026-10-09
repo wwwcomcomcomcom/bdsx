@@ -402,6 +402,12 @@ export namespace events {
     export const commandOutput = new Event<(log: string) => void | CANCEL>();
 
     /**
+     * a line read from the server console (stdin) by bdsx, before it reaches the engine as a console command.
+     * Return CANCEL to keep it from the engine. Fires while bdsx owns stdin (on BDS 1.26 too; not with BDSX_SKIP=stdin).
+     */
+    export const consoleInput = new Event<(line: string) => void | CANCEL>();
+
+    /**
      * command input
      * Commands will be canceled if you return a error code.
      * 0 means success for error codes but others are unknown.

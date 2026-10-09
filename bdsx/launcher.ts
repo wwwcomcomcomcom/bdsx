@@ -13,6 +13,7 @@ import * as nimodule from "./bds/networkidentifier";
 import { RakNet } from "./bds/raknet";
 import { RakNetConnector } from "./bds/raknetinstance";
 import * as bd_server from "./bds/server";
+import { disableConsoleReaderThread } from "./bds/engine/console";
 import { copyLevelServerNetworkHandler } from "./bds/engine/networkhandler";
 import { levelStructureManager } from "./bds/engine/structure";
 import { engineLayout } from "./bds/engine/deps";
@@ -93,6 +94,11 @@ const CONSOLE_GETLINE = "?getLine@ConsoleInputReader@@QEAA_NAEAV?$basic_string@D
 /** mce::UUID::EMPTY.asString(): the request id of the origin BDS builds for a console line */
 const CONSOLE_REQUEST_ID = "00000000-0000-0000-0000-000000000000";
 const consoleCommands: string[] = [];
+/**
+ * 1.26: BDS's console reader thread returns at once and node reads stdin (bds/engine/console.ts,
+ * docs/findings-inventory.md section 31). Set before BDS's main thread starts; BDSX_SKIP=stdin leaves BDS its reader.
+ */
+let consoleTakeover = false;
 
 function patchForStdio(): void {
     // hook bedrock log
@@ -232,6 +238,13 @@ function patchForStdio(): void {
     procHacker.write("??0ConsoleInputReader@@QEAA@XZ", 0, justReturn);
     procHacker.write("??1ConsoleInputReader@@QEAA@XZ", 0, justReturn);
     procHacker.write("?unblockReading@ConsoleInputReader@@QEAAXXZ", 0, justReturn);
+
+    // 1.26 inlined the reader's constructor into DedicatedServer::start, but its thread procedure is still a function:
+    // made to return at once, BDS never reads stdin, and the stdin handler below owns the console
+    if (!(CONSOLE_GETLINE in proc) && !(process.env.BDSX_SKIP ?? "").split(",").includes("stdin")) {
+        consoleTakeover = disableConsoleReaderThread();
+        if (!consoleTakeover) console.error(colors.yellow("[bdsx] the console reader thread is not patchable; BDS keeps its own console reader"));
+    }
 }
 
 @nativeClass()
@@ -873,13 +886,13 @@ function _launch(asyncResolve: () => void): void {
      * send stdin to bedrockServer.executeCommandOnConsole
      * without this, you need to control stdin manually
      */
-    // bdsx's stdin handler replaces BDS's ConsoleInputReader, which the three
-    // patches above neuter. Without those symbols BDS keeps its own reader,
-    // and a second reader on the same stdin takes the server down at start;
-    // so BDS keeps the console and bdsx does not intercept typed commands.
+    // bdsx's stdin handler replaces BDS's ConsoleInputReader: in 2024 the three patches in patchForStdio neuter it, on
+    // 1.26 its thread procedure returns at once. Without either BDS keeps its own reader, and a second reader on the
+    // same stdin takes the server down at start; so BDS keeps the console then.
     if (skip.includes("stdin")) {
         // bisection switch
-    } else if ("??0ConsoleInputReader@@QEAA@XZ" in proc) {
+    } else if ("??0ConsoleInputReader@@QEAA@XZ" in proc || consoleTakeover) {
+        // 1.26: BDS's reader thread is off (consoleTakeover, set in patchForStdio before BDS started)
         bedrockServer.DefaultStdInHandler.install();
     } else {
         console.error(colors.yellow("[bdsx] ConsoleInputReader is not in the symbol table; BDS keeps its own console reader"));
@@ -1085,7 +1098,11 @@ export namespace bedrockServer {
     let stdInHandler: DefaultStdInHandler | null = null;
 
     export abstract class DefaultStdInHandler {
-        protected online: (line: string) => void = executeCommandOnConsole;
+        /** a line read from stdin: events.consoleInput, then the console unless a listener returned CANCEL */
+        protected online: (line: string) => void = line => {
+            if (events.consoleInput.fire(line) === CANCEL) return;
+            executeCommandOnConsole(line);
+        };
         protected readonly onclose = (): void => {
             this.close();
         };
@@ -1097,7 +1114,8 @@ export namespace bedrockServer {
         abstract close(): void;
 
         static install(): DefaultStdInHandler {
-            if (Config.USE_NATIVE_STDIN_HANDLER) {
+            // the native handler runs BDS's own std::getline<char> instantiation, which 1.26's table does not ship
+            if (Config.USE_NATIVE_STDIN_HANDLER && GetLine.isAvailable()) {
                 return NativeStdInHandler.install();
             } else {
                 return NodeStdInHandler.install();

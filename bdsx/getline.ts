@@ -55,6 +55,11 @@ export class GetLine {
         this.thread = handle;
     }
 
+    /** false when the table lacks std::getline<char> (BDS 1.26): DefaultStdInHandler then reads stdin through node */
+    static isAvailable(): boolean {
+        return !getline.isNull();
+    }
+
     static setEncoding(encoding: Encoding): void {
         if (encoding < Encoding.Utf8) throw TypeError(`${Encoding[encoding]} is not supported for GetLine.setEncoding`);
         inputEncoding = encoding;
