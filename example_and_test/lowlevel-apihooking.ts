@@ -34,5 +34,17 @@ const itemUseOn = procHacker.hooking(
 });
 
 //////////////////////////
-// hide the map marker
-procHacker.hooking("?_updateTrackedEntityDecoration@MapItemSavedData@@AEAA_NAEAVBlockSource@@V?$shared_ptr@VMapItemTrackedActor@@@std@@@Z", bool_t)(() => false);
+// hide the map marker: false makes the caller remove the marker. The third argument is a std::shared_ptr passed by
+// value, which the callee owns and releases, so the original runs first (a hook that skips it must release the
+// shared_ptr itself; bdsx/bds/engine/mapmarker.ts does that behind setMapMarkerFilter, see hidemapmarker.ts)
+const updateTrackedEntityDecoration = procHacker.hooking(
+    "?_updateTrackedEntityDecoration@MapItemSavedData@@AEAA_NAEAVBlockSource@@V?$shared_ptr@VMapItemTrackedActor@@@std@@@Z",
+    bool_t,
+    null,
+    StaticPointer,
+    StaticPointer,
+    StaticPointer,
+)((mapData, region, trackedActor) => {
+    updateTrackedEntityDecoration(mapData, region, trackedActor);
+    return false;
+});

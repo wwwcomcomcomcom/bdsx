@@ -1,5 +1,5 @@
-import { bool_t } from "bdsx/nativetype";
-import { procHacker } from "bdsx/prochacker";
+import { setMapMarkerFilter } from "bdsx/bds/engine/mapmarker";
 
-// hook MapItemSavedData::_updateTrackedEntityDecoration
-procHacker.hooking("?_updateTrackedEntityDecoration@MapItemSavedData@@AEAA_NAEAVBlockSource@@V?$shared_ptr@VMapItemTrackedActor@@@std@@@Z", bool_t)(() => false);
+// Hide every player's marker on every map. Return true to keep a marker: for example, `actor => !actor.hasTag("hidden")`
+// hides only the players tagged "hidden". Other entities keep theirs.
+setMapMarkerFilter(actor => !actor.isPlayer());

@@ -3,7 +3,7 @@
  "bdsVersion": "1.26.51.1",
  "exeMd5": "a92cff3b1324d612219510582e9fb3da",
  "generator": "bdsx-again/tools/make-table.mjs",
- "generatedAt": "2026-10-09T21:48:54.004Z",
+ "generatedAt": "2026-10-09T22:10:39.109Z",
  "symbols": {
   "bdsx:BlockTypeRegistry::_lookupByNameImpl": 26995440,
   "bdsx:BlockTypeRegistry::instance": 214631944,
@@ -424,6 +424,7 @@
   "?SwitchSelectedConnectionInternal@P2PTransportChannel@webrtc@@AEAAXPEAVConnection@2@W4IceSwitchReason@2@@Z": 171292176,
   "bdsx:CommandRegistry::parseEnum<int>": 1129200,
   "bdsx:ConsoleInputReader::readThread": 996736,
+  "?_updateTrackedEntityDecoration@MapItemSavedData@@AEAA_NAEAVBlockSource@@V?$shared_ptr@VMapItemTrackedActor@@@std@@@Z": 57793664,
   "??_7ServerLevel@@6BILevel@@@": 175155968,
   "??_7Minecraft@@6B@": 174589152,
   "??_7MinecraftCommands@@6B@": 175103856,
@@ -15363,6 +15364,16 @@
   "WebRtcP2PTransportChannel": {
    "selectedConnection": 1320,
    "note": "webrtc::P2PTransportChannel::selected_connection_ (+0x528): SwitchSelectedConnectionInternal (0xa35b610) loads the old one from this+0x528 and stores the new Connection* (rdx) there (`mov r15,[rcx+0x528]; mov [rcx+0x528],rdx` at function+0x4f, once per image). bds/engine/nethernet.ts reads a client's RTT only while its channel still has the connection the hook recorded selected."
+  },
+  "MapItemTrackedActor": {
+   "type": 0,
+   "entityId": 8,
+   "note": "MapItemTrackedActor starts with its UniqueId: type (+0, int; 0 entity, 1 block entity, 2 other) and the ActorUniqueID (+8). _updateTrackedEntityDecoration (0x371dc80) tests [entry] == 0 and passes [entry+8] to the level's fetchEntity; _removeDecoration (0x371e3d0) compares the same two fields of the decoration keys. Same as 2024 and Endstone's map_item_tracked_actor.h. Consumed by bds/engine/mapmarker.ts; executed in mm51."
+  },
+  "MapItemSavedData": {
+   "decorations": 128,
+   "decorationEntrySize": 48,
+   "note": "MapItemSavedData::decorations_, a vector<pair<MapItemTrackedActor::UniqueId, shared_ptr<MapDecoration>>> at +0x80 with 0x30-byte entries: _removeDecoration (0x371e3d0) walks [this+0x80, this+0x88) in steps of 0x30, keys at +0 (type), +8 (ActorUniqueID) and +0x10 (BlockPos), the decoration at +0x20. Same as 2024 (0x22dbfe0). Consumed by bds/engine/mapmarker.ts (mapEntityMarkers); executed in mm51."
   }
  },
  "accessors": {
