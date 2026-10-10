@@ -269,6 +269,12 @@ export function filterToIdentifierableString(name: string): string {
 }
 
 export function printOnProgress(message: string): void {
+    // cursorTo/clearLine exist only on a TTY stream. Without this, `npm i` with its output piped (a log file, CI,
+    // a hosting panel) threw on the first "Keep"/"Merge" line of an update, after the old BDS files were removed.
+    if (!process.stdout.isTTY) {
+        console.log(message);
+        return;
+    }
     process.stdout.cursorTo(0);
     process.stdout.write(message);
     process.stdout.clearLine(1);

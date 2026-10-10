@@ -102,9 +102,10 @@ startup and refuses to run with a table built for another exe. It holds four thi
 A function whose parameters changed in 1.26 cannot keep its 2024 decorated name. It ships under a `bdsx:`
 key instead (`bdsx:Actor::hurt`, `bdsx:Mob::_hurt`), with the bdsx code that calls it updated to match.
 
-At this release, bdsx's code asks for 1,144 names. 584 of them have an address on both builds. Counting
-offsets, constants and bdsx's own implementations (below), 1,080 resolve. The table also holds names that
-bdsx does not use (12,475 on 1.26.40.8 and 14,583 on 1.26.51.1), most of them found by the vftable walks.
+At this release, bdsx's code asks for 1,144 names. 592 of them have an address on each of the three builds.
+Counting offsets, constants and bdsx's own implementations (below), 1,089 resolve on each. Each table also
+holds names that bdsx does not use (12,478 names in all on 1.26.40.8, 14,586 on 1.26.51.1 and 14,568 on
+1.26.52.3), most of them found by the vftable walks.
 
 ## Derived functions
 
@@ -128,7 +129,8 @@ before the build is booted.
     name do not work. Adding a name means finding its address for every supported build, as described
     above. When the server boots, it prints red `Symbol not found: ...` lines. These are expected: bdsx only
     fails if a plugin actually calls one of those names.
--   **Not every function has been verified.** The events and APIs that bdsx exposes were run on both builds.
+-   **Not every function has been verified.** The events and APIs that bdsx exposes were run on 1.26.40.8 and
+    1.26.51.1, and the full regression set again on 1.26.52.3.
     Many other addresses rest on static evidence only: two routes that agree, and a reading of the
     disassembly. Even where the address is right, the prototype may have changed since 2024. Test a hook on
     a name you have not seen used before you rely on it.
@@ -139,13 +141,13 @@ before the build is booted.
     `SerializedSkin`. Calling them throws "not available on BDS 1.26".
 -   **Large engine changes are expensive to follow.** Every BDS build needs a new table, slot numbers shift
     between builds, and there is still no PDB to start from. The change from RakNet to NetherNet shows the
-    cost. BDS 1.26.51.1 ships `transport=nethernet` in `server.properties` (1.26.40.8 ships
-    `transport=raknet`). Packet events, player events, chat, kicks and `NetworkIdentifier.getAddress()`
-    work with NetherNet clients on both builds, tested with a NetherNet test client over LAN and HTTP
-    signalling. But `getAddress()` needed new native hooks inside BDS's WebRTC code, and
-    `bedrockServer.rakPeer` and ping are still RakNet-only: under NetherNet, bdsx prints a
-    `connector: unavailable` line at boot, and the `net-ping.ts` example fails to load. A change of that size
-    in a future build means new work, not just a new table.
+    cost. BDS 1.26.51.1 and 1.26.52.3 ship `transport=nethernet` in `server.properties` (1.26.40.8 ships
+    `transport=raknet`). Packet events, player events, chat, kicks, `NetworkIdentifier.getAddress()` and
+    `getPing()` work with NetherNet clients, tested with a NetherNet test client over LAN and HTTP
+    signalling. But `getAddress()` and `getPing()` needed new native hooks inside BDS's WebRTC code, and
+    `bedrockServer.rakPeer` is still RakNet-only: under NetherNet, bdsx prints a `connector: unavailable`
+    line at boot, and the `net-ping.ts` example answers with `getPing()` alone. A change of that size in a
+    future build means new work, not just a new table.
 -   **Some functions have not been found yet.** About 60 of the names that bdsx's code asks for have neither
     an address nor a derived implementation. Among them is `SurvivalMode::destroyBlock`, which the
     `blockevent.ts` example uses.
