@@ -7,8 +7,11 @@ current Bedrock Dedicated Server builds without `bedrock_server.pdb`.
 
 | BDS                     | table                |
 | ----------------------- | -------------------- |
-| **1.26.51.1** (default) | `symbols/1.26.51.1/` |
+| **1.26.52.3** (default) | `symbols/1.26.52.3/` |
+| 1.26.51.1               | `symbols/1.26.51.1/` |
 | 1.26.40.8               | `symbols/1.26.40.8/` |
+
+1.26.52.3 is a hotfix of 1.26.51.1 (same protocol, 2193), so the same clients connect to both.
 
 Only these exact builds will run. A table matches one `bedrock_server.exe`, so any other version, including
 later 1.26 patches, needs a new table. The installer refuses a version it has no table for.
@@ -28,7 +31,9 @@ bdsx.bat
 
 `npm i` runs bdsx's installer. It downloads BDS from minecraft.net and bdsx-core from
 [bdsx/bdsx-core](https://github.com/bdsx/bdsx-core/releases), and copies the matching symbol table into
-`bedrock_server/`. To install 1.26.40.8 instead, run `set BDSX_BDS_VERSION=1.26.40.8` before `npm i`.
+`bedrock_server/`. To install another supported build instead, run `set BDSX_BDS_VERSION=1.26.51.1` (or
+`1.26.40.8`) before `npm i`. An existing install whose BDS is older than the default is updated to the default
+by the next `npm i` unless `BDSX_BDS_VERSION` names the build it has.
 After a `git pull`, run `npm i` again (or `update.bat`) so that `bedrock_server/` gets the updated table.
 
 ## How bdsx starts without the PDB
@@ -71,10 +76,12 @@ compiler and linker have to keep:
     getters by slot number.
 -   **The other build.** Names found in one 1.26 build are carried to the other where both builds line up
     and the function bodies agree.
+-   **A hotfix.** 1.26.52.3 has the same functions in the same order as 1.26.51.1. Its table is 1.26.51.1's,
+    carried function by function where the two builds' order, size and bytes (up to moved addresses) agree.
 
 Each candidate address is accepted only after its 1.26 disassembly has been read and compared with the 2024
 function, and preferably after two independent routes agree. Names that bdsx's events and APIs need were
-then confirmed by execution: a Windows host runs both builds under bdsx, a headless test client joins as a
+then confirmed by execution: a Windows host runs each supported build under bdsx, a headless test client joins as a
 real 1.26 client (it attacks, jumps, breaks and places blocks, uses items, sleeps, chats), and test plugins
 check that each event fires through bdsx's own hook. Calling a function and counting its calls proves the
 address but not the prototype: one function was "confirmed" this way and still crashed the server, because
